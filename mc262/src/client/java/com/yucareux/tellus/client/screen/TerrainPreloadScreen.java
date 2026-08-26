@@ -16,7 +16,7 @@ import com.yucareux.tellus.preload.TerrainPreloadStage;
 import com.yucareux.tellus.world.data.source.Geocoder;
 import com.yucareux.tellus.world.data.source.NominatimGeocoder;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
-import com.yucareux.tellus.worldgen.EarthProjection;
+import com.yucareux.tellus.worldgen.WorldProjection;
 import com.yucareux.tellus.worldgen.ExperimentalHeightSupport;
 import java.util.Locale;
 import java.util.Objects;
@@ -70,6 +70,7 @@ public class TerrainPreloadScreen extends Screen {
    private EditBox scaleBox;
    /** Whether the World Scale box is expressed in metres per block at the area centre (the future spawn) instead of at the equator. */
    private final boolean worldScaleAtSpawn;
+   private final boolean centerWorldOnSpawn;
    private double displayedWorldScale;
    private Button roadsButton;
    private Button buildingsButton;
@@ -98,8 +99,9 @@ public class TerrainPreloadScreen extends Screen {
       EarthGeneratorSettings settings = parent.currentGeneratorSettings();
       this.overrides = TerrainPreloadSettingsOverrides.from(settings);
       this.worldScaleAtSpawn = settings.worldScaleAtSpawn();
+      this.centerWorldOnSpawn = settings.centerWorldOnSpawn();
       this.displayedWorldScale = settings.displayedWorldScale();
-      this.area = TerrainPreloadArea.centered(parent.getSpawnLatitude(), parent.getSpawnLongitude(), this.chunksPerSide, settings.worldScale());
+      this.area = TerrainPreloadArea.centered(parent.getSpawnLatitude(), parent.getSpawnLongitude(), this.chunksPerSide, settings.projection());
    }
 
    @Override
@@ -108,7 +110,7 @@ public class TerrainPreloadScreen extends Screen {
 
       this.mapWidget = new SlippyMapWidget(0, 0, this.width, this.height);
       this.mapWidget.setAttributionBottomPadding(34);
-      this.selectionComponent = new TerrainPreloadScreen.SelectionComponent(() -> this.area, this::applyManualCenter, this::applyManualChunks);
+      this.selectionComponent = new TerrainPreloadScreen.SelectionComponent(() -> this.area, this::applyManualCenter, this::applyManualChunks, this.centerWorldOnSpawn);
       this.mapWidget.addComponent(this.selectionComponent);
       this.centerMarker = this.mapWidget.addComponent(new MarkerMapComponent(new SlippyMapPoint(this.area.centerLatitude(), this.area.centerLongitude())));
       this.mapWidget.getMap().focus(this.area.centerLatitude(), this.area.centerLongitude(), 11);
@@ -253,7 +255,14 @@ public class TerrainPreloadScreen extends Screen {
          double scale = Double.parseDouble(this.scaleBox.getValue().trim());
          if (scale > 0.0 && Math.abs(scale - this.displayedWorldScale) > 0.001) {
             this.displayedWorldScale = scale;
-            this.overrides = this.overrides.withWorldScale(this.equatorialWorldScaleFor(this.area.centerLatitude()));
+            double equatorialWorldScale = this.equatorialWorldScaleFor(this.area.centerLatitude());
+            this.overrides = this.overrides.withWorldScale(equatorialWorldScale);
+            this.displayedWorldScale = EarthGeneratorSettings.displayedWorldScale(
+               equatorialWorldScale, this.area.centerLatitude(), this.worldScaleAtSpawn
+            );
+            if (Math.abs(this.displayedWorldScale - scale) > 1.0E-6) {
+               this.scaleBox.setValue(formatScale(this.displayedWorldScale));
+            }
             this.rebuildArea();
          }
       } catch (NumberFormatException ignored) {
@@ -404,7 +413,9 @@ public class TerrainPreloadScreen extends Screen {
 
    private void rebuildArea() {
       this.validationError = null;
-      this.area = TerrainPreloadArea.centered(this.area.centerLatitude(), this.area.centerLongitude(), this.chunksPerSide, this.overrides.worldScale());
+      this.area = TerrainPreloadArea.centered(
+         this.area.centerLatitude(), this.area.centerLongitude(), this.chunksPerSide, this.projectionFor(this.area.centerLatitude(), this.area.centerLongitude())
+      );
    }
 
    private void applyManualChunks(int chunks) {
@@ -427,11 +438,20 @@ public class TerrainPreloadScreen extends Screen {
          this.overrides = this.overrides.withWorldScale(this.equatorialWorldScaleFor(latitude));
       }
 
-      this.area = TerrainPreloadArea.centered(latitude, longitude, this.chunksPerSide, this.overrides.worldScale());
+      this.area = TerrainPreloadArea.centered(latitude, longitude, this.chunksPerSide, this.projectionFor(latitude, longitude));
    }
 
    private double equatorialWorldScaleFor(double latitude) {
-      return EarthGeneratorSettings.equatorialWorldScale(this.displayedWorldScale, latitude, this.worldScaleAtSpawn);
+      return Math.min(
+         EarthGeneratorSettings.MAX_WORLD_SCALE,
+         EarthGeneratorSettings.equatorialWorldScale(this.displayedWorldScale, latitude, this.worldScaleAtSpawn)
+      );
+   }
+
+   private WorldProjection projectionFor(double latitude, double longitude) {
+      return this.centerWorldOnSpawn
+         ? WorldProjection.centeredOn(this.overrides.worldScale(), latitude, longitude)
+         : WorldProjection.global(this.overrides.worldScale());
    }
 
    private int panelWidth() {
@@ -770,6 +790,7 @@ public class TerrainPreloadScreen extends Screen {
       private final TerrainPreloadScreen.AreaSupplier areaSupplier;
       private final TerrainPreloadScreen.CenterConsumer centerConsumer;
       private final TerrainPreloadScreen.ChunkConsumer chunkConsumer;
+      private final boolean centerWorldOnSpawn;
       private boolean manualMode;
       private boolean editable = true;
       private int dragCorner = -1;
@@ -777,11 +798,13 @@ public class TerrainPreloadScreen extends Screen {
       private double downloadProgress;
 
       private SelectionComponent(
-         TerrainPreloadScreen.AreaSupplier areaSupplier, TerrainPreloadScreen.CenterConsumer centerConsumer, TerrainPreloadScreen.ChunkConsumer chunkConsumer
-      ) {
+         TerrainPreloadScreen.AreaSupplier areaSupplier, TerrainPreloadScreen.CenterConsumer centerConsumer,
+          TerrainPreloadScreen.ChunkConsumer chunkConsumer, boolean centerWorldOnSpawn
+       ) {
          this.areaSupplier = areaSupplier;
          this.centerConsumer = centerConsumer;
          this.chunkConsumer = chunkConsumer;
+         this.centerWorldOnSpawn = centerWorldOnSpawn;
       }
 
       private void setManualMode(boolean manualMode) {
@@ -859,11 +882,13 @@ public class TerrainPreloadScreen extends Screen {
          }
 
          TerrainPreloadArea area = this.areaSupplier.get();
-         double blocksPerDegree = EarthProjection.blocksPerDegree(area.worldScale());
-         double centerBlockX = area.centerLongitude() * blocksPerDegree;
-         double centerBlockZ = EarthProjection.latToBlockZ(area.centerLatitude(), area.worldScale());
-         double mouseBlockX = mouse.getLongitude() * blocksPerDegree;
-         double mouseBlockZ = EarthProjection.latToBlockZ(mouse.getLatitude(), area.worldScale());
+         WorldProjection projection = this.centerWorldOnSpawn
+            ? WorldProjection.centeredOn(area.worldScale(), area.centerLatitude(), area.centerLongitude())
+            : WorldProjection.global(area.worldScale());
+         double centerBlockX = projection.lonToBlockX(area.centerLongitude());
+         double centerBlockZ = projection.latToBlockZ(area.centerLatitude());
+         double mouseBlockX = projection.lonToBlockX(mouse.getLongitude());
+         double mouseBlockZ = projection.latToBlockZ(mouse.getLatitude());
          double halfSideBlocks = Math.max(Math.abs(mouseBlockX - centerBlockX), Math.abs(mouseBlockZ - centerBlockZ));
          int chunks = TerrainPreloadArea.clampChunksPerSide((int)Math.ceil(halfSideBlocks * 2.0 / TerrainPreloadArea.CHUNK_SIZE));
          this.chunkConsumer.accept(chunks);

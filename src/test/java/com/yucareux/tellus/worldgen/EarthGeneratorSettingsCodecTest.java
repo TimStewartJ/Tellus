@@ -34,6 +34,8 @@ class EarthGeneratorSettingsCodecTest {
       assertFalse(EarthGeneratorSettings.DEFAULT.suppressesUndergroundGenerationForTerrainShell());
       assertFalse(EarthGeneratorSettings.DEFAULT.tellusManagedTerrainDownloads());
       assertFalse(EarthGeneratorSettings.DEFAULT.showTerrainDownloadOverlay());
+      assertFalse(EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn());
+      assertFalse(EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn());
       assertFalse(EarthGeneratorSettings.DEFAULT.addStrongholds());
       assertFalse(EarthGeneratorSettings.DEFAULT.addVillages());
       assertFalse(EarthGeneratorSettings.DEFAULT.addMineshafts());
@@ -212,6 +214,7 @@ class EarthGeneratorSettingsCodecTest {
       assertTrue(decoded.randomBiomes());
       assertFalse(decoded.tellusManagedTerrainDownloads());
       assertFalse(decoded.showTerrainDownloadOverlay());
+      assertFalse(decoded.centerWorldOnSpawn());
       assertFalse(decoded.experimentalIncreaseHeight());
       assertFalse(decoded.automaticHeightScaling());
       assertEquals(0.25, decoded.randomBiomeDensity());
@@ -319,6 +322,36 @@ class EarthGeneratorSettingsCodecTest {
       EarthGeneratorSettings decoded = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, encoded));
       assertTrue(decoded.worldScaleAtSpawn());
       assertEquals(enabled, decoded);
+   }
+
+   @Test
+   void centerWorldOnSpawnIsOffByDefaultAndRoundTripsWithoutChangingLegacyWorlds() {
+      assertFalse(EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn());
+      assertFalse(EarthGeneratorSettings.DEFAULT_CENTER_WORLD_ON_SPAWN);
+
+      JsonObject missingField = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, EarthGeneratorSettings.DEFAULT))
+         .getAsJsonObject();
+      missingField.remove("center_world_on_spawn");
+      EarthGeneratorSettings legacy = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, missingField));
+      assertFalse(legacy.centerWorldOnSpawn());
+      assertFalse(legacy.projection().isCentered());
+      assertEquals(
+         legacy.spawnLongitude() * EarthProjection.METERS_PER_DEGREE / legacy.worldScale(),
+         legacy.projection().lonToBlockX(legacy.spawnLongitude()),
+         1.0E-9
+      );
+
+      EarthGeneratorSettings enabled = EarthGeneratorSettings.DEFAULT
+         .withSpawn(37.7459, -119.5332)
+         .withCenterWorldOnSpawn(true);
+      JsonObject encoded = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, enabled)).getAsJsonObject();
+      assertTrue(encoded.get("center_world_on_spawn").getAsBoolean());
+      EarthGeneratorSettings decoded = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, encoded));
+
+      assertEquals(enabled, decoded);
+      assertTrue(decoded.projection().isCentered());
+      assertEquals(0.0, decoded.projection().lonToBlockX(decoded.spawnLongitude()), 1.0E-9);
+      assertEquals(0.0, decoded.projection().latToBlockZ(decoded.spawnLatitude()), 1.0E-9);
    }
 
    @Test

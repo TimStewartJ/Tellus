@@ -406,6 +406,7 @@ public class EarthCustomizeScreen extends Screen {
       this.spawnLatitude = settings.spawnLatitude();
       this.spawnLongitude = settings.spawnLongitude();
       this.setToggleValue("world_scale_at_spawn", settings.worldScaleAtSpawn());
+      this.setToggleValue("center_world_on_spawn", settings.centerWorldOnSpawn());
       this.setSliderValue("world_scale", this.displayedWorldScale(settings.worldScale(), settings.worldScaleAtSpawn()));
       this.setSliderValue("underground_depth", settings.undergroundDepth());
       this.setToggleValue("cave_generation", settings.caveGeneration());
@@ -455,9 +456,20 @@ public class EarthCustomizeScreen extends Screen {
    
    private EarthGeneratorSettings buildSettings() {
       boolean worldScaleAtSpawn = this.findToggleValue("world_scale_at_spawn", EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn());
-      double worldScale = EarthGeneratorSettings.equatorialWorldScale(
-         this.findSliderValue("world_scale", EarthGeneratorSettings.DEFAULT.worldScale()), this.spawnLatitude, worldScaleAtSpawn
+      boolean centerWorldOnSpawn = this.findToggleValue(
+         "center_world_on_spawn", EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn()
       );
+      double requestedWorldScale = this.findSliderValue("world_scale", EarthGeneratorSettings.DEFAULT.worldScale());
+      double worldScale = Math.min(
+         EarthGeneratorSettings.MAX_WORLD_SCALE,
+         EarthGeneratorSettings.equatorialWorldScale(requestedWorldScale, this.spawnLatitude, worldScaleAtSpawn)
+      );
+      double effectiveDisplayedScale = EarthGeneratorSettings.displayedWorldScale(
+         worldScale, this.spawnLatitude, worldScaleAtSpawn
+      );
+      if (Math.abs(effectiveDisplayedScale - requestedWorldScale) > 1.0E-6) {
+         this.setSliderValue("world_scale", effectiveDisplayedScale);
+      }
       EarthGeneratorSettings.DemSelection demSelection = this.buildDemSelection();
       boolean experimentalIncreaseHeight = this.findToggleValue(
          "experimental_increase_height", EarthGeneratorSettings.DEFAULT.experimentalIncreaseHeight()
@@ -617,7 +629,8 @@ public class EarthCustomizeScreen extends Screen {
          customTrees,
          automaticHeightScaling,
          hugeRedMushrooms,
-         worldScaleAtSpawn
+         worldScaleAtSpawn,
+         centerWorldOnSpawn
       );
    }
 
@@ -649,6 +662,7 @@ public class EarthCustomizeScreen extends Screen {
       }
 
       this.setToggleValue("world_scale_at_spawn", initialSettings.worldScaleAtSpawn());
+      this.setToggleValue("center_world_on_spawn", initialSettings.centerWorldOnSpawn());
       this.setSliderValue("world_scale", this.displayedWorldScale(initialSettings.worldScale(), initialSettings.worldScaleAtSpawn()));
       this.setSliderValue("underground_depth", initialSettings.undergroundDepth());
       this.setDemSelectionValue(initialSettings.demSelection());
@@ -800,6 +814,7 @@ public class EarthCustomizeScreen extends Screen {
                .withDisplay(EarthCustomizeScreen::formatWorldScale)
                .withScale(EarthCustomizeScreen.SliderScale.power(3.0)),
             toggle("world_scale_at_spawn", EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn()).onToggled(this::onWorldScaleAtSpawnToggled),
+            toggle("center_world_on_spawn", EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn()),
             new AutoAdjustDefinition(),
             toggle("automatic_height_scaling", EarthGeneratorSettings.DEFAULT.automaticHeightScaling()),
             toggle("experimental_increase_height", EarthGeneratorSettings.DEFAULT.experimentalIncreaseHeight())
