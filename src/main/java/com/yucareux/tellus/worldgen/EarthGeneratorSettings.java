@@ -80,7 +80,8 @@ public record EarthGeneratorSettings(
    int undergroundDepth,
    boolean customTrees,
    boolean automaticHeightScaling,
-   boolean hugeRedMushrooms
+   boolean hugeRedMushrooms,
+   boolean worldScaleAtSpawn
 ) {
    public static final double DEFAULT_SPAWN_LATITUDE = 27.9881;
    public static final double DEFAULT_SPAWN_LONGITUDE = 86.925;
@@ -110,6 +111,12 @@ public record EarthGeneratorSettings(
    private static final double MIN_RANDOM_BIOME_DENSITY = 0.0;
    private static final double MAX_RANDOM_BIOME_DENSITY = 0.4;
    public static final boolean DEFAULT_AUTOMATIC_HEIGHT_SCALING = true;
+   /**
+    * When enabled, the World Scale control in the UI is interpreted as real-world metres per block at the
+    * spawn point instead of at the equator. The serialized {@code world_scale} always stays the equatorial
+    * value so terrain generation is unaffected; this flag only changes how the UI presents and edits it.
+    */
+   public static final boolean DEFAULT_WORLD_SCALE_AT_SPAWN = false;
    public static final EarthGeneratorSettings DEFAULT = new EarthGeneratorSettings(
       30.0,
       1.0,
@@ -174,7 +181,8 @@ public record EarthGeneratorSettings(
       DEFAULT_UNDERGROUND_DEPTH,
       true,
       DEFAULT_AUTOMATIC_HEIGHT_SCALING,
-      false
+      false,
+      DEFAULT_WORLD_SCALE_AT_SPAWN
    );
    private static final MapCodec<EarthGeneratorSettings.BaseToggles> BASE_TOGGLES_CODEC = RecordCodecBuilder.mapCodec(
       instance -> instance.group(
@@ -333,6 +341,10 @@ public record EarthGeneratorSettings(
    private static final MapCodec<Boolean> HUGE_RED_MUSHROOMS_CODEC = Codec.BOOL
       .fieldOf("huge_red_mushrooms")
       .orElse(DEFAULT.hugeRedMushrooms());
+   // Worlds saved before this field existed must keep the equatorial World Scale presentation.
+   private static final MapCodec<Boolean> WORLD_SCALE_AT_SPAWN_CODEC = Codec.BOOL
+      .fieldOf("world_scale_at_spawn")
+      .orElse(false);
    private static final MapCodec<Boolean> REALTIME_TIME_CODEC = Codec.BOOL.fieldOf("realtime_time").orElse(DEFAULT.realtimeTime());
    private static final MapCodec<Boolean> REALTIME_WEATHER_CODEC = Codec.BOOL.fieldOf("realtime_weather").orElse(DEFAULT.realtimeWeather());
    private static final MapCodec<Boolean> HISTORICAL_SNOW_CODEC = Codec.BOOL.fieldOf("historical_snow").orElse(DEFAULT.historicalSnow());
@@ -445,7 +457,8 @@ public record EarthGeneratorSettings(
             builder = EarthGeneratorSettings.CAVES_REACH_SURFACE_CODEC.encode(input.cavesReachSurface(), ops, builder);
             builder = EarthGeneratorSettings.UNDERGROUND_DEPTH_CODEC.encode(input.undergroundDepth(), ops, builder);
             builder = EarthGeneratorSettings.CUSTOM_TREES_CODEC.encode(input.customTrees(), ops, builder);
-            return EarthGeneratorSettings.HUGE_RED_MUSHROOMS_CODEC.encode(input.hugeRedMushrooms(), ops, builder);
+            builder = EarthGeneratorSettings.HUGE_RED_MUSHROOMS_CODEC.encode(input.hugeRedMushrooms(), ops, builder);
+            return EarthGeneratorSettings.WORLD_SCALE_AT_SPAWN_CODEC.encode(input.worldScaleAtSpawn(), ops, builder);
          }
 
          public <T> Stream<T> keys(DynamicOps<T> ops) {
@@ -483,6 +496,7 @@ public record EarthGeneratorSettings(
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.UNDERGROUND_DEPTH_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.CUSTOM_TREES_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.HUGE_RED_MUSHROOMS_CODEC.keys(ops));
+            baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.WORLD_SCALE_AT_SPAWN_CODEC.keys(ops));
             Stream<T> structureKeys = Stream.concat(baseKeys, EarthGeneratorSettings.STRUCTURE_CODEC.keys(ops));
             return Stream.concat(structureKeys, EarthGeneratorSettings.TRAIL_RUINS_CODEC.keys(ops));
          }
@@ -516,6 +530,7 @@ public record EarthGeneratorSettings(
             DataResult<Integer> undergroundDepth = EarthGeneratorSettings.UNDERGROUND_DEPTH_CODEC.decode(ops, input);
             DataResult<Boolean> customTrees = EarthGeneratorSettings.CUSTOM_TREES_CODEC.decode(ops, input);
             DataResult<Boolean> hugeRedMushrooms = EarthGeneratorSettings.HUGE_RED_MUSHROOMS_CODEC.decode(ops, input);
+            DataResult<Boolean> worldScaleAtSpawn = EarthGeneratorSettings.WORLD_SCALE_AT_SPAWN_CODEC.decode(ops, input);
             DataResult<Boolean> experimentalIncreaseHeight = EarthGeneratorSettings.EXPERIMENTAL_INCREASE_HEIGHT_CODEC.decode(ops, input);
             DataResult<Boolean> automaticHeightScaling = EarthGeneratorSettings.AUTOMATIC_HEIGHT_SCALING_CODEC.decode(ops, input);
             DataResult<Optional<String>> experimentalHeightCoordinateProfile = EarthGeneratorSettings.EXPERIMENTAL_HEIGHT_COORDINATE_PROFILE_CODEC
@@ -596,7 +611,10 @@ public record EarthGeneratorSettings(
             DataResult<EarthGeneratorSettings> withCustomTrees = withUndergroundDepth.apply2(
                EarthGeneratorSettings::applyCustomTrees, customTrees
             );
-            return withCustomTrees.apply2(EarthGeneratorSettings::applyHugeRedMushrooms, hugeRedMushrooms);
+            DataResult<EarthGeneratorSettings> withHugeRedMushrooms = withCustomTrees.apply2(
+               EarthGeneratorSettings::applyHugeRedMushrooms, hugeRedMushrooms
+            );
+            return withHugeRedMushrooms.apply2(EarthGeneratorSettings::applyWorldScaleAtSpawn, worldScaleAtSpawn);
          }
 
          public <T> Stream<T> keys(DynamicOps<T> ops) {
@@ -634,6 +652,7 @@ public record EarthGeneratorSettings(
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.UNDERGROUND_DEPTH_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.CUSTOM_TREES_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.HUGE_RED_MUSHROOMS_CODEC.keys(ops));
+            baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.WORLD_SCALE_AT_SPAWN_CODEC.keys(ops));
             Stream<T> structureKeys = Stream.concat(baseKeys, EarthGeneratorSettings.STRUCTURE_CODEC.keys(ops));
             return Stream.concat(structureKeys, EarthGeneratorSettings.TRAIL_RUINS_CODEC.keys(ops));
          }
@@ -705,7 +724,8 @@ public record EarthGeneratorSettings(
       int undergroundDepth,
       boolean customTrees,
       boolean automaticHeightScaling,
-      boolean hugeRedMushrooms
+      boolean hugeRedMushrooms,
+      boolean worldScaleAtSpawn
    ) {
       worldScale = clampWorldScale(worldScale);
       randomBiomeDensity = Mth.clamp(randomBiomeDensity, MIN_RANDOM_BIOME_DENSITY, MAX_RANDOM_BIOME_DENSITY);
@@ -790,6 +810,48 @@ public record EarthGeneratorSettings(
       this.customTrees = customTrees;
       this.automaticHeightScaling = automaticHeightScaling;
       this.hugeRedMushrooms = hugeRedMushrooms;
+      this.worldScaleAtSpawn = worldScaleAtSpawn;
+   }
+
+   /**
+    * Real-world metres covered by one block at the configured spawn point. Spherical Mercator enlarges the
+    * horizontal axes by {@code sec(latitude)}, so the ground scale at spawn is the equatorial
+    * {@link #worldScale()} divided by that correction.
+    */
+   public double groundScaleAtSpawn() {
+      return groundScaleAtLatitude(this.worldScale, this.spawnLatitude);
+   }
+
+   /**
+    * The World Scale value to present in the UI: the ground scale at spawn when
+    * {@link #worldScaleAtSpawn()} is enabled, otherwise the equatorial scale.
+    */
+   public double displayedWorldScale() {
+      return displayedWorldScale(this.worldScale, this.spawnLatitude, this.worldScaleAtSpawn);
+   }
+
+   public static double groundScaleAtLatitude(double equatorialWorldScale, double latitude) {
+      if (!(equatorialWorldScale > 0.0) || !Double.isFinite(latitude)) {
+         return equatorialWorldScale;
+      }
+
+      return equatorialWorldScale / EarthProjection.heightScaleCorrectionAtLatitude(latitude);
+   }
+
+   public static double displayedWorldScale(double equatorialWorldScale, double spawnLatitude, boolean worldScaleAtSpawn) {
+      return worldScaleAtSpawn ? groundScaleAtLatitude(equatorialWorldScale, spawnLatitude) : equatorialWorldScale;
+   }
+
+   /**
+    * Converts a World Scale value entered in the UI back to the equatorial scale stored in
+    * {@code world_scale}. This is the inverse of {@link #displayedWorldScale(double, double, boolean)}.
+    */
+   public static double equatorialWorldScale(double displayedWorldScale, double spawnLatitude, boolean worldScaleAtSpawn) {
+      if (!worldScaleAtSpawn || !(displayedWorldScale > 0.0) || !Double.isFinite(spawnLatitude)) {
+         return displayedWorldScale;
+      }
+
+      return displayedWorldScale * EarthProjection.heightScaleCorrectionAtLatitude(spawnLatitude);
    }
 
    public double effectiveTerrestrialHeightScale() {
@@ -1036,6 +1098,10 @@ public record EarthGeneratorSettings(
       return settings.withHugeRedMushrooms(Objects.requireNonNull(hugeRedMushrooms, "hugeRedMushrooms"));
    }
 
+   private static EarthGeneratorSettings applyWorldScaleAtSpawn(EarthGeneratorSettings settings, Boolean worldScaleAtSpawn) {
+      return settings.withWorldScaleAtSpawn(Objects.requireNonNull(worldScaleAtSpawn, "worldScaleAtSpawn"));
+   }
+
    public EarthGeneratorSettings withNetworkSettings(boolean managedTerrainDownloads, boolean showOverlay) {
       return this.withNetworkSettings(managedTerrainDownloads, showOverlay, this.cavesReachSurface);
    }
@@ -1057,7 +1123,7 @@ public record EarthGeneratorSettings(
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, managedTerrainDownloads, showOverlay, cavesReachSurface,
          this.undergroundDepth, this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1078,7 +1144,7 @@ public record EarthGeneratorSettings(
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.tellusManagedTerrainDownloads,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, undergroundDepth, this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1097,7 +1163,7 @@ public record EarthGeneratorSettings(
          this.distantHorizonsRenderMode, this.demSelection, this.enableRoads, this.enableBuildings, this.enableWater,
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.tellusManagedTerrainDownloads,
-         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, customTrees, this.automaticHeightScaling, this.hugeRedMushrooms
+         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, customTrees, this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1117,7 +1183,67 @@ public record EarthGeneratorSettings(
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.tellusManagedTerrainDownloads,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
-         this.automaticHeightScaling, hugeRedMushrooms
+         this.automaticHeightScaling, hugeRedMushrooms, this.worldScaleAtSpawn
+      );
+   }
+
+   public EarthGeneratorSettings withWorldScaleAtSpawn(boolean worldScaleAtSpawn) {
+      return new EarthGeneratorSettings(
+         this.worldScale, this.terrestrialHeightScale, this.oceanicHeightScale, this.heightOffset,
+         this.spawnLatitude, this.spawnLongitude, this.minAltitude, this.maxAltitude,
+         this.riverLakeShorelineBlend, this.oceanShorelineBlend, this.shorelineBlendCliffLimit, this.caveGeneration, this.oreDistribution, this.geologicalStonePatches, this.lavaPools,
+         this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
+         this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
+         this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
+         this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
+         this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
+         this.distantHorizonsRenderMode, this.demSelection, this.enableRoads, this.enableBuildings, this.enableWater,
+         this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
+         this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.tellusManagedTerrainDownloads,
+         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
+         this.automaticHeightScaling, this.hugeRedMushrooms, worldScaleAtSpawn
+      );
+   }
+
+   public EarthGeneratorSettings withSpawn(double spawnLatitude, double spawnLongitude) {
+      return new EarthGeneratorSettings(
+         this.worldScale, this.terrestrialHeightScale, this.oceanicHeightScale, this.heightOffset,
+         spawnLatitude, spawnLongitude, this.minAltitude, this.maxAltitude,
+         this.riverLakeShorelineBlend, this.oceanShorelineBlend, this.shorelineBlendCliffLimit, this.caveGeneration, this.oreDistribution, this.geologicalStonePatches, this.lavaPools,
+         this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
+         this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
+         this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
+         this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
+         this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
+         this.distantHorizonsRenderMode, this.demSelection, this.enableRoads, this.enableBuildings, this.enableWater,
+         this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
+         this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.tellusManagedTerrainDownloads,
+         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
+         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn
+      );
+   }
+
+   public EarthGeneratorSettings withWorldScale(double worldScale) {
+      return new EarthGeneratorSettings(
+         worldScale, this.terrestrialHeightScale, this.oceanicHeightScale, this.heightOffset,
+         this.spawnLatitude, this.spawnLongitude, this.minAltitude, this.maxAltitude,
+         this.riverLakeShorelineBlend, this.oceanShorelineBlend, this.shorelineBlendCliffLimit, this.caveGeneration, this.oreDistribution, this.geologicalStonePatches, this.lavaPools,
+         this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
+         this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
+         this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
+         this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
+         this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
+         this.distantHorizonsRenderMode, this.demSelection, this.enableRoads, this.enableBuildings, this.enableWater,
+         this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
+         this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.tellusManagedTerrainDownloads,
+         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
+         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1198,7 +1324,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1279,7 +1405,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1348,7 +1474,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1417,7 +1543,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1486,7 +1612,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1555,7 +1681,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1624,7 +1750,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1693,7 +1819,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1762,7 +1888,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1831,7 +1957,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1900,7 +2026,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -1969,7 +2095,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -2056,7 +2182,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -2160,7 +2286,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -2229,7 +2355,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          automaticHeightScaling,
-         this.hugeRedMushrooms
+         this.hugeRedMushrooms, this.worldScaleAtSpawn
       );
    }
 
@@ -2933,7 +3059,8 @@ public record EarthGeneratorSettings(
             EarthGeneratorSettings.DEFAULT.undergroundDepth(),
             EarthGeneratorSettings.DEFAULT.customTrees(),
             EarthGeneratorSettings.DEFAULT.automaticHeightScaling(),
-            EarthGeneratorSettings.DEFAULT.hugeRedMushrooms()
+            EarthGeneratorSettings.DEFAULT.hugeRedMushrooms(),
+            EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn()
          );
       }
    }

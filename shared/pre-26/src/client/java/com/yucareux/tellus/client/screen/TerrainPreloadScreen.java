@@ -59,6 +59,9 @@ public class TerrainPreloadScreen extends Screen {
    private Button modeButton;
    private EditBox chunkBox;
    private EditBox scaleBox;
+   /** Whether the World Scale box is expressed in metres per block at the area centre (the future spawn) instead of at the equator. */
+   private final boolean worldScaleAtSpawn;
+   private double displayedWorldScale;
    private Button roadsButton;
    private Button buildingsButton;
    private Button waterButton;
@@ -85,6 +88,8 @@ public class TerrainPreloadScreen extends Screen {
       this.parent = Objects.requireNonNull(parent, "parent");
       EarthGeneratorSettings settings = parent.currentGeneratorSettings();
       this.overrides = TerrainPreloadSettingsOverrides.from(settings);
+      this.worldScaleAtSpawn = settings.worldScaleAtSpawn();
+      this.displayedWorldScale = settings.displayedWorldScale();
       this.area = TerrainPreloadArea.centered(parent.getSpawnLatitude(), parent.getSpawnLongitude(), this.chunksPerSide, settings.worldScale());
    }
 
@@ -139,7 +144,7 @@ public class TerrainPreloadScreen extends Screen {
       this.chunkBox.setValue(Integer.toString(this.chunksPerSide));
       this.addRenderableWidget(this.chunkBox);
       this.scaleBox = new EditBox(this.font, innerX, y + 36, innerWidth, CONTROL_HEIGHT, Component.translatable("tellus.preload.world_scale"));
-      this.scaleBox.setValue(formatScale(this.overrides.worldScale()));
+      this.scaleBox.setValue(formatScale(this.displayedWorldScale));
       this.addRenderableWidget(this.scaleBox);
       this.roadsButton = this.addRenderableWidget(Button.builder(Component.empty(), button -> this.setOverrides(this.overrides.withEnableRoads(!this.overrides.enableRoads()))).bounds(innerX, y + 60, columnWidth, CONTROL_HEIGHT).build());
       this.buildingsButton = this.addRenderableWidget(Button.builder(Component.empty(), button -> this.setOverrides(this.overrides.withEnableBuildings(!this.overrides.enableBuildings()))).bounds(rightColumnX, y + 60, columnWidth, CONTROL_HEIGHT).build());
@@ -234,8 +239,9 @@ public class TerrainPreloadScreen extends Screen {
 
       try {
          double scale = Double.parseDouble(this.scaleBox.getValue().trim());
-         if (scale > 0.0 && Math.abs(scale - this.overrides.worldScale()) > 0.001) {
-            this.overrides = this.overrides.withWorldScale(scale);
+         if (scale > 0.0 && Math.abs(scale - this.displayedWorldScale) > 0.001) {
+            this.displayedWorldScale = scale;
+            this.overrides = this.overrides.withWorldScale(this.equatorialWorldScaleFor(this.area.centerLatitude()));
             this.rebuildArea();
          }
       } catch (NumberFormatException ignored) {
@@ -347,7 +353,7 @@ public class TerrainPreloadScreen extends Screen {
    }
 
    private void handleSearch(double latitude, double longitude) {
-      this.area = TerrainPreloadArea.centered(latitude, longitude, this.chunksPerSide, this.overrides.worldScale());
+      this.moveCenter(latitude, longitude);
       this.mapWidget.getMap().focus(latitude, longitude, 12);
    }
 
@@ -378,7 +384,20 @@ public class TerrainPreloadScreen extends Screen {
    }
 
    private void applyManualCenter(double latitude, double longitude) {
+      this.moveCenter(latitude, longitude);
+   }
+
+   private void moveCenter(double latitude, double longitude) {
+      if (this.worldScaleAtSpawn) {
+         // The area centre becomes the world spawn, so keep the entered at-spawn scale and re-derive the stored equatorial value.
+         this.overrides = this.overrides.withWorldScale(this.equatorialWorldScaleFor(latitude));
+      }
+
       this.area = TerrainPreloadArea.centered(latitude, longitude, this.chunksPerSide, this.overrides.worldScale());
+   }
+
+   private double equatorialWorldScaleFor(double latitude) {
+      return EarthGeneratorSettings.equatorialWorldScale(this.displayedWorldScale, latitude, this.worldScaleAtSpawn);
    }
 
    private int panelWidth() {
@@ -489,7 +508,7 @@ public class TerrainPreloadScreen extends Screen {
       int textY = y + 32;
       graphics.drawString(this.font, TerrainPreloadText.areaSummary(this.area), textX, textY, 14737632);
       graphics.drawString(
-         this.font, Component.translatable("tellus.preload.summary.world_scale", formatScale(this.overrides.worldScale())), textX, textY + 14, 14737632
+         this.font, Component.translatable("tellus.preload.summary.world_scale", formatScale(this.displayedWorldScale)), textX, textY + 14, 14737632
       );
       graphics.drawString(this.font, toggleLabel("tellus.preload.toggle.roads", this.overrides.enableRoads()), textX, textY + 28, 12632256);
       graphics.drawString(this.font, toggleLabel("tellus.preload.toggle.buildings", this.overrides.enableBuildings()), textX, textY + 42, 12632256);
