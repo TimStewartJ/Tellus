@@ -69,3 +69,12 @@ tasks.register('benchmarkChunkGeneration', JavaExec) {
 	args "--warmupRadius=${providers.gradleProperty('benchWarmupRadius').getOrElse('-1')}"
 	args "--warmupOffsetChunks=${providers.gradleProperty('benchWarmupOffsetChunks').getOrElse('256')}"
 }
+
+tasks.register('benchmarkTileDecode', JavaExec) {
+	group = 'verification'
+	description = 'Measures read + WebP decode cost per cached Mapterhorn tile.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yucareux.tellus.world.data.elevation.TileDecodeBenchmark'
+	args providers.gradleProperty('tileDir').getOrElse(layout.buildDirectory.dir('chunkgen-benchmark-game/tellus/cache/elevation-mapterhorn').get().asFile.absolutePath)
+	args providers.gradleProperty('tileRounds').getOrElse('4')
+}

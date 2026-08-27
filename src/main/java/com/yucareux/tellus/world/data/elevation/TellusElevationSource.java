@@ -30,6 +30,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -87,6 +89,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
    // segments are a measured contention point under the chunk worker pool).
    private final LastValueMemo<TellusElevationSource.TileKey, ShortRaster> tileMemo = new LastValueMemo<>();
    private final LastValueMemo<TellusElevationSource.TileKey, ShortRaster> oceanTileMemo = new LastValueMemo<>();
+   private final ConcurrentHashMap<TellusElevationSource.TileKey, CompletableFuture<ShortRaster>> localTileLoads = new ConcurrentHashMap<>();
    private final MapterhornCoverageResolutionSource mapterhornResolutionSource = new MapterhornCoverageResolutionSource();
    private final TellusLandMaskSource landMask = TellusWorldgenSources.landMask();
    private volatile EarthGeneratorSettings.DemSelection lastLoggedSelection;
@@ -2053,22 +2056,16 @@ public final class TellusElevationSource implements TellusCacheHandle {
       if (cached != null) {
          this.tileMemo.put(key, cached);
          return cached == MISSING_RASTER ? null : cached;
-      } else {
-         Path cachePath = this.cachePath(key);
-         if (!Files.exists(cachePath)) {
-            return null;
-         } else {
-            try {
-               ShortRaster raster = readCachedTerrainRaster(cachePath);
-               this.cache.put(key, raster);
-               this.tileMemo.put(key, raster);
-               return raster;
-            } catch (IOException error) {
-               this.handleInvalidTile(cachePath, key, error);
-               return null;
-            }
-         }
       }
+      Path cachePath = this.cachePath(key);
+      if (!Files.exists(cachePath)) {
+         return null;
+      }
+      ShortRaster raster = this.loadLocalTileDeduplicated(key, cachePath, this.cache);
+      if (raster != null) {
+         this.tileMemo.put(key, raster);
+      }
+      return raster;
    }
 
    private ShortRaster getOpenWatersTileLocalOnly(TellusElevationSource.TileKey key) {
@@ -2080,21 +2077,45 @@ public final class TellusElevationSource implements TellusCacheHandle {
       if (cached != null) {
          this.oceanTileMemo.put(key, cached);
          return cached == MISSING_RASTER ? null : cached;
-      } else {
-         Path cachePath = this.openWatersCachePath(key);
-         if (!Files.exists(cachePath)) {
-            return null;
-         } else {
-            try {
-               ShortRaster raster = readCachedTerrainRaster(cachePath);
-               this.oceanCache.put(key, raster);
-               this.oceanTileMemo.put(key, raster);
-               return raster;
-            } catch (IOException error) {
-               this.handleInvalidTile(cachePath, key, error);
-               return null;
-            }
-         }
+      }
+      Path cachePath = this.openWatersCachePath(key);
+      if (!Files.exists(cachePath)) {
+         return null;
+      }
+      ShortRaster raster = this.loadLocalTileDeduplicated(key, cachePath, this.oceanCache);
+      if (raster != null) {
+         this.oceanTileMemo.put(key, raster);
+      }
+      return raster;
+   }
+
+   /**
+    * Decodes a cached tile once even when several workers miss on it at the same time (a WebP tile
+    * costs ~20 ms to decode; the first touch of a tile otherwise had every chunk worker decoding it).
+    * Never downloads, so it stays valid under the cache-only network policy.
+    */
+   private ShortRaster loadLocalTileDeduplicated(
+      TellusElevationSource.TileKey key, Path cachePath, LoadingCache<TellusElevationSource.TileKey, ShortRaster> target
+   ) {
+      CompletableFuture<ShortRaster> mine = new CompletableFuture<>();
+      CompletableFuture<ShortRaster> inFlight = this.localTileLoads.putIfAbsent(key, mine);
+      if (inFlight != null) {
+         return inFlight.join();
+      }
+      try {
+         ShortRaster raster = readCachedTerrainRaster(cachePath);
+         target.put(key, raster);
+         mine.complete(raster);
+         return raster;
+      } catch (IOException error) {
+         this.handleInvalidTile(cachePath, key, error);
+         mine.complete(null);
+         return null;
+      } catch (RuntimeException | Error error) {
+         mine.complete(null);
+         throw error;
+      } finally {
+         this.localTileLoads.remove(key, mine);
       }
    }
 
