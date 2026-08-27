@@ -5,6 +5,7 @@ import com.yucareux.tellus.world.data.resolve.TellusResolveSource;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
 import com.yucareux.tellus.world.realtime.TemperatureGrid;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
+import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import com.yucareux.tellus.worldgen.TellusWorldgenSources;
 import java.util.Objects;
@@ -44,6 +45,15 @@ public final class TellusApi {
    /** Real-world terrain elevation in metres above sea level at a block column, or {@code NaN} when unavailable. */
    public static double elevationMeters(double blockX, double blockZ, double worldScale) {
       return TellusWorldgenSources.elevation().sampleElevationMeters(blockX, blockZ, worldScale);
+   }
+
+   /**
+    * Elevation from tiles already on disk or in memory only; never downloads. Returns {@code NaN} for
+    * unexplored areas. Use this from the server thread for positions the player is not standing on.
+    */
+   public static double elevationMetersLocalOnly(double blockX, double blockZ, double worldScale) {
+      return TellusWorldgenSources.elevation()
+         .samplePreviewElevationMetersLocalOnly(blockX, blockZ, worldScale, false, EarthGeneratorSettings.DEFAULT.demSelection(), worldScale);
    }
 
    /** Terrain slope in degrees from already cached elevation tiles only, or {@code NaN} when not cached yet. */
