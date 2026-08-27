@@ -20,6 +20,7 @@
 package com.seibel.distanthorizons.core.util.threading;
 
 import com.seibel.distanthorizons.core.api.internal.ClientApi;
+import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.util.LodUtil;
 import com.seibel.distanthorizons.core.util.ThreadUtil;
 import org.jetbrains.annotations.NotNull;
@@ -171,9 +172,10 @@ public class ThreadPoolUtil
 	public static boolean worldGenThreadsCanRun()
 	{
 		double cameraSpeed = ClientApi.INSTANCE.getAvgCameraSpeed();
-		// stop these threads if moving a little bit slower than max elytra speed
-		double maxAllowedSpeed = (LodUtil.ROCKET_ELYTRA_SPEED_IN_BLOCKS_PER_SEC - 10.0);
-		if (cameraSpeed > maxAllowedSpeed)
+		// Tellus fork: the threshold is configurable (upstream hard-codes "a little
+		// slower than max elytra speed"); 0 disables the pause entirely.
+		double maxAllowedSpeed = Config.Common.WorldGenerator.pauseGenerationAboveCameraSpeed.get();
+		if (maxAllowedSpeed > 0.0 && cameraSpeed > maxAllowedSpeed)
 		{
 			// pause if the user is moving too fast
 			return false;

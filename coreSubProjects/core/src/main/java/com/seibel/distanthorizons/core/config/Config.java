@@ -1523,6 +1523,19 @@ public class Config
 					+ "")
 				.build();
 			
+			public static ConfigEntry<Double> pauseGenerationAboveCameraSpeed = new ConfigEntry.Builder<Double>()
+				.setChatCommandName("generation.pauseAboveCameraSpeed")
+				.setMinDefaultMax(0.0, 20.0, 10_000.0)
+				.comment(""
+					+ "Distant generation and LOD update propagation pause while the camera's \n"
+					+ "average speed (blocks per second) is above this value, so a fast-moving \n"
+					+ "player does not queue work for areas they are about to leave. \n"
+					+ "Upstream Distant Horizons hard-codes 20 (just below rocket elytra speed). \n"
+					+ "Set to 0 to never pause. World generators that keep up with a flying \n"
+					+ "player (e.g. Tellus) may raise this at runtime. \n"
+					+ "")
+				.build();
+			
 			public static ConfigEntry<Integer> generationCenterChunkX = new ConfigEntry.Builder<Integer>()
 				.setChatCommandName("generation.bounds.centerChunk.x")
 				.setAppearance(EConfigEntryAppearance.ONLY_IN_FILE)
