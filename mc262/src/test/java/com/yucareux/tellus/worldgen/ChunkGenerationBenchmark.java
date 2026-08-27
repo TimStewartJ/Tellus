@@ -209,9 +209,10 @@ public final class ChunkGenerationBenchmark {
                      checksum = checksum * 31L + s;
                   }
                }
-               for (int z = 0; z < 16; z += 5) {
-                  for (int x = 0; x < 16; x += 5) {
+               for (int z = 0; z < 16; z++) {
+                  for (int x = 0; x < 16; x++) {
                      checksum = checksum * 31L + chunk.getHeight(Heightmap.Types.WORLD_SURFACE_WG, x, z);
+                     checksum = checksum * 31L + chunk.getHeight(Heightmap.Types.OCEAN_FLOOR_WG, x, z);
                   }
                }
                nonEmptySections[index] = sections;

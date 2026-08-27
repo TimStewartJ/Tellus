@@ -155,11 +155,14 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          LakeBedProfile.maximumShoreInfluenceBlocks(),
          Math.max(this.riverLakeBlendDistance, MAX_ADAPTIVE_BLEND_BLOCKS)
       );
+      // The dense sampling grid only needs hydrology context (flow analysis and shore influence).
+      // Waterfall no-carve markers are resolved separately: populateOsmBaseWaterMask queries
+      // Overture features WaterfallNoCarveZone.queryMarginBlocks() beyond the grid, so region cells
+      // are marked correctly without sampling elevation across the whole marker radius. At 1:1 the
+      // marker radius (527 blocks) previously inflated the grid from 448² to 1088² cells.
       int rawRegionMargin = Math.max(
          this.maxDistanceToShore + SEA_LEVEL_TOLERANCE,
-         this.osmWaterEnabled
-            ? Math.max(FLOW_CONTEXT_BLOCKS, WaterfallNoCarveZone.queryMarginBlocks(settings.worldScale()))
-            : 0
+         this.osmWaterEnabled ? FLOW_CONTEXT_BLOCKS : 0
       );
       this.regionMargin = Math.min(rawRegionMargin, MAX_REGION_MARGIN_BLOCKS);
       this.regionClamped = rawRegionMargin > this.regionMargin;
