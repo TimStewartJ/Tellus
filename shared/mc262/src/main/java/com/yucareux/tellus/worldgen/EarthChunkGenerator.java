@@ -399,6 +399,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    );
    private final SnowTransitionPolicy.SourceSampler snowTransitionSourceSampler = this::hasPersistentSnowSourceAt;
    private final ThreadLocal<Boolean> lodShorelineOverrideSuppressed = new ThreadLocal<>();
+   private final ThreadLocal<EarthChunkGenerator.LodSlopeSampling> lodSlopeSampling = new ThreadLocal<>();
    private final Map<Long, EarthChunkGenerator.PreparedChunkBuildings> preparedChunkBuildings = new ConcurrentHashMap<>();
    private final Map<Long, EarthChunkGenerator.PreparedChunkRoadLights> preparedChunkRoadLights = new ConcurrentHashMap<>();
    private final Map<Long, EarthChunkGenerator.ChunkDecorationContext> chunkDecorationContexts = new ConcurrentHashMap<>();
@@ -6133,6 +6134,16 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    }
 
    public double sampleDemSlopeDegrees(int worldX, int worldZ) {
+      EarthChunkGenerator.LodSlopeSampling lodSampling = this.lodSlopeSampling.get();
+      if (lodSampling != null) {
+         double lodSlopeDegrees = ELEVATION_SOURCE.sampleTerrainSlopeDegreesLocalOnly(
+            worldX, worldZ, this.settings.worldScale(), lodSampling.previewResolutionMeters(), lodSampling.sampleRadiusBlocks()
+         );
+         if (Double.isFinite(lodSlopeDegrees)) {
+            return lodSlopeDegrees;
+         }
+      }
+
       double slopeDegrees = ELEVATION_SOURCE.sampleTerrainSlopeDegreesLocalOnly(worldX, worldZ, this.settings.worldScale());
       if (Double.isFinite(slopeDegrees)) {
          return slopeDegrees;
@@ -6880,6 +6891,30 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
    public void clearLodShorelineOverrideSuppressed() {
       this.lodShorelineOverrideSuppressed.remove();
+   }
+
+   /**
+    * While set on the current thread, DEM slope checks (deepslate, snow) sample the zoom that
+    * {@code previewResolutionMeters} selects with a stencil spanning the LOD cell, instead of the
+    * full-resolution tiles. LOD surfaces already come from that zoom; the full-resolution stencil
+    * touched every underlying tile (64 per detail-6 tile) just to colour one column each.
+    */
+   public void setLodSlopeSampling(double previewResolutionMeters, int cellSize) {
+      double worldScale = this.settings.worldScale();
+      if (!(worldScale > 0.0) || !(previewResolutionMeters > worldScale)) {
+         // Full resolution: the default stencil already matches.
+         this.lodSlopeSampling.remove();
+         return;
+      }
+      int radius = Math.max(TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS, Math.max(1, cellSize) >> 1);
+      this.lodSlopeSampling.set(new EarthChunkGenerator.LodSlopeSampling(previewResolutionMeters, radius));
+   }
+
+   public void clearLodSlopeSampling() {
+      this.lodSlopeSampling.remove();
+   }
+
+   private record LodSlopeSampling(double previewResolutionMeters, int sampleRadiusBlocks) {
    }
 
    public void processDeferredChunkDetailTick(ServerLevel level) {

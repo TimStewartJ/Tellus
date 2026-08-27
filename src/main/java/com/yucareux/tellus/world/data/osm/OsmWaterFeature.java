@@ -1,10 +1,23 @@
 package com.yucareux.tellus.world.data.osm;
 
 import com.yucareux.tellus.worldgen.EarthProjection;
+import java.util.Arrays;
 import java.util.Objects;
 
 public final class OsmWaterFeature {
    private static final double LINE_HALF_WIDTH_BLOCKS = 0.5;
+   private static final double LINE_MAX_DISTANCE_SQ = LINE_HALF_WIDTH_BLOCKS * LINE_HALF_WIDTH_BLOCKS + 1.0E-6;
+   /**
+    * Anything farther than this from a segment's bounding box cannot be within
+    * {@link #LINE_MAX_DISTANCE_SQ}; the slack over sqrt(LINE_MAX_DISTANCE_SQ) absorbs projection
+    * round-off.
+    */
+   private static final double LINE_REJECT_BLOCKS = 0.51;
+   /**
+    * Latitude rejects rely on Mercator stretching latitude (one block never spans more than
+    * 1/blocksPerDegree degrees of latitude), which stops holding inside the polar clamp.
+    */
+   private static final double LAT_REJECT_LIMIT_DEGREES = 85.0;
    private final long featureId;
    private final boolean lineGeometry;
    private final boolean pointGeometry;
@@ -203,24 +216,259 @@ public final class OsmWaterFeature {
       double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
       double queryX = blockX;
       double queryZ = blockZ;
-      double maxDistanceSq = LINE_HALF_WIDTH_BLOCKS * LINE_HALF_WIDTH_BLOCKS + 1.0E-6;
+      // Reject in degrees before paying for any projection: one block is exactly
+      // 1/blocksPerDegree degrees of longitude and at most that much latitude.
+      double rejectDegrees = LINE_REJECT_BLOCKS / blocksPerDegree;
+      double lon = blockX / blocksPerDegree;
+      if (lon < this.minLon - rejectDegrees || lon > this.maxLon + rejectDegrees) {
+         return false;
+      }
+      double lat = EarthProjection.blockZToLat(blockZ, worldScale);
+      boolean latRejects = this.latRejectsAllowed(lat);
+      if (latRejects && (lat < this.minLat - rejectDegrees || lat > this.maxLat + rejectDegrees)) {
+         return false;
+      }
 
       for (int part = 0; part < this.longitudes.length; part++) {
          double[] lonPart = this.longitudes[part];
          double[] latPart = this.latitudes[part];
 
          for (int point = 1; point < lonPart.length; point++) {
-            double startX = lonPart[point - 1] * blocksPerDegree;
-            double startZ = EarthProjection.latToBlockZ(latPart[point - 1], worldScale);
-            double endX = lonPart[point] * blocksPerDegree;
-            double endZ = EarthProjection.latToBlockZ(latPart[point], worldScale);
-            if (distanceToSegmentSq(queryX, queryZ, startX, startZ, endX, endZ) <= maxDistanceSq) {
+            double lonA = lonPart[point - 1];
+            double lonB = lonPart[point];
+            if (lon < Math.min(lonA, lonB) - rejectDegrees || lon > Math.max(lonA, lonB) + rejectDegrees) {
+               continue;
+            }
+            double latA = latPart[point - 1];
+            double latB = latPart[point];
+            if (latRejects && (lat < Math.min(latA, latB) - rejectDegrees || lat > Math.max(latA, latB) + rejectDegrees)) {
+               continue;
+            }
+            double startX = lonA * blocksPerDegree;
+            double startZ = EarthProjection.latToBlockZ(latA, worldScale);
+            double endX = lonB * blocksPerDegree;
+            double endZ = EarthProjection.latToBlockZ(latB, worldScale);
+            if (distanceToSegmentSq(queryX, queryZ, startX, startZ, endX, endZ) <= LINE_MAX_DISTANCE_SQ) {
                return true;
             }
          }
       }
 
       return false;
+   }
+
+   private boolean latRejectsAllowed(double queryLat) {
+      return Math.abs(queryLat) < LAT_REJECT_LIMIT_DEGREES
+         && this.maxLat < LAT_REJECT_LIMIT_DEGREES
+         && this.minLat > -LAT_REJECT_LIMIT_DEGREES;
+   }
+
+   /**
+    * Creates a scanner that answers {@link #containsBlock} for many blocks sharing a Z coordinate.
+    * The scanner is single-threaded and must be re-created when {@code worldScale} changes.
+    */
+   public RowScanner rowScanner(double worldScale) {
+      return new RowScanner(this, worldScale);
+   }
+
+   /**
+    * Row-sweep evaluator for {@link #containsBlock}. Line geometry is projected once and only the
+    * segments whose Z range can reach the current row are tested per block; polygon geometry keeps
+    * the sorted ray-cast crossings of the current row so each block is a binary search. Rasterizing
+    * a tile therefore costs O(rows x vertices) instead of O(blocks x vertices) while returning exactly
+    * what {@code containsBlock} returns for every block.
+    */
+   public static final class RowScanner {
+      private final OsmWaterFeature feature;
+      private final double worldScale;
+      private final double blocksPerDegree;
+      private final boolean alwaysDry;
+      private final double[] segmentStartX;
+      private final double[] segmentStartZ;
+      private final double[] segmentEndX;
+      private final double[] segmentEndZ;
+      private final double minBlockX;
+      private final double maxBlockX;
+      private final double minBlockZ;
+      private final double maxBlockZ;
+      private final int[] activeSegments;
+      private int activeCount;
+      private final double[] crossings;
+      private int crossingCount;
+      private boolean rowDry = true;
+      private double rowZ;
+
+      private RowScanner(OsmWaterFeature feature, double worldScale) {
+         this.feature = feature;
+         this.worldScale = worldScale;
+         this.blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+         this.alwaysDry = worldScale <= 0.0 || feature.pointGeometry;
+         if (!this.alwaysDry && feature.lineGeometry) {
+            int segmentCount = 0;
+            for (double[] part : feature.longitudes) {
+               segmentCount += Math.max(0, part.length - 1);
+            }
+            this.segmentStartX = new double[segmentCount];
+            this.segmentStartZ = new double[segmentCount];
+            this.segmentEndX = new double[segmentCount];
+            this.segmentEndZ = new double[segmentCount];
+            this.activeSegments = new int[segmentCount];
+            this.crossings = null;
+            double lowX = Double.POSITIVE_INFINITY;
+            double highX = Double.NEGATIVE_INFINITY;
+            double lowZ = Double.POSITIVE_INFINITY;
+            double highZ = Double.NEGATIVE_INFINITY;
+            int cursor = 0;
+            for (int part = 0; part < feature.longitudes.length; part++) {
+               double[] lonPart = feature.longitudes[part];
+               double[] latPart = feature.latitudes[part];
+               for (int point = 1; point < lonPart.length; point++) {
+                  // Same expressions as touchesBlockLine so the projected doubles match bit for bit.
+                  double startX = lonPart[point - 1] * this.blocksPerDegree;
+                  double startZ = EarthProjection.latToBlockZ(latPart[point - 1], worldScale);
+                  double endX = lonPart[point] * this.blocksPerDegree;
+                  double endZ = EarthProjection.latToBlockZ(latPart[point], worldScale);
+                  this.segmentStartX[cursor] = startX;
+                  this.segmentStartZ[cursor] = startZ;
+                  this.segmentEndX[cursor] = endX;
+                  this.segmentEndZ[cursor] = endZ;
+                  cursor++;
+                  lowX = Math.min(lowX, Math.min(startX, endX));
+                  highX = Math.max(highX, Math.max(startX, endX));
+                  lowZ = Math.min(lowZ, Math.min(startZ, endZ));
+                  highZ = Math.max(highZ, Math.max(startZ, endZ));
+               }
+            }
+            this.minBlockX = lowX;
+            this.maxBlockX = highX;
+            this.minBlockZ = lowZ;
+            this.maxBlockZ = highZ;
+         } else {
+            this.segmentStartX = null;
+            this.segmentStartZ = null;
+            this.segmentEndX = null;
+            this.segmentEndZ = null;
+            this.activeSegments = null;
+            int edgeCount = 0;
+            for (double[] part : feature.longitudes) {
+               edgeCount += part.length;
+            }
+            this.crossings = this.alwaysDry ? null : new double[edgeCount];
+            this.minBlockX = 0.0;
+            this.maxBlockX = 0.0;
+            this.minBlockZ = 0.0;
+            this.maxBlockZ = 0.0;
+         }
+      }
+
+      /** Selects the row of blocks at {@code blockZ}; must precede {@link #contains}. */
+      public void beginRow(int blockZ) {
+         if (this.alwaysDry) {
+            this.rowDry = true;
+            return;
+         }
+         if (this.feature.lineGeometry) {
+            this.beginLineRow(blockZ);
+         } else {
+            this.beginPolygonRow(blockZ);
+         }
+      }
+
+      /** Equivalent to {@code feature.containsBlock(blockX, rowBlockZ, worldScale)}. */
+      public boolean contains(int blockX) {
+         if (this.rowDry) {
+            return false;
+         }
+         return this.feature.lineGeometry ? this.lineContains(blockX) : this.polygonContains(blockX);
+      }
+
+      private void beginLineRow(int blockZ) {
+         double queryZ = blockZ;
+         this.rowZ = queryZ;
+         if (queryZ < this.minBlockZ - LINE_REJECT_BLOCKS || queryZ > this.maxBlockZ + LINE_REJECT_BLOCKS) {
+            this.rowDry = true;
+            return;
+         }
+         int count = 0;
+         for (int segment = 0; segment < this.segmentStartZ.length; segment++) {
+            double startZ = this.segmentStartZ[segment];
+            double endZ = this.segmentEndZ[segment];
+            if (queryZ >= Math.min(startZ, endZ) - LINE_REJECT_BLOCKS && queryZ <= Math.max(startZ, endZ) + LINE_REJECT_BLOCKS) {
+               this.activeSegments[count++] = segment;
+            }
+         }
+         this.activeCount = count;
+         this.rowDry = count == 0;
+      }
+
+      private boolean lineContains(int blockX) {
+         double queryX = blockX;
+         if (queryX < this.minBlockX - LINE_REJECT_BLOCKS || queryX > this.maxBlockX + LINE_REJECT_BLOCKS) {
+            return false;
+         }
+         for (int i = 0; i < this.activeCount; i++) {
+            int segment = this.activeSegments[i];
+            double startX = this.segmentStartX[segment];
+            double endX = this.segmentEndX[segment];
+            if (queryX < Math.min(startX, endX) - LINE_REJECT_BLOCKS || queryX > Math.max(startX, endX) + LINE_REJECT_BLOCKS) {
+               continue;
+            }
+            if (distanceToSegmentSq(
+                  queryX, this.rowZ, startX, this.segmentStartZ[segment], endX, this.segmentEndZ[segment]
+               )
+               <= LINE_MAX_DISTANCE_SQ) {
+               return true;
+            }
+         }
+         return false;
+      }
+
+      private void beginPolygonRow(int blockZ) {
+         double lat = EarthProjection.blockZToLat(blockZ, this.worldScale);
+         if (lat < this.feature.minLat || lat > this.feature.maxLat) {
+            this.rowDry = true;
+            return;
+         }
+         int count = 0;
+         for (int part = 0; part < this.feature.longitudes.length; part++) {
+            double[] lonPart = this.feature.longitudes[part];
+            double[] latPart = this.feature.latitudes[part];
+            int points = lonPart.length;
+            for (int i = 0, j = points - 1; i < points; j = i++) {
+               double latA = latPart[i];
+               double latB = latPart[j];
+               if ((latA > lat) != (latB > lat)) {
+                  double lonA = lonPart[i];
+                  double lonB = lonPart[j];
+                  // Identical expression to containsLonLat so the crossing doubles match.
+                  this.crossings[count++] = (lonB - lonA) * (lat - latA) / (latB - latA) + lonA;
+               }
+            }
+         }
+         Arrays.sort(this.crossings, 0, count);
+         this.crossingCount = count;
+         this.rowDry = count == 0;
+      }
+
+      private boolean polygonContains(int blockX) {
+         double lon = blockX / this.blocksPerDegree;
+         if (lon < this.feature.minLon || lon > this.feature.maxLon) {
+            return false;
+         }
+         // containsLonLat toggles once per crossing with lon <= crossLon, so the answer is the
+         // parity of the crossings at or beyond lon.
+         int low = 0;
+         int high = this.crossingCount;
+         while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (this.crossings[mid] < lon) {
+               low = mid + 1;
+            } else {
+               high = mid;
+            }
+         }
+         return ((this.crossingCount - low) & 1) != 0;
+      }
    }
 
    private static double distanceToSegmentSq(double px, double pz, double ax, double az, double bx, double bz) {

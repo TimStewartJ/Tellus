@@ -137,6 +137,10 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          long[] waterBodyKeys = rasterized.waterBodyKeys();
          int[] waterBodySurfaceHints = rasterized.waterBodySurfaceHints();
          boolean rasterIncomplete = rasterized.incomplete();
+         // Ocean cells can only come from ocean polygons, and the padded area query saw none: every
+         // cell is land to the coast field, whose distance is only consumed for ocean cells anyway.
+         // Skipping the per-cell sample saves up to 64 macro-tile resolutions per detail-6 tile.
+         boolean sampleCoast = osmWaterEnabled && rasterized.oceanFeaturesPresent();
          int seaLevel = this.generator.getSeaLevel();
          TellusLandMaskSource.LandMaskSampler landMaskSampler = this.landMaskSource.newSampler();
          double previewResolutionMeters = Math.max(worldScale, cellSize * worldScale);
@@ -153,7 +157,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                int worldX = worldXs[localX];
                int coverClass = coverClasses[index];
                int surface = terrainSurface[index];
-               OceanCoastSample coastSample = osmWaterEnabled ? this.fullWaterResolver.oceanCoastSample(worldX, worldZ) : null;
+               OceanCoastSample coastSample = sampleCoast ? this.fullWaterResolver.oceanCoastSample(worldX, worldZ) : null;
                if (coastSample != null && !coastSample.complete()) {
                   throw new OceanCoverageUnavailableException(coastSample.coverageStatus(), worldX, worldZ);
                }
@@ -1072,6 +1076,13 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       }
       List<OsmWaterFeature> features = result.features();
       boolean incomplete = false;
+      boolean oceanFeaturesPresent = false;
+      for (OsmWaterFeature feature : features) {
+         if (feature.oceanHint()) {
+            oceanFeaturesPresent = true;
+            break;
+         }
+      }
       if (features.isEmpty()) {
 	         return incomplete
 	            ? new DhLodWaterResolver.RasterizedWaterArea(
@@ -1085,7 +1096,8 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	               new long[area],
 	               emptySurfaceHints(area),
 	               sourceGeneration,
-	               true
+	               true,
+	               false
 	            )
 	            : DhLodWaterResolver.RasterizedWaterArea.dry(area);
       } else {
@@ -1155,7 +1167,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 
 	         return new DhLodWaterResolver.RasterizedWaterArea(
 	            renderWater, ocean, oceanSample, lineWater, areaWater, flowingWater, waterfallNoCarve,
-	            waterBodyKeys, waterBodySurfaceHints, sourceGeneration, incomplete
+	            waterBodyKeys, waterBodySurfaceHints, sourceGeneration, incomplete, oceanFeaturesPresent
 	         );
 	      }
 	   }
@@ -1198,51 +1210,79 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          return;
       }
 
+      // Sweep one sample row at a time: the scanner projects the feature once and keeps only the
+      // segments/crossings that can touch the row, so each sample is a few compares instead of a
+      // full pass over the geometry. Results are identical to feature.containsBlock per sample.
+      OsmWaterFeature.RowScanner scanner = feature.rowScanner(worldScale);
+      int[] rowGroupedOffsets = rowGroupedSampleOffsetOrder(sampleOffsets);
+
       for (int localZ = minCellZ; localZ <= maxCellZ; localZ++) {
          throwIfCancelled();
          int worldZ = baseZ + localZ * cellSize + cellOffset;
          int row = localZ * lodSizePoints;
+         int currentOffsetZ = Integer.MIN_VALUE;
 
-         for (int localX = minCellX; localX <= maxCellX; localX++) {
-            int worldX = baseX + localX * cellSize + cellOffset;
-            int index = row + localX;
-            int mask = wetSampleMask[index];
+         for (int pair : rowGroupedOffsets) {
+            int offsetX = sampleOffsets[pair * 2];
+            int offsetZ = sampleOffsets[pair * 2 + 1];
+            int sampleBit = 1 << pair;
+            if (offsetZ != currentOffsetZ) {
+               scanner.beginRow(worldZ + offsetZ);
+               currentOffsetZ = offsetZ;
+            }
 
-            for (int offsetIndex = 0, sampleBit = 1; offsetIndex < sampleOffsets.length; offsetIndex += 2, sampleBit <<= 1) {
-               int sampleX = worldX + sampleOffsets[offsetIndex];
-               int sampleZ = worldZ + sampleOffsets[offsetIndex + 1];
-               if (feature.containsBlock(sampleX, sampleZ, worldScale)) {
-                  mask |= sampleBit;
-                  if (feature.oceanHint()) {
-                     oceanSample[index] = true;
-                  }
+            for (int localX = minCellX; localX <= maxCellX; localX++) {
+               int worldX = baseX + localX * cellSize + cellOffset;
+               if (!scanner.contains(worldX + offsetX)) {
+                  continue;
+               }
+               int index = row + localX;
+               wetSampleMask[index] |= sampleBit;
+               if (feature.oceanHint()) {
+                  oceanSample[index] = true;
+               }
 
-	                  if (lineWaterFeature) {
-	                     lineSample[index] = true;
-	                  } else {
-	                     areaSample[index] = true;
-	                  }
-	                  if (flowingWaterFeature) {
-	                     flowingSample[index] = true;
-	                  }
+               if (lineWaterFeature) {
+                  lineSample[index] = true;
+               } else {
+                  areaSample[index] = true;
+               }
+               if (flowingWaterFeature) {
+                  flowingSample[index] = true;
+               }
 
-                  if (waterBodyKey != 0L) {
-                     long existingKey = waterBodyKeys[index];
-                     if (existingKey == 0L || Long.compareUnsigned(waterBodyKey, existingKey) < 0) {
-                        waterBodyKeys[index] = waterBodyKey;
-                        waterBodySurfaceHints[index] = waterBodySurfaceHint;
-                     } else if (existingKey == waterBodyKey && waterBodySurfaceHint != Integer.MIN_VALUE) {
-                        waterBodySurfaceHints[index] = waterBodySurfaceHints[index] == Integer.MIN_VALUE
-                           ? waterBodySurfaceHint
-                           : Math.min(waterBodySurfaceHints[index], waterBodySurfaceHint);
-                     }
+               if (waterBodyKey != 0L) {
+                  long existingKey = waterBodyKeys[index];
+                  if (existingKey == 0L || Long.compareUnsigned(waterBodyKey, existingKey) < 0) {
+                     waterBodyKeys[index] = waterBodyKey;
+                     waterBodySurfaceHints[index] = waterBodySurfaceHint;
+                  } else if (existingKey == waterBodyKey && waterBodySurfaceHint != Integer.MIN_VALUE) {
+                     waterBodySurfaceHints[index] = waterBodySurfaceHints[index] == Integer.MIN_VALUE
+                        ? waterBodySurfaceHint
+                        : Math.min(waterBodySurfaceHints[index], waterBodySurfaceHint);
                   }
                }
             }
-
-            wetSampleMask[index] = mask;
          }
       }
+   }
+
+   /**
+    * Sample-offset pair indices ordered so pairs sharing a Z offset are adjacent (stable for equal Z),
+    * letting the rasterizer begin each scanner row once per distinct Z offset.
+    */
+   static int[] rowGroupedSampleOffsetOrder(int[] sampleOffsets) {
+      int pairCount = sampleOffsets.length / 2;
+      Integer[] order = new Integer[pairCount];
+      for (int pair = 0; pair < pairCount; pair++) {
+         order[pair] = pair;
+      }
+      Arrays.sort(order, (a, b) -> Integer.compare(sampleOffsets[a * 2 + 1], sampleOffsets[b * 2 + 1]));
+      int[] result = new int[pairCount];
+      for (int i = 0; i < pairCount; i++) {
+         result[i] = order[i];
+      }
+      return result;
    }
 
    static boolean isFlowingWaterFeature(OsmWaterFeature feature) {
@@ -1835,6 +1875,10 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
    private record AreaKey(int baseX, int baseZ, int lodSizePoints, int cellSize, long generation) {
    }
 
+	   /**
+	    * @param oceanFeaturesPresent whether the (margin-padded) area query returned any ocean polygon.
+	    *        When false no cell of the area can be ocean, so the coast field never has to be consulted.
+	    */
 	   private record RasterizedWaterArea(
 	      boolean[] renderWater,
 	      boolean[] ocean,
@@ -1846,7 +1890,8 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	      long[] waterBodyKeys,
 	      int[] waterBodySurfaceHints,
 	      long sourceGeneration,
-	      boolean incomplete
+	      boolean incomplete,
+	      boolean oceanFeaturesPresent
 	   ) {
 	      private static DhLodWaterResolver.RasterizedWaterArea dry(int area) {
 	         return new DhLodWaterResolver.RasterizedWaterArea(
@@ -1860,6 +1905,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	            new long[area],
 	            emptySurfaceHints(area),
 	            0L,
+	            false,
 	            false
 	         );
 	      }

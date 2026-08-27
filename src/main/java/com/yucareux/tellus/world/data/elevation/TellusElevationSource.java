@@ -61,7 +61,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
    public static final double MAPTERHORN_SEA_LEVEL_THRESHOLD_METERS = 0.0;
    private static final String MAPTERHORN_ENDPOINT = "https://tiles.mapterhorn.com";
    private static final String OPENWATERS_ENDPOINT = "https://tiles.openwaters.io/seascape";
-   private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", 512);
+   private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", defaultCacheTiles());
    private static final int AREA_PREFETCH_SAMPLE_POINTS = intProperty("tellus.elevation.areaPrefetch.samples", 25);
    private static final int AREA_PREFETCH_TERRAIN_TILE_LIMIT = intProperty("tellus.elevation.areaPrefetch.terrainTileLimit", 512);
    private static final int TILE_DOWNLOAD_ATTEMPTS = intProperty("tellus.elevation.downloadAttempts", 3);
@@ -384,6 +384,20 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    public double sampleTerrainSlopeDegreesLocalOnly(double blockX, double blockZ, double worldScale) {
+      return this.sampleTerrainSlopeDegreesLocalOnly(
+         blockX, blockZ, worldScale, worldScale, TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS
+      );
+   }
+
+   /**
+    * Slope from the zoom that {@code previewResolutionMeters} selects (the zoom LOD surfaces are
+    * sampled from) instead of the full-resolution tiles. Downsampled previews snap every sample to a
+    * step-sized grid, so the stencil radius is rounded up to that step to keep the east/west and
+    * north/south pairs genuinely {@code 2 * radius} blocks apart.
+    */
+   public double sampleTerrainSlopeDegreesLocalOnly(
+      double blockX, double blockZ, double worldScale, double previewResolutionMeters, int sampleRadiusBlocks
+   ) {
       if (!(worldScale > 0.0)) {
          return Double.NaN;
       }
@@ -394,9 +408,10 @@ public final class TellusElevationSource implements TellusCacheHandle {
          return Double.NaN;
       }
 
-      double sampleResolutionMeters = worldScale;
-      int stepX = TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS;
-      int stepZ = TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS;
+      double sampleResolutionMeters = effectiveSampleResolutionMeters(worldScale, previewResolutionMeters);
+      int snapStep = downsampleStep(worldScale, RESOLUTION_METERS, sampleResolutionMeters);
+      int stepX = slopeStencilRadius(sampleRadiusBlocks, snapStep);
+      int stepZ = stepX;
       double center = this.sampleTerrainTilesMetersLocalOnlyOrMissing(
          blockX, blockZ, worldScale, sampleResolutionMeters
       );
@@ -421,6 +436,14 @@ public final class TellusElevationSource implements TellusCacheHandle {
          stepX * groundMetersPerBlockX,
          stepZ * groundMetersPerBlockZ
       );
+   }
+
+   static int slopeStencilRadius(int requestedRadiusBlocks, int snapStep) {
+      int radius = Math.max(1, requestedRadiusBlocks);
+      if (snapStep <= 1) {
+         return radius;
+      }
+      return Math.max(snapStep, (radius + snapStep - 1) / snapStep * snapStep);
    }
 
    public TellusElevationSource.ResolvedElevationSample sampleResolvedPreviewElevationMetersMemoryOnly(
@@ -1997,6 +2020,21 @@ public final class TellusElevationSource implements TellusCacheHandle {
             Tellus.LOGGER.debug("Failed to prefetch OpenWaters bathymetry tile {}", key, error);
          }
       }
+   }
+
+   /**
+    * Decoded-tile budget: 512 tiles (256 MB) on small heaps, up to 1536 when ~3% of the heap can hold
+    * them. At 1:1 a moving player's chunk ring plus the detail-0 DH ring exceed 512 distinct zoom-16
+    * tiles, and every eviction costs a ~20 ms WebP decode on the next touch.
+    */
+   static int defaultCacheTiles() {
+      return defaultCacheTiles(Runtime.getRuntime().maxMemory());
+   }
+
+   static int defaultCacheTiles(long maxHeapBytes) {
+      long tileBytes = (long)TILE_SIZE * TILE_SIZE * Short.BYTES;
+      long budgetTiles = maxHeapBytes / 32 / tileBytes;
+      return (int)Math.max(512L, Math.min(1536L, budgetTiles));
    }
 
    private static int intProperty(String key, int defaultValue) {

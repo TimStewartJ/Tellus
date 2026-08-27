@@ -20,11 +20,29 @@ final class DistantHorizonsRuntimeConfigGuard {
       true,
       "Enabled Distant Horizons N-sized generation for Tellus far LODs"
    );
+   /**
+    * With N-sized generation, far LODs exist only at coarse detail. When the player approaches, DH
+    * creates finer child sections that have no data yet; an empty section still counts as
+    * renderable, so the coarse parent is switched off and the terrain vanishes until the fine tiles
+    * are generated (which DH also pauses while moving faster than ~20 blocks/s). This DH option
+    * pre-fills the children from the coarse parent so the area keeps rendering; DH's own config
+    * comment recommends it whenever N-sized generation is active.
+    */
+   private static final ConfigKey UPSAMPLE_TO_FILL_HOLES = new ConfigKey(
+      "com.seibel.distanthorizons.core.config.Config$Common$LodBuilding$Experimental",
+      "upsampleLowerDetailLodsToFillHoles",
+      true,
+      "Enabled Distant Horizons lower-detail LOD upsampling so coarse Tellus LODs stay visible while finer tiles generate"
+   );
+   private static final boolean FORCE_UPSAMPLE_TO_FILL_HOLES = Boolean.parseBoolean(
+      System.getProperty("tellus.dhForceUpsampleToFillHoles", "true")
+   );
    private final Object lock = new Object();
    private final boolean forceNSizedGeneration;
    private final ConfigEntryResolver configEntryResolver;
    private final Set<String> activeDimensions = new HashSet<>();
    private RuntimeBooleanOverride nSizedGenerationOverride;
+   private RuntimeBooleanOverride upsampleOverride;
 
    static DistantHorizonsRuntimeConfigGuard reflective(boolean forceNSizedGeneration) {
       return new DistantHorizonsRuntimeConfigGuard(forceNSizedGeneration, ReflectiveConfigEntryResolver.INSTANCE);
@@ -50,6 +68,9 @@ final class DistantHorizonsRuntimeConfigGuard {
          if (this.activeDimensions.size() == 1) {
             if (this.forceNSizedGeneration) {
                this.nSizedGenerationOverride = this.tryApply(N_SIZED_GENERATION);
+               if (FORCE_UPSAMPLE_TO_FILL_HOLES) {
+                  this.upsampleOverride = this.tryApply(UPSAMPLE_TO_FILL_HOLES);
+               }
             }
          }
          return true;
@@ -67,6 +88,8 @@ final class DistantHorizonsRuntimeConfigGuard {
             return;
          }
 
+         this.restore(this.upsampleOverride);
+         this.upsampleOverride = null;
          this.restore(this.nSizedGenerationOverride);
          this.nSizedGenerationOverride = null;
       }

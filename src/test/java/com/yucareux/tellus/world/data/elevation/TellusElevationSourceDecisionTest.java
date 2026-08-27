@@ -9,6 +9,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TellusElevationSourceDecisionTest {
    @Test
+   void slopeStencilRadiusKeepsFullResolutionStencilAndSnapsDownsampledOnes() {
+      assertEquals(2, TellusElevationSource.slopeStencilRadius(2, 1));
+      assertEquals(16, TellusElevationSource.slopeStencilRadius(16, 1));
+      assertEquals(1, TellusElevationSource.slopeStencilRadius(0, 1));
+      // Downsampled previews snap samples to a 30-block grid: 16 -> 30, 32 -> 60, 2 -> 30.
+      assertEquals(30, TellusElevationSource.slopeStencilRadius(16, 30));
+      assertEquals(60, TellusElevationSource.slopeStencilRadius(32, 30));
+      assertEquals(30, TellusElevationSource.slopeStencilRadius(2, 30));
+      assertEquals(60, TellusElevationSource.slopeStencilRadius(60, 30));
+   }
+
+   @Test
+   void elevationCacheDefaultScalesWithHeapWithinBounds() {
+      long gib = 1L << 30;
+      assertEquals(512, TellusElevationSource.defaultCacheTiles(2 * gib));
+      assertEquals(512, TellusElevationSource.defaultCacheTiles(8 * gib));
+      assertEquals(1024, TellusElevationSource.defaultCacheTiles(16 * gib));
+      assertEquals(1536, TellusElevationSource.defaultCacheTiles(24 * gib));
+      assertEquals(1536, TellusElevationSource.defaultCacheTiles(64 * gib));
+   }
+
+   @Test
    void usesBathymetryOnlyForOceanMaskAtOrBelowThreshold() {
       assertFalse(TellusElevationSource.shouldUseBathymetry(false, -20.0));
       assertFalse(TellusElevationSource.shouldUseBathymetry(false, 0.0));

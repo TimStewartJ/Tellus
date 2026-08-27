@@ -31,7 +31,7 @@ public final class OceanCoastField {
       DIAGONAL_COST,
       DIAGONAL_COST
    };
-   private static final int CACHE_TILES = intProperty("tellus.oceanCoastCacheTiles", 32, 4, 256);
+   private static final int CACHE_TILES = intProperty("tellus.oceanCoastCacheTiles", 128, 4, 1024);
    private static final ThreadLocal<Scratch> SCRATCH = ThreadLocal.withInitial(Scratch::new);
 
    private final TellusOsmWaterSource waterSource;
@@ -40,6 +40,7 @@ public final class OceanCoastField {
    private final RawDepthSampler rawDepthSampler;
    private final Cache<Long, MacroTile> cache = CacheBuilder.newBuilder().maximumSize(CACHE_TILES).build();
    private final LastValueMemo<Long, MacroTile> tileMemo = new LastValueMemo<>();
+   private final MacroTile landOnlyTile;
 
    public OceanCoastField(
       TellusOsmWaterSource waterSource,
@@ -51,6 +52,7 @@ public final class OceanCoastField {
       this.worldScale = worldScale;
       this.transitionBlocks = OceanFloorProfile.clampTransitionDistance(transitionBlocks);
       this.rawDepthSampler = rawDepthSampler;
+      this.landOnlyTile = MacroTile.landOnly(this.transitionBlocks);
    }
 
    public OceanCoastSample sample(int blockX, int blockZ) {
@@ -146,6 +148,19 @@ public final class OceanCoastField {
       );
       if (!query.complete()) {
          return MacroTile.incomplete(query.coverageStatus(), this.transitionBlocks);
+      }
+
+      boolean anyOcean = false;
+      for (OsmWaterFeature feature : query.features()) {
+         if (feature.oceanHint()) {
+            anyOcean = true;
+            break;
+         }
+      }
+      if (!anyOcean) {
+         // Inland tiles otherwise paid the full 1538x1538 fills, seed scan and dilation pass just to
+         // conclude "no coast here"; coarse DH tiles touch dozens of such macro tiles each.
+         return this.landOnlyTile;
       }
 
       Scratch scratch = SCRATCH.get();
@@ -405,6 +420,18 @@ public final class OceanCoastField {
       TellusOsmWaterSource.CoverageStatus coverageStatus
    ) {
       private static MacroTile incomplete(TellusOsmWaterSource.CoverageStatus status, int transitionBlocks) {
+         return filled(status, transitionBlocks);
+      }
+
+      /**
+       * What {@link OceanCoastField#build} produces when no ocean polygon reaches the padded tile:
+       * no ocean cells, every distance saturated at the transition width, no corrections.
+       */
+      private static MacroTile landOnly(int transitionBlocks) {
+         return filled(TellusOsmWaterSource.CoverageStatus.COMPLETE, transitionBlocks);
+      }
+
+      private static MacroTile filled(TellusOsmWaterSource.CoverageStatus status, int transitionBlocks) {
          short[] distance = new short[CORE_SIZE * CORE_SIZE];
          Arrays.fill(distance, (short)transitionBlocks);
          return new MacroTile(new boolean[CORE_SIZE * CORE_SIZE], distance, new boolean[CORE_SIZE * CORE_SIZE], status);

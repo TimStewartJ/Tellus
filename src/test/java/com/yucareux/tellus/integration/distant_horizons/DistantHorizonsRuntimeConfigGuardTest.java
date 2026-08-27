@@ -91,6 +91,30 @@ class DistantHorizonsRuntimeConfigGuardTest {
    }
 
    @Test
+   void disabledUpsamplingIsForcedOnWithNSizedGenerationAndRestored() {
+      FakeResolver resolver = new FakeResolver();
+      FakeConfigEntry nSized = resolver.add(N_SIZED_OWNER, N_SIZED_FIELD, false);
+      FakeConfigEntry upsampling = resolver.add(UPSAMPLING_OWNER, UPSAMPLING_FIELD, false);
+      DistantHorizonsRuntimeConfigGuard guard = new DistantHorizonsRuntimeConfigGuard(true, resolver);
+
+      assertTrue(guard.acquire("minecraft:overworld"));
+      assertTrue(nSized.value);
+      assertTrue(upsampling.value);
+      assertEquals(1, upsampling.writeCount);
+
+      assertTrue(guard.acquire("minecraft:the_nether"));
+      assertEquals(1, upsampling.writeCount);
+
+      guard.release("minecraft:overworld");
+      assertTrue(upsampling.value);
+
+      guard.release("minecraft:the_nether");
+      assertFalse(upsampling.value);
+      assertFalse(nSized.value);
+      assertEquals(2, upsampling.writeCount);
+   }
+
+   @Test
    void upsamplingRemainsUserControlledWhenNSizedForcingIsDisabled() {
       FakeResolver resolver = new FakeResolver();
       FakeConfigEntry nSized = resolver.add(N_SIZED_OWNER, N_SIZED_FIELD, false);

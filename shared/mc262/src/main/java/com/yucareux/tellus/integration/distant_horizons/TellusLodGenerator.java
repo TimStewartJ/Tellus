@@ -103,6 +103,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private static final boolean SHARED_TERRAIN_CACHE_ENABLED = Boolean.parseBoolean(
       System.getProperty("tellus.dhSharedTerrainCacheEnabled", "false")
    );
+   /**
+    * Sample the deepslate/snow DEM slope from the zoom the LOD surface itself came from. The
+    * full-resolution stencil made detail 4-6 tiles decode 16-64 elevation tiles each (in-game JFR:
+    * 20% of DH world-gen CPU was WebP decoding under applyDemDeepslateSlopePaletteOverride).
+    */
+   private static final boolean LOD_SLOPE_AT_LOD_RESOLUTION = Boolean.parseBoolean(
+      System.getProperty("tellus.dhLodSlopeAtLodResolution", "true")
+   );
    private static final int LOD_WATER_FULL_VOLUME_MAX_DEPTH = intProperty("tellus.dhWaterFullVolumeMaxDepth", 6, 0, 64);
    private static final int LOD_WATER_SURFACE_LAYER_DEPTH = intProperty("tellus.dhWaterSurfaceLayerDepth", 1, 1, 16);
    private static final int LOD_WATER_VEGETATION_MAX_DETAIL = intProperty("tellus.dhWaterVegetationMaxDetail", 8, 0, 24);
@@ -726,6 +734,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          phaseStart = beginTimingPhase(trace);
          this.generator.setLodMountainTransitionCache(mountainTransitionCache);
          this.generator.setLodShorelineOverrideSuppressed(suppressCoarseShoreline);
+         this.applyLodSlopeSampling(previewResolutionMeters, cellSize);
 
          try {
             for (int localZ = 0; localZ < lodSizePoints; localZ++) {
@@ -1141,6 +1150,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          } finally {
             this.generator.clearLodMountainTransitionCache();
             this.generator.clearLodShorelineOverrideSuppressed();
+            this.generator.clearLodSlopeSampling();
          }
          endTimingPhase(trace, "emit", phaseStart);
          trace.addPhase("emit.surfaceResolve", emitSurfaceResolveNanos);
@@ -1461,6 +1471,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          worldXs[0], worldXs[lodSizePoints - 1], worldZs[0], worldZs[lodSizePoints - 1], previewResolutionMeters
       );
       this.generator.setLodMountainTransitionCache(mountainTransitionCache);
+      this.applyLodSlopeSampling(previewResolutionMeters, cellSize);
 
       try {
          for (int localZ = 0; localZ < lodSizePoints; localZ++) {
@@ -1706,6 +1717,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          }
       } finally {
          this.generator.clearLodMountainTransitionCache();
+         this.generator.clearLodSlopeSampling();
       }
       endTimingPhase(trace, "emit", phaseStart);
       trace.addPhase("emit.classify", emitClassifyNanos);
@@ -1985,6 +1997,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private static double lodPreviewResolutionMeters(EarthGeneratorSettings settings, int cellSize) {
       double worldScale = settings.worldScale();
       return worldScale > 0.0 ? Math.max(worldScale, worldScale * (double)cellSize) : Double.NaN;
+   }
+
+   private void applyLodSlopeSampling(double previewResolutionMeters, int cellSize) {
+      if (LOD_SLOPE_AT_LOD_RESOLUTION) {
+         this.generator.setLodSlopeSampling(previewResolutionMeters, cellSize);
+      } else {
+         this.generator.clearLodSlopeSampling();
+      }
    }
 
    private static int intProperty(String key, int defaultValue, int minInclusive, int maxInclusive) {
