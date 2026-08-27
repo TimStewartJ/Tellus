@@ -5,6 +5,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.cache.LastValueMemo;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
@@ -84,6 +85,9 @@ final class WorldCoverCogSource {
    private final long maximumDiskCacheBytes;
    private final LoadingCache<SourceTileKey, CogMetadata> metadataCache;
    private final LoadingCache<BlockKey, byte[]> blockCache;
+   // Per-thread last-hit memos: a chunk's columns land in the same COG block almost every time.
+   private final LastValueMemo<SourceTileKey, CogMetadata> metadataMemo = new LastValueMemo<>();
+   private final LastValueMemo<BlockKey, byte[]> blockMemo = new LastValueMemo<>();
    private final Cache<NearestLandKey, Integer> nearestLandCache;
    private final Cache<SourceTileKey, Long> metadataFailureDeadlines;
    private final Cache<BlockKey, Long> blockFailureDeadlines;
@@ -468,6 +472,8 @@ final class WorldCoverCogSource {
    }
 
    void clearMemoryCache() {
+      this.metadataMemo.invalidateAll();
+      this.blockMemo.invalidateAll();
       this.metadataCache.invalidateAll();
       this.metadataCache.cleanUp();
       this.blockCache.invalidateAll();
@@ -543,9 +549,13 @@ final class WorldCoverCogSource {
    }
 
    private CogMetadata getMetadata(SourceTileKey key, LookupMode lookupMode) {
+      CogMetadata memoized = this.metadataMemo.get(key);
+      if (memoized != null) {
+         return memoized;
+      }
       CogMetadata cached = this.metadataCache.getIfPresent(key);
       if (cached != null) {
-         return cached;
+         return this.metadataMemo.put(key, cached);
       }
       if (lookupMode == LookupMode.MEMORY_ONLY) {
          return null;
@@ -554,7 +564,7 @@ final class WorldCoverCogSource {
       CogMetadata local = this.readLocalMetadata(key);
       if (local != null) {
          CogMetadata raced = this.metadataCache.asMap().putIfAbsent(key, local);
-         return raced == null ? local : raced;
+         return this.metadataMemo.put(key, raced == null ? local : raced);
       }
       if (lookupMode == LookupMode.LOCAL_ONLY || !retryAllowed(this.metadataFailureDeadlines, key)) {
          return null;
@@ -563,7 +573,7 @@ final class WorldCoverCogSource {
       try {
          CogMetadata loaded = this.metadataCache.get(key);
          this.metadataFailureDeadlines.invalidate(key);
-         return loaded;
+         return this.metadataMemo.put(key, loaded);
       } catch (ExecutionException error) {
          Throwable cause = error.getCause();
          if (TellusLandCoverSource.isInterruptedLoad(cause)) {
@@ -602,9 +612,13 @@ final class WorldCoverCogSource {
    }
 
    private byte[] getBlock(BlockKey key, CogMetadata metadata, LookupMode lookupMode) {
+      byte[] memoized = this.blockMemo.get(key);
+      if (memoized != null) {
+         return memoized;
+      }
       byte[] cached = this.blockCache.getIfPresent(key);
       if (cached != null) {
-         return cached;
+         return this.blockMemo.put(key, cached);
       }
       if (lookupMode == LookupMode.MEMORY_ONLY) {
          return null;
@@ -613,7 +627,7 @@ final class WorldCoverCogSource {
       byte[] local = this.readLocalBlock(key, metadata);
       if (local != null) {
          byte[] raced = this.blockCache.asMap().putIfAbsent(key, local);
-         return raced == null ? local : raced;
+         return this.blockMemo.put(key, raced == null ? local : raced);
       }
       if (lookupMode == LookupMode.LOCAL_ONLY || !retryAllowed(this.blockFailureDeadlines, key)) {
          return null;
@@ -622,7 +636,7 @@ final class WorldCoverCogSource {
       try {
          byte[] loaded = this.blockCache.get(key);
          this.blockFailureDeadlines.invalidate(key);
-         return loaded;
+         return this.blockMemo.put(key, loaded);
       } catch (ExecutionException error) {
          Throwable cause = error.getCause();
          if (TellusLandCoverSource.isInterruptedLoad(cause)) {

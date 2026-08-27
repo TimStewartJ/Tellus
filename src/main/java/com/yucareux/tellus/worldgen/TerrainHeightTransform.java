@@ -123,6 +123,34 @@ public final class TerrainHeightTransform {
       return roundedAwayFromSeaLevel(elevationMeters, scaled);
    }
 
+   /**
+    * Same result as {@link #blockOffset(double, double, double, double, double, boolean, boolean)}
+    * with {@code correction} precomputed through {@link #heightScaleCorrection} for the sample's
+    * {@code blockZ}; lets dense row loops hoist the latitude math out of the per-column path.
+    */
+   public static int blockOffsetWithCorrection(
+      double elevationMeters,
+      double worldScale,
+      double terrestrialHeightScale,
+      double oceanicHeightScale,
+      boolean experimentalIncreaseHeight,
+      boolean automaticHeightScaling,
+      double correction
+   ) {
+      double scaled = !Double.isFinite(elevationMeters) || !(worldScale > 0.0)
+         ? Double.NaN
+         : scaleAndCompress(
+            elevationMeters,
+            worldScale,
+            terrestrialHeightScale,
+            oceanicHeightScale,
+            experimentalIncreaseHeight,
+            automaticHeightScaling,
+            correction
+         );
+      return roundedAwayFromSeaLevel(elevationMeters, scaled);
+   }
+
    public static int blockOffsetAtLatitude(
       double elevationMeters,
       double latitude,

@@ -66,4 +66,6 @@ tasks.register('benchmarkChunkGeneration', JavaExec) {
 	args "--experimentalHeight=${providers.gradleProperty('benchExperimentalHeight').getOrElse('true')}"
 	args "--prefetch=${providers.gradleProperty('benchPrefetch').getOrElse('false')}"
 	args "--perChunk=${providers.gradleProperty('benchPerChunk').getOrElse('false')}"
+	args "--warmupRadius=${providers.gradleProperty('benchWarmupRadius').getOrElse('-1')}"
+	args "--warmupOffsetChunks=${providers.gradleProperty('benchWarmupOffsetChunks').getOrElse('256')}"
 }

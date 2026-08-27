@@ -252,6 +252,24 @@ public final class TerrainPreloadPackageRegistry {
          return false;
       }
 
+      /**
+       * Cheap conservative pre-check for dense loops: {@code false} guarantees that
+       * {@link #sample(int, int, double)} returns {@code null} for every block in the area, so callers
+       * can skip the per-block lookup entirely (the common case when no preload package is installed).
+       */
+      public boolean mayContainArea(int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ) {
+         this.registry.requestRefreshIfNeeded();
+         TerrainPreloadPackageRegistry.Snapshot current = this.registry.snapshot;
+         TerrainPreloadPackageRegistry.CachedIndex cached = this.cachedIndex;
+         if (cached.generation() != current.generation()) {
+            cached = new TerrainPreloadPackageRegistry.CachedIndex(
+               current.generation(), current.indexFor(this.settingsFingerprint)
+            );
+            this.cachedIndex = cached;
+         }
+         return cached.index().intersectsArea(minBlockX, minBlockZ, maxBlockX, maxBlockZ);
+      }
+
       private List<TerrainPreloadPackageRegistry.Entry> entriesFor(int blockX, int blockZ) {
          this.registry.requestRefreshIfNeeded();
          TerrainPreloadPackageRegistry.Snapshot current = this.registry.snapshot;
@@ -408,6 +426,29 @@ public final class TerrainPreloadPackageRegistry {
          int bucketX = Math.floorDiv(chunkX, INDEX_BUCKET_CHUNKS);
          int bucketZ = Math.floorDiv(chunkZ, INDEX_BUCKET_CHUNKS);
          return this.entriesByBucket.getOrDefault(bucketKey(bucketX, bucketZ), List.of());
+      }
+
+      private boolean intersectsArea(int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ) {
+         if (this.entriesByBucket.isEmpty()) {
+            return false;
+         }
+         int minBucketX = Math.floorDiv(Math.floorDiv(minBlockX, 16), INDEX_BUCKET_CHUNKS);
+         int maxBucketX = Math.floorDiv(Math.floorDiv(maxBlockX, 16), INDEX_BUCKET_CHUNKS);
+         int minBucketZ = Math.floorDiv(Math.floorDiv(minBlockZ, 16), INDEX_BUCKET_CHUNKS);
+         int maxBucketZ = Math.floorDiv(Math.floorDiv(maxBlockZ, 16), INDEX_BUCKET_CHUNKS);
+         long buckets = ((long)maxBucketX - minBucketX + 1L) * ((long)maxBucketZ - minBucketZ + 1L);
+         if (buckets <= 0L || buckets > this.entriesByBucket.size() * 4L + 64L) {
+            // Scanning the area would cost more than the per-block lookups it replaces.
+            return true;
+         }
+         for (int bucketZ = minBucketZ; bucketZ <= maxBucketZ; bucketZ++) {
+            for (int bucketX = minBucketX; bucketX <= maxBucketX; bucketX++) {
+               if (this.entriesByBucket.containsKey(bucketKey(bucketX, bucketZ))) {
+                  return true;
+               }
+            }
+         }
+         return false;
       }
 
       private static long bucketKey(int bucketX, int bucketZ) {

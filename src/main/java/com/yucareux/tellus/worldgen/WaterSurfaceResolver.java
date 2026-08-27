@@ -103,6 +103,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       DIST_COST_DIAGONAL
    };
    private static final boolean DEBUG_WATER = Boolean.getBoolean("tellus.debugWater");
+   private static final boolean ROW_SAMPLING = Boolean.parseBoolean(System.getProperty("tellus.water.rowSampling", "true"));
    private static final ThreadLocal<WaterSurfaceResolver.RegionScratch> REGION_SCRATCH = ThreadLocal.withInitial(WaterSurfaceResolver.RegionScratch::new);
    private final TellusLandCoverSource landCoverSource;
    private final TellusLandMaskSource landMaskSource;
@@ -832,7 +833,18 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       double worldScale = this.settings.worldScale();
       TellusLandMaskSource.LandMaskSampler landMaskSampler = this.osmWaterEnabled ? null : this.landMaskSource.newSampler();
 
-      for (int dz = 0; dz < gridSize; dz++) {
+      if (this.osmWaterEnabled) {
+         // Dense land-surface pass: the region result only depends on the Mapterhorn sample and the
+         // row latitude, so sample row-by-row with the tile raster and Mercator math hoisted.
+         // baseWaterMask/noDataMask are already false from the fills above.
+         Arrays.fill(landMaskLand, 0, gridArea, false);
+         this.fillOsmSurfaceGrid(gridMinX, gridMinZ, gridSize, surfaceHeights, mapterhornLandOverride);
+      }
+      long surfaceDoneNanos = DEBUG_WATER ? System.nanoTime() : 0L;
+      long osmDoneNanos = surfaceDoneNanos;
+      long coastDoneNanos = surfaceDoneNanos;
+
+      for (int dz = 0; dz < gridSize && !this.osmWaterEnabled; dz++) {
          int worldZ = gridMinZ + dz;
          int row = dz * gridSize;
          int coarseZ = dz / coarseStep;
@@ -841,17 +853,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          for (int dx = 0; dx < gridSize; dx++) {
             int worldX = gridMinX + dx;
             int index = row + dx;
-            if (this.osmWaterEnabled) {
-               landMaskLand[index] = false;
-               WaterSurfaceResolver.SurfaceSample surfaceSample = this.sampleSurface(
-                  worldX, worldZ, false, this.settings.worldScale()
-               );
-               surfaceHeights[index] = surfaceSample.height();
-               mapterhornLandOverride[index] = surfaceSample.mapterhornLandOverride();
-               baseWaterMask[index] = false;
-               noDataMask[index] = false;
-               continue;
-            }
 
             TellusLandMaskSource.LandMaskSample landMaskSample = this.sampleLandMask(worldX, worldZ, landMaskSampler, worldScale);
             boolean maskKnown = landMaskSample.known();
@@ -913,17 +914,19 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          if (osmRegionHasWater) {
             hasWater = true;
          }
+         osmDoneNanos = DEBUG_WATER ? System.nanoTime() : 0L;
 
+         boolean[] oceanRow = scratch.oceanRow(gridSize);
          for (int dz = 0; dz < gridSize; dz++) {
             int row = dz * gridSize;
             int worldZ = gridMinZ + dz;
+            OceanCoastField.IncompleteCoverage incomplete = this.oceanCoastField.fillOceanRow(gridMinX, worldZ, gridSize, oceanRow, 0);
+            if (incomplete != null) {
+               throw new OceanCoverageUnavailableException(incomplete.status(), incomplete.blockX(), worldZ);
+            }
             for (int dx = 0; dx < gridSize; dx++) {
                int index = row + dx;
-               OceanCoastSample coast = this.oceanCoastField.sample(gridMinX + dx, worldZ);
-               if (!coast.complete()) {
-                  throw new OceanCoverageUnavailableException(coast.coverageStatus(), gridMinX + dx, worldZ);
-               }
-               if (coast.ocean()) {
+               if (oceanRow[dx]) {
                   // Overture ocean/sea polygons are definitive and override any
                   // overlapping inland-water geometry or DEM elevation.
                   baseWaterMask[index] = true;
@@ -941,6 +944,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                }
             }
          }
+         coastDoneNanos = DEBUG_WATER ? System.nanoTime() : 0L;
 
          for (int dz = 0; dz < gridSize; dz++) {
             int coarseZ = dz / coarseStep;
@@ -954,6 +958,19 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                }
             }
          }
+      }
+
+      if (DEBUG_WATER) {
+         Tellus.LOGGER.info(
+            "Water region {}:{} inputs: grid={}x{} surface={} ms osm={} ms coast={} ms",
+            regionX,
+            regionZ,
+            gridSize,
+            gridSize,
+            (surfaceDoneNanos - startNanos) / 1000000L,
+            (osmDoneNanos - surfaceDoneNanos) / 1000000L,
+            (coastDoneNanos - osmDoneNanos) / 1000000L
+         );
       }
 
       if (!hasWater) {
@@ -3373,6 +3390,63 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       );
    }
 
+   /**
+    * Fills {@code surfaceHeights}/{@code mapterhornLandOverride} for a dense grid exactly as
+    * {@code sampleSurface(x, z, false, worldScale)} would per cell, using the row-batched elevation
+    * sampler and hoisting the per-row Mercator height correction. Falls back to the per-sample path
+    * when a preload package may cover the grid or the elevation source cannot be row-sampled.
+    */
+   private void fillOsmSurfaceGrid(int gridMinX, int gridMinZ, int gridSize, int[] surfaceHeights, boolean[] mapterhornLandOverride) {
+      double worldScale = this.settings.worldScale();
+      boolean preloadMayHit = this.preloadedTerrain.mayContainArea(
+         gridMinX, gridMinZ, gridMinX + gridSize - 1, gridMinZ + gridSize - 1
+      );
+      if (!ROW_SAMPLING || preloadMayHit || !TellusElevationSource.supportsRowSampling() || !(worldScale > 0.0)) {
+         for (int dz = 0; dz < gridSize; dz++) {
+            int worldZ = gridMinZ + dz;
+            int row = dz * gridSize;
+            for (int dx = 0; dx < gridSize; dx++) {
+               WaterSurfaceResolver.SurfaceSample sample = this.sampleSurface(gridMinX + dx, worldZ, false, worldScale);
+               surfaceHeights[row + dx] = sample.height();
+               mapterhornLandOverride[row + dx] = sample.mapterhornLandOverride();
+            }
+         }
+         return;
+      }
+
+      TellusElevationSource.TerrainRowSampler sampler = REGION_SCRATCH.get().rowSampler(this.elevationSource, worldScale);
+      double verticalScale = this.settings.effectiveVerticalWorldScale();
+      double terrestrialScale = this.settings.effectiveTerrestrialHeightScale();
+      double oceanicScale = this.settings.effectiveOceanicHeightScale();
+      boolean experimentalHeight = this.settings.experimentalIncreaseHeight();
+      boolean automaticHeightScaling = this.settings.automaticHeightScaling();
+      int heightOffset = this.settings.effectiveHeightOffset();
+      for (int dz = 0; dz < gridSize; dz++) {
+         int worldZ = gridMinZ + dz;
+         int row = dz * gridSize;
+         sampler.beginRow(worldZ);
+         double correction = TerrainHeightTransform.heightScaleCorrection(
+            worldZ, verticalScale, experimentalHeight, automaticHeightScaling
+         );
+         for (int dx = 0; dx < gridSize; dx++) {
+            double meters = sampler.sampleMeters(gridMinX + dx);
+            // A missing Mapterhorn sample is unusable for land (see isUsablePreviewElevation), which the
+            // per-sample path reports as NaN elevation without a land override.
+            boolean available = Double.isFinite(meters);
+            surfaceHeights[row + dx] = TerrainHeightTransform.blockOffsetWithCorrection(
+               available ? meters : Double.NaN,
+               verticalScale,
+               terrestrialScale,
+               oceanicScale,
+               experimentalHeight,
+               automaticHeightScaling,
+               correction
+            ) + heightOffset;
+            mapterhornLandOverride[row + dx] = available && meters > TellusElevationSource.MAPTERHORN_SEA_LEVEL_THRESHOLD_METERS;
+         }
+      }
+   }
+
    private int sampleOceanTerrainHeight(double blockX, double blockZ, int waterSurface, double previewResolutionMeters) {
       OceanCoastSample coast = this.oceanCoastField.sample(Mth.floor(blockX), Mth.floor(blockZ));
       if (!coast.complete()) {
@@ -3803,6 +3877,26 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       private final IntArrayList usedBuckets = new IntArrayList();
       private int bucketCapacity;
       private final InlandWaterFlowAnalyzer.Workspace flowWorkspace = new InlandWaterFlowAnalyzer.Workspace();
+      private boolean[] oceanRow = new boolean[0];
+      private TellusElevationSource.TerrainRowSampler rowSampler;
+      private double rowSamplerScale = Double.NaN;
+      private TellusElevationSource rowSamplerSource;
+
+      private boolean[] oceanRow(int size) {
+         if (this.oceanRow.length < size) {
+            this.oceanRow = new boolean[size];
+         }
+         return this.oceanRow;
+      }
+
+      private TellusElevationSource.TerrainRowSampler rowSampler(TellusElevationSource source, double worldScale) {
+         if (this.rowSampler == null || this.rowSamplerSource != source || this.rowSamplerScale != worldScale) {
+            this.rowSampler = source.newTerrainRowSampler(worldScale, worldScale);
+            this.rowSamplerSource = source;
+            this.rowSamplerScale = worldScale;
+         }
+         return this.rowSampler;
+      }
 
       private void ensureCapacity(int size) {
          if (size > this.capacity) {

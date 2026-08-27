@@ -135,6 +135,23 @@ public final class ChunkGenerationBenchmark {
          System.out.printf(Locale.ROOT, "CHUNKGEN_BENCH_PREFETCH area_ms=%.1f%n", millis(System.nanoTime() - prefetchStart));
       }
 
+      if (options.warmupRadius() >= 0) {
+         // JIT warm-up on a distant area so pass 1 measures "memory-cold for this area" rather than
+         // interpreter start-up; offset far enough that no DEM/cover tile or water region is shared.
+         ChunkPos warmupCenter = new ChunkPos(center.x() + options.warmupOffsetChunks(), center.z());
+         List<ChunkPos> warmupOrder = spiral(warmupCenter, options.warmupRadius());
+         long warmupStart = System.nanoTime();
+         runPass(0, options, generator, randomState, heightAccessor, containerFactory, structures, warmupOrder);
+         System.out.printf(
+            Locale.ROOT,
+            "CHUNKGEN_BENCH_WARMUP chunks=%d centerChunk=[%d,%d] wall_s=%.2f%n",
+            warmupOrder.size(),
+            warmupCenter.x(),
+            warmupCenter.z(),
+            (System.nanoTime() - warmupStart) / 1.0e9
+         );
+      }
+
       for (int pass = 1; pass <= options.passes(); pass++) {
          runPass(
             pass,
@@ -277,7 +294,7 @@ public final class ChunkGenerationBenchmark {
          checksum
       );
 
-      if (options.perChunk()) {
+      if (options.perChunk() && pass > 0) {
          for (int i = 0; i < count; i++) {
             ChunkPos pos = order.get(i);
             System.out.printf(
@@ -402,7 +419,9 @@ public final class ChunkGenerationBenchmark {
       double scale,
       boolean experimentalHeight,
       boolean prefetch,
-      boolean perChunk
+      boolean perChunk,
+      int warmupRadius,
+      int warmupOffsetChunks
    ) {
       private static Options parse(String[] args) {
          // Defaults reproduce the user's Yosemite world (1:1, experimental height, caves+ores on, roads/buildings off).
@@ -417,6 +436,8 @@ public final class ChunkGenerationBenchmark {
          boolean experimentalHeight = true;
          boolean prefetch = false;
          boolean perChunk = false;
+         int warmupRadius = -1;
+         int warmupOffsetChunks = 256;
          for (String arg : args) {
             if (arg.startsWith("--latitude=")) {
                latitude = Double.parseDouble(value(arg));
@@ -440,6 +461,10 @@ public final class ChunkGenerationBenchmark {
                prefetch = Boolean.parseBoolean(value(arg));
             } else if (arg.startsWith("--perChunk=")) {
                perChunk = Boolean.parseBoolean(value(arg));
+            } else if (arg.startsWith("--warmupRadius=")) {
+               warmupRadius = Integer.parseInt(value(arg));
+            } else if (arg.startsWith("--warmupOffsetChunks=")) {
+               warmupOffsetChunks = Integer.parseInt(value(arg));
             } else {
                throw new IllegalArgumentException("Unknown benchmark option: " + arg);
             }
@@ -450,7 +475,12 @@ public final class ChunkGenerationBenchmark {
          if (threads < 1 || threads > 256) {
             throw new IllegalArgumentException("Threads must be between 1 and 256");
          }
-         return new Options(latitude, longitude, radius, passes, threads, seed, profile, scale, experimentalHeight, prefetch, perChunk);
+         if (warmupRadius > 64) {
+            throw new IllegalArgumentException("Warm-up radius must be at most 64 chunks");
+         }
+         return new Options(
+            latitude, longitude, radius, passes, threads, seed, profile, scale, experimentalHeight, prefetch, perChunk, warmupRadius, warmupOffsetChunks
+         );
       }
 
       private static String value(String arg) {
