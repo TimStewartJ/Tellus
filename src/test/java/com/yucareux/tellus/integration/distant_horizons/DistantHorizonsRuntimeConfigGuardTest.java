@@ -15,16 +15,17 @@ class DistantHorizonsRuntimeConfigGuardTest {
    private static final String UPSAMPLING_FIELD = "upsampleLowerDetailLodsToFillHoles";
    private static final String WORLD_GEN_OWNER = "com.seibel.distanthorizons.core.config.Config$Common$WorldGenerator";
    private static final String PAUSE_SPEED_FIELD = "pauseGenerationAboveCameraSpeed";
+   private static final String KEEP_LOWER_DETAIL_FIELD = "keepLowerDetailLodsUntilChildrenHaveData";
 
    @Test
-   void raisesForkPauseSpeedAndRestoresIt() {
+   void disablesForkPauseSpeedAndRestoresIt() {
       FakeResolver resolver = new FakeResolver();
       FakeConfigEntry nSized = resolver.add(N_SIZED_OWNER, N_SIZED_FIELD, false);
       FakeConfigEntry pauseSpeed = resolver.add(WORLD_GEN_OWNER, PAUSE_SPEED_FIELD, 20.0);
       DistantHorizonsRuntimeConfigGuard guard = new DistantHorizonsRuntimeConfigGuard(true, resolver);
 
       assertTrue(guard.acquire("minecraft:overworld"));
-      assertEquals(60.0, pauseSpeed.value);
+      assertEquals(0.0, pauseSpeed.value);
       assertEquals(1, pauseSpeed.writeCount);
       assertEquals(Boolean.TRUE, nSized.value);
 
@@ -34,15 +35,45 @@ class DistantHorizonsRuntimeConfigGuardTest {
    }
 
    @Test
-   void pauseSpeedIsRaisedEvenWithoutNSizedForcing() {
+   void pauseSpeedIsOverriddenEvenWithoutNSizedForcing() {
       FakeResolver resolver = new FakeResolver();
       FakeConfigEntry pauseSpeed = resolver.add(WORLD_GEN_OWNER, PAUSE_SPEED_FIELD, 20.0);
       DistantHorizonsRuntimeConfigGuard guard = new DistantHorizonsRuntimeConfigGuard(false, resolver);
 
       assertTrue(guard.acquire("minecraft:overworld"));
-      assertEquals(60.0, pauseSpeed.value);
+      assertEquals(0.0, pauseSpeed.value);
       guard.release("minecraft:overworld");
       assertEquals(20.0, pauseSpeed.value);
+   }
+
+   @Test
+   void upsamplingIsNotForcedWhenTheForkKeepsCoarseLods() {
+      FakeResolver resolver = new FakeResolver();
+      FakeConfigEntry nSized = resolver.add(N_SIZED_OWNER, N_SIZED_FIELD, false);
+      FakeConfigEntry upsampling = resolver.add(UPSAMPLING_OWNER, UPSAMPLING_FIELD, false);
+      resolver.add(UPSAMPLING_OWNER, KEEP_LOWER_DETAIL_FIELD, true);
+      DistantHorizonsRuntimeConfigGuard guard = new DistantHorizonsRuntimeConfigGuard(true, resolver);
+
+      assertTrue(guard.acquire("minecraft:overworld"));
+      assertEquals(Boolean.TRUE, nSized.value);
+      assertEquals(Boolean.FALSE, upsampling.value);
+      assertEquals(0, upsampling.writeCount);
+      guard.release("minecraft:overworld");
+      assertEquals(Boolean.FALSE, nSized.value);
+   }
+
+   @Test
+   void upsamplingIsForcedWhenTheForkRuleIsTurnedOff() {
+      FakeResolver resolver = new FakeResolver();
+      resolver.add(N_SIZED_OWNER, N_SIZED_FIELD, false);
+      FakeConfigEntry upsampling = resolver.add(UPSAMPLING_OWNER, UPSAMPLING_FIELD, false);
+      resolver.add(UPSAMPLING_OWNER, KEEP_LOWER_DETAIL_FIELD, false);
+      DistantHorizonsRuntimeConfigGuard guard = new DistantHorizonsRuntimeConfigGuard(true, resolver);
+
+      assertTrue(guard.acquire("minecraft:overworld"));
+      assertEquals(Boolean.TRUE, upsampling.value);
+      guard.release("minecraft:overworld");
+      assertEquals(Boolean.FALSE, upsampling.value);
    }
 
    @Test

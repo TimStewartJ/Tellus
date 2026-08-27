@@ -4352,7 +4352,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                         : selectTrunkBlock(species)
                      : null;
                   int anchorSurfaceY = useFullDetailAnchors
-                     ? requestCache.treeAnchorSurface(bestCenterX, bestCenterZ, worldScale)
+                     ? requestCache.treeAnchorSurface(bestCenterX, bestCenterZ, worldScale, previewResolutionMeters)
                      : LodCanopyVerticalLayout.UNANCHORED_SURFACE_Y;
                   return new TellusLodGenerator.CanopyColumn(
                      rootHeight, trunkHeight, leafLift, crownHeight, leavesBlock, trunkBlock, rootBlock, anchorSurfaceY
@@ -5259,11 +5259,13 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          });
       }
 
-      private int treeAnchorSurface(int worldX, int worldZ, double worldScale) {
+      private int treeAnchorSurface(int worldX, int worldZ, double worldScale, double previewResolutionMeters) {
          long key = packHorizontal(worldX, worldZ);
          return this.treeAnchorSurfaces.computeIfAbsent(key, ignored -> {
-            int coverClass = this.generator.sampleCoverClass(worldX, worldZ, worldScale);
-            return this.generator.resolveLodTerrainSurface(worldX, worldZ, coverClass, worldScale);
+            // Same zoom the tile's own surface came from; full resolution here made every coarse
+            // column decode another zoom-16 tile just to seat one tree trunk.
+            int coverClass = this.generator.sampleCoverClass(worldX, worldZ, previewResolutionMeters);
+            return this.generator.resolveLodTerrainSurface(worldX, worldZ, coverClass, previewResolutionMeters);
          });
       }
 

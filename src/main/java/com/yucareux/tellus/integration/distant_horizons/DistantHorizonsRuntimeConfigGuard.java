@@ -38,17 +38,31 @@ final class DistantHorizonsRuntimeConfigGuard {
       System.getProperty("tellus.dhForceUpsampleToFillHoles", "true")
    );
    /**
+    * The Tellus DH fork keeps a coarse LOD rendering until its children hold real data, which
+    * removes the hole without the upsample cascade (that cascade writes every descendant section
+    * down to block detail into the database). When that entry exists and is on, upsampling is
+    * left at the user's setting.
+    */
+   private static final ConfigKey FORK_KEEP_LOWER_DETAIL = new ConfigKey(
+      "com.seibel.distanthorizons.core.config.Config$Common$LodBuilding$Experimental",
+      "keepLowerDetailLodsUntilChildrenHaveData",
+      Boolean.TRUE,
+      "Distant Horizons fork keeps coarse LODs until children have data"
+   );
+   /**
     * Upstream DH pauses its world-gen and update-propagator threads while the camera averages more
     * than 20 blocks/s. Tellus LOD tiles now build in milliseconds, so the Tellus DH fork exposes the
-    * threshold and Tellus raises it here; stock DH lacks the entry and is left alone. Negative
-    * property values disable the override, 0 never pauses.
+    * threshold and Tellus disables the pause here (0); stock DH lacks the entry and is left alone.
+    * Negative property values disable the override, positive values pause above that speed.
     */
-   private static final double WORLD_GEN_PAUSE_SPEED = doubleProperty("tellus.dhWorldGenPauseSpeed", 60.0);
+   private static final double WORLD_GEN_PAUSE_SPEED = doubleProperty("tellus.dhWorldGenPauseSpeed", 0.0);
    private static final ConfigKey WORLD_GEN_PAUSE_SPEED_KEY = new ConfigKey(
       "com.seibel.distanthorizons.core.config.Config$Common$WorldGenerator",
       "pauseGenerationAboveCameraSpeed",
       WORLD_GEN_PAUSE_SPEED,
-      "Raised the Distant Horizons world-gen pause speed to " + WORLD_GEN_PAUSE_SPEED + " blocks/s so Tellus LODs keep generating while flying"
+      WORLD_GEN_PAUSE_SPEED > 0.0
+         ? "Raised the Distant Horizons world-gen pause speed to " + WORLD_GEN_PAUSE_SPEED + " blocks/s so Tellus LODs keep generating while flying"
+         : "Disabled the Distant Horizons world-gen camera-speed pause so Tellus LODs keep generating while flying"
    );
    private final Object lock = new Object();
    private final boolean forceNSizedGeneration;
@@ -82,7 +96,7 @@ final class DistantHorizonsRuntimeConfigGuard {
          if (this.activeDimensions.size() == 1) {
             if (this.forceNSizedGeneration) {
                this.nSizedGenerationOverride = this.tryApply(N_SIZED_GENERATION);
-               if (FORCE_UPSAMPLE_TO_FILL_HOLES) {
+               if (FORCE_UPSAMPLE_TO_FILL_HOLES && !this.forkKeepsLowerDetailLods()) {
                   this.upsampleOverride = this.tryApply(UPSAMPLE_TO_FILL_HOLES);
                }
             }
@@ -91,6 +105,22 @@ final class DistantHorizonsRuntimeConfigGuard {
             }
          }
          return true;
+      }
+   }
+
+   /** True when the Tellus DH fork's keep-parent rule is present and enabled. */
+   private boolean forkKeepsLowerDetailLods() {
+      try {
+         ConfigEntryHandle entry = this.configEntryResolver.resolve(
+            FORK_KEEP_LOWER_DETAIL.ownerClassName(), FORK_KEEP_LOWER_DETAIL.fieldName()
+         );
+         boolean enabled = Boolean.TRUE.equals(entry.get());
+         if (enabled) {
+            LOGGER.info("{}; leaving upsampleLowerDetailLodsToFillHoles at the user's setting", FORK_KEEP_LOWER_DETAIL.appliedLogMessage());
+         }
+         return enabled;
+      } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
+         return false;
       }
    }
 
