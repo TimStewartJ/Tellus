@@ -17,7 +17,7 @@ final class DistantHorizonsRuntimeConfigGuard {
    private static final ConfigKey N_SIZED_GENERATION = new ConfigKey(
       "com.seibel.distanthorizons.core.config.Config$Server$Experimental",
       "enableNSizedGeneration",
-      true,
+      Boolean.TRUE,
       "Enabled Distant Horizons N-sized generation for Tellus far LODs"
    );
    /**
@@ -31,18 +31,32 @@ final class DistantHorizonsRuntimeConfigGuard {
    private static final ConfigKey UPSAMPLE_TO_FILL_HOLES = new ConfigKey(
       "com.seibel.distanthorizons.core.config.Config$Common$LodBuilding$Experimental",
       "upsampleLowerDetailLodsToFillHoles",
-      true,
+      Boolean.TRUE,
       "Enabled Distant Horizons lower-detail LOD upsampling so coarse Tellus LODs stay visible while finer tiles generate"
    );
    private static final boolean FORCE_UPSAMPLE_TO_FILL_HOLES = Boolean.parseBoolean(
       System.getProperty("tellus.dhForceUpsampleToFillHoles", "true")
    );
+   /**
+    * Upstream DH pauses its world-gen and update-propagator threads while the camera averages more
+    * than 20 blocks/s. Tellus LOD tiles now build in milliseconds, so the Tellus DH fork exposes the
+    * threshold and Tellus raises it here; stock DH lacks the entry and is left alone. Negative
+    * property values disable the override, 0 never pauses.
+    */
+   private static final double WORLD_GEN_PAUSE_SPEED = doubleProperty("tellus.dhWorldGenPauseSpeed", 60.0);
+   private static final ConfigKey WORLD_GEN_PAUSE_SPEED_KEY = new ConfigKey(
+      "com.seibel.distanthorizons.core.config.Config$Common$WorldGenerator",
+      "pauseGenerationAboveCameraSpeed",
+      WORLD_GEN_PAUSE_SPEED,
+      "Raised the Distant Horizons world-gen pause speed to " + WORLD_GEN_PAUSE_SPEED + " blocks/s so Tellus LODs keep generating while flying"
+   );
    private final Object lock = new Object();
    private final boolean forceNSizedGeneration;
    private final ConfigEntryResolver configEntryResolver;
    private final Set<String> activeDimensions = new HashSet<>();
-   private RuntimeBooleanOverride nSizedGenerationOverride;
-   private RuntimeBooleanOverride upsampleOverride;
+   private RuntimeOverride nSizedGenerationOverride;
+   private RuntimeOverride upsampleOverride;
+   private RuntimeOverride worldGenPauseSpeedOverride;
 
    static DistantHorizonsRuntimeConfigGuard reflective(boolean forceNSizedGeneration) {
       return new DistantHorizonsRuntimeConfigGuard(forceNSizedGeneration, ReflectiveConfigEntryResolver.INSTANCE);
@@ -72,6 +86,9 @@ final class DistantHorizonsRuntimeConfigGuard {
                   this.upsampleOverride = this.tryApply(UPSAMPLE_TO_FILL_HOLES);
                }
             }
+            if (WORLD_GEN_PAUSE_SPEED >= 0.0) {
+               this.worldGenPauseSpeedOverride = this.tryApply(WORLD_GEN_PAUSE_SPEED_KEY);
+            }
          }
          return true;
       }
@@ -88,6 +105,8 @@ final class DistantHorizonsRuntimeConfigGuard {
             return;
          }
 
+         this.restore(this.worldGenPauseSpeedOverride);
+         this.worldGenPauseSpeedOverride = null;
          this.restore(this.upsampleOverride);
          this.upsampleOverride = null;
          this.restore(this.nSizedGenerationOverride);
@@ -101,17 +120,23 @@ final class DistantHorizonsRuntimeConfigGuard {
       }
    }
 
-   private RuntimeBooleanOverride tryApply(ConfigKey configKey) {
+   private RuntimeOverride tryApply(ConfigKey configKey) {
       try {
-         BooleanConfigEntry configEntry = this.configEntryResolver.resolve(configKey.ownerClassName(), configKey.fieldName());
-         boolean previousValue = configEntry.get();
-         if (previousValue == configKey.overrideValue()) {
+         ConfigEntryHandle configEntry = this.configEntryResolver.resolve(configKey.ownerClassName(), configKey.fieldName());
+         Object previousValue = configEntry.get();
+         if (Objects.equals(previousValue, configKey.overrideValue())) {
             return null;
+         }
+         if (previousValue != null && previousValue.getClass() != configKey.overrideValue().getClass()) {
+            throw new IllegalStateException(
+               "Distant Horizons config entry holds " + previousValue.getClass().getSimpleName()
+                  + ", expected " + configKey.overrideValue().getClass().getSimpleName()
+            );
          }
 
          configEntry.setWithoutSaving(configKey.overrideValue());
          LOGGER.info("{} (runtime only; config unchanged)", configKey.appliedLogMessage());
-         return new RuntimeBooleanOverride(configKey, configEntry, previousValue);
+         return new RuntimeOverride(configKey, configEntry, previousValue);
       } catch (ClassNotFoundException | NoSuchFieldException | NoSuchMethodException error) {
          // Experimental config fields have moved between DH versions. Their
          // absence must never prevent the Tellus generator from registering.
@@ -131,14 +156,14 @@ final class DistantHorizonsRuntimeConfigGuard {
       return null;
    }
 
-   private void restore(RuntimeBooleanOverride runtimeOverride) {
+   private void restore(RuntimeOverride runtimeOverride) {
       if (runtimeOverride == null) {
          return;
       }
 
       try {
          runtimeOverride.configEntry().setWithoutSaving(runtimeOverride.previousValue());
-         if (runtimeOverride.previousValue() != runtimeOverride.configKey().overrideValue()) {
+         if (!Objects.equals(runtimeOverride.previousValue(), runtimeOverride.configKey().overrideValue())) {
             LOGGER.info(
                "Restored Distant Horizons {} after unloading the last Tellus direct LOD generator",
                runtimeOverride.configKey().fieldName()
@@ -154,48 +179,58 @@ final class DistantHorizonsRuntimeConfigGuard {
       }
    }
 
-   interface ConfigEntryResolver {
-      BooleanConfigEntry resolve(String ownerClassName, String fieldName) throws ReflectiveOperationException;
+   private static double doubleProperty(String key, double defaultValue) {
+      String value = System.getProperty(key);
+      if (value == null) {
+         return defaultValue;
+      }
+      try {
+         return Double.parseDouble(value.trim());
+      } catch (NumberFormatException error) {
+         LOGGER.warn("Invalid value '{}' for {}, using {}", value, key, defaultValue);
+         return defaultValue;
+      }
    }
 
-   interface BooleanConfigEntry {
-      boolean get() throws ReflectiveOperationException;
+   interface ConfigEntryResolver {
+      ConfigEntryHandle resolve(String ownerClassName, String fieldName) throws ReflectiveOperationException;
+   }
 
-      void setWithoutSaving(boolean value) throws ReflectiveOperationException;
+   /** A DH {@code ConfigEntry<T>} seen through its {@code get()} / {@code setWithoutSaving(T)} methods. */
+   interface ConfigEntryHandle {
+      Object get() throws ReflectiveOperationException;
+
+      void setWithoutSaving(Object value) throws ReflectiveOperationException;
    }
 
    private enum ReflectiveConfigEntryResolver implements ConfigEntryResolver {
       INSTANCE;
 
       @Override
-      public BooleanConfigEntry resolve(String ownerClassName, String fieldName) throws ReflectiveOperationException {
+      public ConfigEntryHandle resolve(String ownerClassName, String fieldName) throws ReflectiveOperationException {
          Class<?> configOwner = Class.forName(ownerClassName);
          Object configEntry = configOwner.getField(fieldName).get(null);
          Method getter = configEntry.getClass().getMethod("get");
          Method setter = configEntry.getClass().getMethod("setWithoutSaving", Object.class);
-         return new ReflectiveBooleanConfigEntry(configEntry, getter, setter);
+         return new ReflectiveConfigEntryHandle(configEntry, getter, setter);
       }
    }
 
-   private record ReflectiveBooleanConfigEntry(Object configEntry, Method getter, Method setter) implements BooleanConfigEntry {
+   private record ReflectiveConfigEntryHandle(Object configEntry, Method getter, Method setter) implements ConfigEntryHandle {
       @Override
-      public boolean get() throws ReflectiveOperationException {
-         Object value = this.getter.invoke(this.configEntry);
-         if (value instanceof Boolean booleanValue) {
-            return booleanValue;
-         }
-         throw new IllegalStateException("Distant Horizons config entry is not boolean");
+      public Object get() throws ReflectiveOperationException {
+         return this.getter.invoke(this.configEntry);
       }
 
       @Override
-      public void setWithoutSaving(boolean value) throws ReflectiveOperationException {
+      public void setWithoutSaving(Object value) throws ReflectiveOperationException {
          this.setter.invoke(this.configEntry, value);
       }
    }
 
-   private record ConfigKey(String ownerClassName, String fieldName, boolean overrideValue, String appliedLogMessage) {
+   private record ConfigKey(String ownerClassName, String fieldName, Object overrideValue, String appliedLogMessage) {
    }
 
-   private record RuntimeBooleanOverride(ConfigKey configKey, BooleanConfigEntry configEntry, boolean previousValue) {
+   private record RuntimeOverride(ConfigKey configKey, ConfigEntryHandle configEntry, Object previousValue) {
    }
 }
