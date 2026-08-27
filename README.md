@@ -76,10 +76,12 @@ The default 64×64 detail-11 pass spans 8192 chunks, matching a 4096-chunk rende
 The Minecraft 26.2 target also has a headless benchmark that constructs the real `EarthChunkGenerator` and runs `createBiomes` + `fillFromNoise` on real `ProtoChunk`s, reporting per-chunk wall/CPU latency percentiles, throughput, and GC time. Pass 1 on a fresh cache is network-cold; later passes are in-memory warm:
 
 ```bash
-./gradlew :mc262:benchmarkChunkGeneration -PbenchRadius=8 -PbenchThreads=16 -PbenchPasses=2
+./gradlew :mc262:benchmarkChunkGeneration -PbenchRadius=8 -PbenchThreads=16 -PbenchPasses=2 -PbenchWarmupRadius=3
 ```
 
-Useful knobs: `-PbenchLatitude/-PbenchLongitude`, `-PbenchProfile=yosemite|default|osm`, `-PbenchScale=1.0`, `-PbenchPerChunk=true` (per-chunk rows), `-PbenchChunkTiming=true -PbenchChunkTimingThresholdMs=40` (per-chunk phase traces from the generator's own profiler), `-PbenchJvmArgs="-Dtellus.debugWater=true -XX:StartFlightRecording=filename=bench.jfr,settings=profile"` (water-region build timings and a JFR CPU profile), and `-PbenchGameDir=...` (delete `mc262/build/chunkgen-benchmark-game` for a network-cold run). The benchmark runs at the standard height range because Increase Height requires the Tellus mixins; stages that need a `WorldGenRegion` (structures, carvers, decoration, lighting) must be measured in-game with `-Dtellus.debug.fullChunkPerf=true -Dtellus.chunkgen.timing=true`.
+Useful knobs: `-PbenchLatitude/-PbenchLongitude`, `-PbenchProfile=yosemite|default|osm`, `-PbenchScale=1.0`, `-PbenchWarmupRadius=3` (JIT warm-up on an area 256 chunks away so pass 1 measures a memory-cold area at steady state instead of interpreter start-up), `-PbenchPerChunk=true` (per-chunk rows), `-PbenchChunkTiming=true -PbenchChunkTimingThresholdMs=40` (per-chunk phase traces from the generator's own profiler), `-PbenchJvmArgs="-Dtellus.debugWater=true -XX:StartFlightRecording=filename=bench.jfr,settings=profile"` (per water-region build and `surface/osm/coast` input timings, plus a JFR CPU profile), and `-PbenchGameDir=...` (delete `mc262/build/chunkgen-benchmark-game` for a network-cold run). The benchmark runs at the standard height range because Increase Height requires the Tellus mixins; stages that need a `WorldGenRegion` (structures, carvers, decoration, lighting) must be measured in-game with `-Dtellus.debug.fullChunkPerf=true -Dtellus.chunkgen.timing=true`.
+
+Water-region builds sample elevation row by row with the tile raster and Mercator math hoisted per row (`-Dtellus.water.rowSampling=false` restores the per-sample path for A/B comparisons; results are identical). The dense grid margin is the hydrology context only (`tellus.water.flowContextBlocks`, default 192); Overture waterfall markers are queried separately out to `WaterfallNoCarveZone.queryMarginBlocks`, so lowering `tellus.water.waterfallNoCarveRadiusChunks` no longer changes the grid size.
 
 ## Commands
 
