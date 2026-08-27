@@ -70,7 +70,8 @@ public final class TellusWorldgenSources {
    private TellusWorldgenSources() {
    }
 
-   static TellusLandCoverSource landCover() {
+   /** Shared ESA WorldCover source; public so companion mods can sample land cover through {@code TellusApi}. */
+   public static TellusLandCoverSource landCover() {
       return LAND_COVER;
    }
 
@@ -78,15 +79,17 @@ public final class TellusWorldgenSources {
       return CANOPY_HEIGHT;
    }
 
-   static TellusElevationSource elevation() {
+   /** Shared elevation source; public so companion mods can sample real-world elevation through {@code TellusApi}. */
+   public static TellusElevationSource elevation() {
       return ELEVATION;
    }
 
-   static TellusKoppenSource koppen() {
+   /** Shared Koppen climate source; public so companion mods can classify climate through {@code TellusApi}. */
+   public static TellusKoppenSource koppen() {
       return KOPPEN;
    }
 
-   static OisstOceanClimateSource oceanClimate() {
+   public static OisstOceanClimateSource oceanClimate() {
       return OCEAN_CLIMATE;
    }
 

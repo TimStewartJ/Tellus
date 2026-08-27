@@ -80,6 +80,14 @@ The default 64×64 detail-11 pass spans 8192 chunks, matching a 4096-chunk rende
 
 More commands will be added over time.
 
+## Companion mod API
+
+`com.yucareux.tellus.api.TellusApi` exposes a small, stable surface for companion mods (for example
+[Tellus Expeditions](https://github.com/TimStewartJ/Tellus-Expeditions)): elevation, slope, land cover,
+Koppen class, RESOLVE ecoregion, real-time temperature, and block/geographic coordinate conversions.
+Companions should depend on this class instead of internal packages; `TellusApi.API_VERSION` is bumped
+whenever a method changes signature or semantics.
+
 <details>
   <summary>Settings</summary>
 
@@ -119,7 +127,7 @@ Worlds created with earlier 0.8.1 builds keep their already-generated chunks unc
 This section lets you toggle vanilla structures and world features on or off, such as villages, temples, monuments, ruins, and underground features like Deep Dark and amethyst geodes. Some structures (notably Deep Dark and certain ocean structures) may not generate properly yet and are still work in progress.
 
 ### Real-Time Settings
-- **Real-Time Time**: Syncs the in-game day/night cycle to real-world time based on your in-game location, so sunrise and sunset match that location's local clock.
+- **Real-Time Time**: Syncs the in-game day/night cycle to real-world time based on your in-game location. The vanilla sun is anchored to the real sun: real sunrise, solar noon, sunset and solar midnight map onto ticks 0, 6000, 12000 and 18000, so day length follows season and latitude (including polar day and polar night) and the moon shows the real lunar phase. Launch with `-Dtellus.realtime.astronomical=false` to restore the legacy mapping where 06:00 local time is always tick 0.
 - **Real-Time Weather**: Pulls live weather conditions for your location and mirrors them in-game (rain, thunder, or snow) instead of Minecraft's default weather rolls.
 - **Historical Snow Coverage** (work in progress): Tracks recent temperature and snowfall data to decide if snow should appear and persist on the ground, creating more realistic seasonal snow coverage.
 

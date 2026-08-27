@@ -59,6 +59,11 @@ public final class TellusRealtimeManager {
    private static final int GRID_SIZE = 3;
    private static final int GRID_POINTS = 9;
    private static final boolean NTP_ENABLED = Boolean.getBoolean("tellus.realtime.ntp");
+   /**
+    * Live Time follows the real sun (seasonal day length, polar day/night, real moon phase) unless
+    * {@code -Dtellus.realtime.astronomical=false} restores the legacy "06:00 local is tick 0" mapping.
+    */
+   private static final boolean ASTRONOMICAL_TIME = !"false".equalsIgnoreCase(System.getProperty("tellus.realtime.astronomical", "true"));
    private static final long NTP_REFRESH_MS = 43200000L;
    private static final int NTP_TIMEOUT_MS = 2000;
    private static final int NTP_PORT = 123;
@@ -831,10 +836,22 @@ public final class TellusRealtimeManager {
          Instant now = this.currentInstant();
          ZoneId zone = this.resolveTimeZone(generator, samplePos);
          ZonedDateTime local = ZonedDateTime.ofInstant(now, zone);
-         int daySeconds = local.toLocalTime().toSecondOfDay();
-         double hours = daySeconds / 3600.0;
-         int tickOfDay = (int)Math.floor((hours - 6.0 + 24.0) % 24.0 * 1000.0);
-         long dayBase = RealtimeVersionCompat.dayTimeTicks(level) / 24000L * 24000L;
+         int tickOfDay;
+         long dayBase;
+         if (ASTRONOMICAL_TIME) {
+            // Anchor the vanilla sun to the real sun: sunrise/noon/sunset/midnight map onto ticks 0/6000/12000/18000,
+            // so day length follows season and latitude, and the day number carries the real moon phase.
+            double latitude = Mth.clamp(generator.latitudeFromBlock(samplePos.getZ()), -85.05112878, 85.05112878);
+            double longitude = Mth.clamp(generator.longitudeFromBlock(samplePos.getX()), -180.0, 180.0);
+            long epochMillis = now.toEpochMilli();
+            tickOfDay = SolarTimeModel.tickOfDay(epochMillis, latitude, longitude);
+            dayBase = SolarTimeModel.alignedDayNumber(epochMillis, longitude) * 24000L;
+         } else {
+            int daySeconds = local.toLocalTime().toSecondOfDay();
+            double hours = daySeconds / 3600.0;
+            tickOfDay = (int)Math.floor((hours - 6.0 + 24.0) % 24.0 * 1000.0);
+            dayBase = RealtimeVersionCompat.dayTimeTicks(level) / 24000L * 24000L;
+         }
          RealtimeVersionCompat.setDayTimeTicks(level, dayBase + tickOfDay);
          this.utcOffsetSeconds = local.getOffset().getTotalSeconds();
       }
