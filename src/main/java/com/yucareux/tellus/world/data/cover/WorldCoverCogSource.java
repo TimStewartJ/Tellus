@@ -7,6 +7,7 @@ import com.google.common.cache.LoadingCache;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.cache.LastValueMemo;
 import com.yucareux.tellus.cache.TellusCacheDomain;
+import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
 import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
@@ -362,7 +363,8 @@ final class WorldCoverCogSource {
       int centerBlockX = center.pixelX() / level.tileWidth();
       int centerBlockY = center.pixelY() / level.tileHeight();
       int clampedRadius = Math.max(0, radius);
-      boolean centerAvailable = false;
+      BlockKey centerKey = new BlockKey(center.tileKey(), level.factor(), centerBlockX, centerBlockY);
+      List<BlockKey> missing = new ArrayList<>();
       for (int blockY = Math.max(0, centerBlockY - clampedRadius);
          blockY <= Math.min(level.tilesPerColumn() - 1, centerBlockY + clampedRadius);
          blockY++) {
@@ -370,13 +372,24 @@ final class WorldCoverCogSource {
             blockX <= Math.min(level.tilesPerRow() - 1, centerBlockX + clampedRadius);
             blockX++) {
             BlockKey key = new BlockKey(center.tileKey(), level.factor(), blockX, blockY);
-            byte[] values = this.getBlock(key, center.metadata(), LookupMode.BLOCKING);
-            if (blockX == centerBlockX && blockY == centerBlockY) {
-               centerAvailable = values != null;
+            if (this.blockCache.getIfPresent(key) == null) {
+               missing.add(key);
             }
          }
       }
-      return centerAvailable;
+      if (missing.size() > 1) {
+         // Fetch a new area's blocks concurrently through the bounded download pool instead of one
+         // range request at a time; the block cache collapses concurrent loads of the same key.
+         ParallelDownloadRunner.run(
+            missing, 0, key -> this.getBlock(key, center.metadata(), LookupMode.BLOCKING), (item, completed, total) -> {
+            }
+         );
+      } else {
+         for (BlockKey key : missing) {
+            this.getBlock(key, center.metadata(), LookupMode.BLOCKING);
+         }
+      }
+      return this.getBlock(centerKey, center.metadata(), LookupMode.BLOCKING) != null;
    }
 
    List<BlockKey> areaBlockKeys(

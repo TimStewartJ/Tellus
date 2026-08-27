@@ -1207,21 +1207,46 @@ public final class TellusElevationSource implements TellusCacheHandle {
          return;
       }
 
-      this.prefetchTile(center);
       int tilesPerAxis = 1 << zoom;
       int clampedRadius = Math.max(0, radius);
       int minX = Math.max(0, center.x() - clampedRadius);
       int maxX = Math.min(tilesPerAxis - 1, center.x() + clampedRadius);
       int minY = Math.max(0, center.y() - clampedRadius);
       int maxY = Math.min(tilesPerAxis - 1, center.y() + clampedRadius);
-
+      List<TellusElevationSource.TileKey> missing = new ArrayList<>();
+      if (this.cache.getIfPresent(center) == null) {
+         missing.add(center);
+      }
       for (int tileY = minY; tileY <= maxY; tileY++) {
          for (int tileX = minX; tileX <= maxX; tileX++) {
             if (tileX != center.x() || tileY != center.y()) {
-               this.prefetchTile(new TellusElevationSource.TileKey(zoom, tileX, tileY));
+               TellusElevationSource.TileKey key = new TellusElevationSource.TileKey(zoom, tileX, tileY);
+               if (this.cache.getIfPresent(key) == null) {
+                  missing.add(key);
+               }
             }
          }
       }
+      this.prefetchMissingTiles(missing, this::prefetchTile);
+   }
+
+   /**
+    * Loads tiles that are not yet in memory. A single tile is loaded inline; several are fanned out
+    * through the shared bounded download pool so a new area's tiles arrive concurrently instead of
+    * one request at a time while chunk workers wait on the tile cache.
+    */
+   private void prefetchMissingTiles(List<TellusElevationSource.TileKey> missing, java.util.function.Consumer<TellusElevationSource.TileKey> loader) {
+      if (missing.isEmpty()) {
+         return;
+      }
+      if (missing.size() == 1) {
+         loader.accept(missing.get(0));
+         return;
+      }
+      // No download scope: the tile caches already collapse concurrent loads of one key, and a scope
+      // would skip tiles that were loaded recently but have since been evicted from memory.
+      ParallelDownloadRunner.run(missing, 0, loader::accept, (item, completed, total) -> {
+      });
    }
 
    private void prefetchOpenWatersTiles(
