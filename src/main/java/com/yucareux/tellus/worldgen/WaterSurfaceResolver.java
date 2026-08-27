@@ -839,61 +839,28 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          // baseWaterMask/noDataMask are already false from the fills above.
          Arrays.fill(landMaskLand, 0, gridArea, false);
          this.fillOsmSurfaceGrid(gridMinX, gridMinZ, gridSize, surfaceHeights, mapterhornLandOverride);
+      } else {
+         hasWater = this.fillLandCoverWaterGrid(
+            gridMinX,
+            gridMinZ,
+            gridSize,
+            coarseStep,
+            coarseSize,
+            inlandLevel,
+            landMaskSampler,
+            worldScale,
+            surfaceHeights,
+            mapterhornLandOverride,
+            landMaskLand,
+            baseWaterMask,
+            noDataMask,
+            oceanHintMask,
+            coarseWater
+         );
       }
       long surfaceDoneNanos = DEBUG_WATER ? System.nanoTime() : 0L;
       long osmDoneNanos = surfaceDoneNanos;
       long coastDoneNanos = surfaceDoneNanos;
-
-      for (int dz = 0; dz < gridSize && !this.osmWaterEnabled; dz++) {
-         int worldZ = gridMinZ + dz;
-         int row = dz * gridSize;
-         int coarseZ = dz / coarseStep;
-         int coarseRow = coarseZ * coarseSize;
-
-         for (int dx = 0; dx < gridSize; dx++) {
-            int worldX = gridMinX + dx;
-            int index = row + dx;
-
-            TellusLandMaskSource.LandMaskSample landMaskSample = this.sampleLandMask(worldX, worldZ, landMaskSampler, worldScale);
-            boolean maskKnown = landMaskSample.known();
-            boolean landMaskIsLand = maskKnown && landMaskSample.land();
-            boolean landMaskOcean = maskKnown && !landMaskIsLand;
-            int coverClass = this.sampleCoverClass(worldX, worldZ);
-            WaterSurfaceResolver.SurfaceSample surfaceSample = this.sampleSurface(
-               worldX, worldZ, coverClass, landMaskSample, this.settings.worldScale()
-            );
-            int surface = surfaceSample.height();
-            boolean demLandOverride = surfaceSample.mapterhornLandOverride();
-            mapterhornLandOverride[index] = demLandOverride;
-            boolean isNoData = coverClass == ESA_NO_DATA;
-            boolean oceanMask;
-            if (maskKnown) {
-               oceanMask = landMaskOcean && (isNoData || coverClass == ESA_WATER);
-            } else {
-               oceanMask = isNoData && surface <= this.seaLevel;
-            }
-
-            boolean esaWater = !suppressOceanWater(oceanMask, demLandOverride)
-               && (coverClass == ESA_WATER
-                  || oceanMask && (surface <= this.seaLevel || landMaskOcean && (isNoData || coverClass == ESA_WATER)));
-            boolean isWater = !this.osmWaterEnabled && esaWater;
-            landMaskLand[index] = landMaskIsLand;
-            surfaceHeights[index] = surface;
-            baseWaterMask[index] = isWater;
-            noDataMask[index] = isWater && oceanMask;
-            if (isWater && landMaskOcean && (isNoData || coverClass == ESA_WATER)) {
-               oceanHintMask[index] = true;
-            }
-
-            if (isWater) {
-               hasWater = true;
-               if (!oceanMask && surface <= inlandLevel) {
-                  int coarseIndex = coarseRow + dx / coarseStep;
-                  coarseWater[coarseIndex] = true;
-               }
-            }
-         }
-      }
 
       if (this.osmWaterEnabled) {
          boolean osmRegionHasWater = this.populateOsmBaseWaterMask(
@@ -3388,6 +3355,81 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       return new WaterSurfaceResolver.SurfaceSample(
          this.scaleElevationToHeight(elevation.elevationMeters(), blockZ), elevation.mapterhornLandOverride()
       );
+   }
+
+   /**
+    * Legacy ESA land-cover / land-mask water classification used when Overture water is disabled.
+    * Returns whether any cell of the grid is water.
+    */
+   private boolean fillLandCoverWaterGrid(
+      int gridMinX,
+      int gridMinZ,
+      int gridSize,
+      int coarseStep,
+      int coarseSize,
+      int inlandLevel,
+      TellusLandMaskSource.LandMaskSampler landMaskSampler,
+      double worldScale,
+      int[] surfaceHeights,
+      boolean[] mapterhornLandOverride,
+      boolean[] landMaskLand,
+      boolean[] baseWaterMask,
+      boolean[] noDataMask,
+      boolean[] oceanHintMask,
+      boolean[] coarseWater
+   ) {
+      boolean hasWater = false;
+      for (int dz = 0; dz < gridSize; dz++) {
+         int worldZ = gridMinZ + dz;
+         int row = dz * gridSize;
+         int coarseZ = dz / coarseStep;
+         int coarseRow = coarseZ * coarseSize;
+
+         for (int dx = 0; dx < gridSize; dx++) {
+            int worldX = gridMinX + dx;
+            int index = row + dx;
+
+            TellusLandMaskSource.LandMaskSample landMaskSample = this.sampleLandMask(worldX, worldZ, landMaskSampler, worldScale);
+            boolean maskKnown = landMaskSample.known();
+            boolean landMaskIsLand = maskKnown && landMaskSample.land();
+            boolean landMaskOcean = maskKnown && !landMaskIsLand;
+            int coverClass = this.sampleCoverClass(worldX, worldZ);
+            WaterSurfaceResolver.SurfaceSample surfaceSample = this.sampleSurface(
+               worldX, worldZ, coverClass, landMaskSample, this.settings.worldScale()
+            );
+            int surface = surfaceSample.height();
+            boolean demLandOverride = surfaceSample.mapterhornLandOverride();
+            mapterhornLandOverride[index] = demLandOverride;
+            boolean isNoData = coverClass == ESA_NO_DATA;
+            boolean oceanMask;
+            if (maskKnown) {
+               oceanMask = landMaskOcean && (isNoData || coverClass == ESA_WATER);
+            } else {
+               oceanMask = isNoData && surface <= this.seaLevel;
+            }
+
+            boolean esaWater = !suppressOceanWater(oceanMask, demLandOverride)
+               && (coverClass == ESA_WATER
+                  || oceanMask && (surface <= this.seaLevel || landMaskOcean && (isNoData || coverClass == ESA_WATER)));
+            boolean isWater = !this.osmWaterEnabled && esaWater;
+            landMaskLand[index] = landMaskIsLand;
+            surfaceHeights[index] = surface;
+            baseWaterMask[index] = isWater;
+            noDataMask[index] = isWater && oceanMask;
+            if (isWater && landMaskOcean && (isNoData || coverClass == ESA_WATER)) {
+               oceanHintMask[index] = true;
+            }
+
+            if (isWater) {
+               hasWater = true;
+               if (!oceanMask && surface <= inlandLevel) {
+                  int coarseIndex = coarseRow + dx / coarseStep;
+                  coarseWater[coarseIndex] = true;
+               }
+            }
+         }
+      }
+      return hasWater;
    }
 
    /**
