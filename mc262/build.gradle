@@ -35,3 +35,35 @@ tasks.register('simulateFastLodDataLoading', JavaExec) {
 	args "--grid=${providers.gradleProperty('simGrid').getOrElse('64')}"
 	args "--details=${providers.gradleProperty('simDetails').getOrElse('0,4,6,8,11')}"
 }
+
+tasks.register('benchmarkChunkGeneration', JavaExec) {
+	group = 'verification'
+	description = 'Runs real EarthChunkGenerator createBiomes+fillFromNoise on ProtoChunks headlessly and reports per-chunk timings.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yucareux.tellus.worldgen.ChunkGenerationBenchmark'
+	maxHeapSize = providers.gradleProperty('benchHeap').getOrElse('8g')
+	jvmArgs '-Dtellus.experimentalHeight.coordinateProfile=global_mercator_land_v2'
+	jvmArgs "-Dtellus.debug.fullChunkPerf=${providers.gradleProperty('benchFullChunkPerf').getOrElse('true')}"
+	jvmArgs "-Dtellus.chunkgen.timing=${providers.gradleProperty('benchChunkTiming').getOrElse('false')}"
+	jvmArgs "-Dtellus.chunkgen.timingThresholdMs=${providers.gradleProperty('benchChunkTimingThresholdMs').getOrElse('0')}"
+	jvmArgs "-Dtellus.debug.chunkDetailPerf=${providers.gradleProperty('benchChunkDetailPerf').getOrElse('true')}"
+	jvmArgs "-Dtellus.debug.osmPerf=${providers.gradleProperty('benchOsmPerf').getOrElse('false')}"
+	def extraJvmArgs = providers.gradleProperty('benchJvmArgs').orNull
+	if (extraJvmArgs) {
+		jvmArgs extraJvmArgs.split(' ')
+	}
+	def defaultBenchGameDir = layout.buildDirectory.dir('chunkgen-benchmark-game').get().asFile.absolutePath
+	def benchGameDir = providers.gradleProperty('benchGameDir').getOrElse(defaultBenchGameDir)
+	systemProperty 'tellus.gameDir', benchGameDir
+	systemProperty 'tellus.configDir', new File(benchGameDir, 'config').absolutePath
+	args "--latitude=${providers.gradleProperty('benchLatitude').getOrElse('37.75641472133222')}"
+	args "--longitude=${providers.gradleProperty('benchLongitude').getOrElse('-119.59291934967041')}"
+	args "--radius=${providers.gradleProperty('benchRadius').getOrElse('4')}"
+	args "--passes=${providers.gradleProperty('benchPasses').getOrElse('2')}"
+	args "--threads=${providers.gradleProperty('benchThreads').getOrElse('1')}"
+	args "--profile=${providers.gradleProperty('benchProfile').getOrElse('yosemite')}"
+	args "--scale=${providers.gradleProperty('benchScale').getOrElse('1.0')}"
+	args "--experimentalHeight=${providers.gradleProperty('benchExperimentalHeight').getOrElse('true')}"
+	args "--prefetch=${providers.gradleProperty('benchPrefetch').getOrElse('false')}"
+	args "--perChunk=${providers.gradleProperty('benchPerChunk').getOrElse('false')}"
+}

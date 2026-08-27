@@ -71,6 +71,16 @@ The Minecraft 26.2 target includes a headless source-loading simulation for Fast
 
 The default 64×64 detail-11 pass spans 8192 chunks, matching a 4096-chunk render radius. Use `-PsimDetails=0,6,11`, `-PsimGrid=64`, `-PsimLatitude=...`, and `-PsimLongitude=...` to select a smaller profile. The task stores its isolated cache under `mc262/build/lod-simulation-game`; `-PsimGameDir=...` selects another cache for cold-run comparisons.
 
+### Offline full-chunk generation benchmark
+
+The Minecraft 26.2 target also has a headless benchmark that constructs the real `EarthChunkGenerator` and runs `createBiomes` + `fillFromNoise` on real `ProtoChunk`s, reporting per-chunk wall/CPU latency percentiles, throughput, and GC time. Pass 1 on a fresh cache is network-cold; later passes are in-memory warm:
+
+```bash
+./gradlew :mc262:benchmarkChunkGeneration -PbenchRadius=8 -PbenchThreads=16 -PbenchPasses=2
+```
+
+Useful knobs: `-PbenchLatitude/-PbenchLongitude`, `-PbenchProfile=yosemite|default|osm`, `-PbenchScale=1.0`, `-PbenchPerChunk=true` (per-chunk rows), `-PbenchChunkTiming=true -PbenchChunkTimingThresholdMs=40` (per-chunk phase traces from the generator's own profiler), `-PbenchJvmArgs="-Dtellus.debugWater=true -XX:StartFlightRecording=filename=bench.jfr,settings=profile"` (water-region build timings and a JFR CPU profile), and `-PbenchGameDir=...` (delete `mc262/build/chunkgen-benchmark-game` for a network-cold run). The benchmark runs at the standard height range because Increase Height requires the Tellus mixins; stages that need a `WorldGenRegion` (structures, carvers, decoration, lighting) must be measured in-game with `-Dtellus.debug.fullChunkPerf=true -Dtellus.chunkgen.timing=true`.
+
 ## Commands
 
 - `/tellus map`: Opens the GeoTP map UI (requires gamemaster permissions).
