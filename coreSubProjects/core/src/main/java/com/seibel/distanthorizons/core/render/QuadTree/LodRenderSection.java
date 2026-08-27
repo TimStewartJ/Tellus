@@ -89,6 +89,16 @@ public class LodRenderSection implements IDebugRenderable, AutoCloseable
 	/** this reference is necessary so we can determine what VBO to render */
 	public LodBufferContainer renderBufferContainer; 
 	
+	/**
+	 * Tellus fork: whether the full data source behind {@link #renderBufferContainer} had any
+	 * LOD data. An ungenerated section still uploads (empty) buffers and therefore
+	 * {@link #canRender()}, which lets {@link LodQuadTree} hide a coarse parent over a hole;
+	 * {@link #hasRenderableData()} distinguishes the two.
+	 */
+	private volatile boolean uploadedRenderSourceEmpty = true;
+	/** staged by {@link #getAndBuildRenderData()} and committed when the matching upload completes */
+	private volatile boolean pendingRenderSourceEmpty = true;
+	
 	
 	/** 
 	 * Encapsulates everything between pulling data from the database (including neighbors)
@@ -245,6 +255,7 @@ public class LodRenderSection implements IDebugRenderable, AutoCloseable
 				// nothing needs to be rendered
 				return null;
 			}
+			this.pendingRenderSourceEmpty = thisRenderSource.isEmpty();
 			
 			
 			boolean enableTransparency = Config.Client.Advanced.Graphics.Quality.transparency.get() == EDhApiTransparency.COMPLETE;
@@ -357,6 +368,7 @@ public class LodRenderSection implements IDebugRenderable, AutoCloseable
 				// close the old container
 				LodBufferContainer oldContainer = this.renderBufferContainer;
 				this.renderBufferContainer = bufferContainer.buffersUploaded ? bufferContainer : null;
+				this.uploadedRenderSourceEmpty = this.pendingRenderSourceEmpty;
 				if (oldContainer != null)
 				{
 					oldContainer.close();
@@ -394,6 +406,11 @@ public class LodRenderSection implements IDebugRenderable, AutoCloseable
 	//region
 	
 	public boolean canRender() { return this.renderBufferContainer != null; }
+	/** 
+	 * Tellus fork: {@link #canRender()} and the uploaded geometry came from a data source
+	 * that actually held LOD data (i.e. the section is not merely "generated as empty").
+	 */
+	public boolean hasRenderableData() { return this.renderBufferContainer != null && !this.uploadedRenderSourceEmpty; }
 	public boolean gpuUploadComplete() 
 	{ 
 		return this.renderBufferContainer != null

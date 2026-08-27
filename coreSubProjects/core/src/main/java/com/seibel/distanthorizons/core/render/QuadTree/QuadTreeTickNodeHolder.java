@@ -24,6 +24,12 @@ public class QuadTreeTickNodeHolder
 	private final HashSet<QuadNode<LodRenderSection>> nodesToEnable = new HashSet<>();
 	private final HashSet<QuadNode<LodRenderSection>> nodesToDisable = new HashSet<>();
 	private final ArrayList<QuadNode<LodRenderSection>> nodesToEnableDeleteChildrenList = new ArrayList<>();
+	/**
+	 * Tellus fork: nodes at their desired detail level whose data source is still empty and
+	 * that are therefore covered by a coarser parent this tick. They must still be offered to
+	 * the world generator, otherwise the parent would never be refined.
+	 */
+	private final HashSet<QuadNode<LodRenderSection>> nodesWantingData = new HashSet<>();
 	
 	/** 
 	 * not included in {@link #clear()} to allow for use on the {@link LodQuadTree}'s
@@ -50,7 +56,11 @@ public class QuadTreeTickNodeHolder
 		this.nodesToEnable.clear();
 		this.nodesToDisable.clear();
 		this.nodesToEnableDeleteChildrenList.clear();
+		this.nodesWantingData.clear();
 	}
+	
+	/** Tellus fork: see {@link #nodesWantingData} */
+	public void addWantingDataNode(QuadNode<LodRenderSection> node) { this.nodesWantingData.add(node); }
 	
 	
 	// loading
@@ -127,6 +137,12 @@ public class QuadTreeTickNodeHolder
 		// this 
 		this.nodesForWorldGen.clear();
 		this.nodesForWorldGen.addAll(this.nodesToEnableDeleteChildrenList);
+		if (!this.nodesWantingData.isEmpty())
+		{
+			// Tellus fork: empty sections hidden behind a rendering parent still need data
+			this.nodesForWorldGen.addAll(this.nodesWantingData);
+			this.nodesForWorldGen.sort(this.quadNodeNearComparator);
+		}
 		
 		return this.nodesForWorldGen;
 	}

@@ -1643,6 +1643,21 @@ public class Config
 						+ "")
 					.build();
 				
+				public static ConfigEntry<Boolean> keepLowerDetailLodsUntilChildrenHaveData = new ConfigEntry.Builder<Boolean>()
+					.set(true)
+					.comment(""
+						+ "Tellus fork. Keep rendering a coarse LOD until all four of its finer \n"
+						+ "children actually contain LOD data. \n"
+						+ "\n"
+						+ "Upstream hides the coarse LOD as soon as the children have uploaded \n"
+						+ "buffers, which an ungenerated (empty) section does too, so with an \n"
+						+ "N-sized generator the area turns into a hole until the fine tiles are \n"
+						+ "generated. This keeps the coarse terrain visible instead and does not \n"
+						+ "need [upsampleLowerDetailLodsToFillHoles] or its database writes. \n"
+						+ "Sections hidden this way are still queued for generation. \n"
+						+ "")
+					.build();
+				
 			}
 			
 		}

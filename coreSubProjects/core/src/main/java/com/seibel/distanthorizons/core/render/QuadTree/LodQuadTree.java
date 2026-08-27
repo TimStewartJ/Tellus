@@ -642,7 +642,7 @@ public class LodQuadTree extends QuadTree<LodRenderSection> implements IDebugRen
 		else
 		{
 			boolean nodeCanRender = quadNode.value != null
-									&& quadNode.value.canRender();
+									&& this.sectionCoversArea(quadNode.value);
 			if (nodeCanRender)
 			{
 				// not all child positions are loaded yet, this one should be rendered instead
@@ -656,6 +656,19 @@ public class LodQuadTree extends QuadTree<LodRenderSection> implements IDebugRen
 			
 			return nodeCanRender;
 		}
+	}
+	
+	/**
+	 * Tellus fork: whether this section's uploaded geometry can stand in for its area.
+	 * Upstream treats any uploaded buffer as covering, so a section that was "generated"
+	 * empty (the normal state of a not-yet-generated child under N-sized generation) let
+	 * the quad tree hide its coarse parent and show a hole until the real data arrived.
+	 */
+	private boolean sectionCoversArea(@NotNull LodRenderSection renderSection)
+	{
+		return Config.Common.LodBuilding.Experimental.keepLowerDetailLodsUntilChildrenHaveData.get()
+			? renderSection.hasRenderableData()
+			: renderSection.canRender();
 	}
 	
 	/** @return true if the node at this position has uploaded its render data */
@@ -677,7 +690,16 @@ public class LodQuadTree extends QuadTree<LodRenderSection> implements IDebugRen
 			if (!this.tickNodeHolder.getEnabledNodes().contains(parentNode))
 			{
 				this.tickNodeHolder.addEnableDeleteChildrenNode(quadNode);
-				return true;
+				// an empty section may render (nothing) but must not count as covering
+				// its area, otherwise the parent above it is switched off over a hole
+				boolean coversArea = this.sectionCoversArea(quadNode.value);
+				if (!coversArea)
+				{
+					// the parent will take over rendering and drop this node from the
+					// enable list, so keep it visible to the world generator separately
+					this.tickNodeHolder.addWantingDataNode(quadNode);
+				}
+				return coversArea;
 			}
 			else
 			{
