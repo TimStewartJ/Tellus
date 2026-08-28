@@ -35,6 +35,8 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL21;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL33;
 
@@ -292,9 +294,11 @@ public final class GlNativeChunkReadinessTexture
 
 	private void uploadMask(int maskLength)
 	{
-		if (this.textureId == 0)
+		if (this.textureId == 0 || !GL11.glIsTexture(this.textureId))
 		{
 			this.textureId = GL11.glGenTextures();
+			this.allocatedTextureWidth = 0;
+			this.allocatedTextureHeight = 0;
 		}
 
 		this.uploadBuffer.clear();
@@ -305,9 +309,17 @@ public final class GlNativeChunkReadinessTexture
 		GL13.glActiveTexture(GL13.GL_TEXTURE0 + DEFAULT_SHADER_TEXTURE_UNIT);
 		int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
 		int previousUnpackAlignment = GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT);
+		int previousUnpackBuffer = GL11.glGetInteger(GL21.GL_PIXEL_UNPACK_BUFFER_BINDING);
+		int previousUnpackRowLength = GL11.glGetInteger(GL12.GL_UNPACK_ROW_LENGTH);
+		int previousUnpackSkipRows = GL11.glGetInteger(GL12.GL_UNPACK_SKIP_ROWS);
+		int previousUnpackSkipPixels = GL11.glGetInteger(GL12.GL_UNPACK_SKIP_PIXELS);
 		try
 		{
+			GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
 			GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
+			GL11.glPixelStorei(GL12.GL_UNPACK_ROW_LENGTH, 0);
+			GL11.glPixelStorei(GL12.GL_UNPACK_SKIP_ROWS, 0);
+			GL11.glPixelStorei(GL12.GL_UNPACK_SKIP_PIXELS, 0);
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.textureId);
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
@@ -336,7 +348,11 @@ public final class GlNativeChunkReadinessTexture
 		}
 		finally
 		{
+			GL11.glPixelStorei(GL12.GL_UNPACK_SKIP_PIXELS, previousUnpackSkipPixels);
+			GL11.glPixelStorei(GL12.GL_UNPACK_SKIP_ROWS, previousUnpackSkipRows);
+			GL11.glPixelStorei(GL12.GL_UNPACK_ROW_LENGTH, previousUnpackRowLength);
 			GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
+			GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, previousUnpackBuffer);
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
 			GL13.glActiveTexture(previousActiveTexture);
 		}

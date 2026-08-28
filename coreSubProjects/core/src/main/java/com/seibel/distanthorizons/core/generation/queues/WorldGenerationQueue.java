@@ -126,6 +126,43 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
 	///region task handling
 	
 	@Override
+	public long getPriorityRetrievalPos(long requestedPos)
+	{
+		return findPriorityRetrievalPos(
+			requestedPos,
+			this.lowestDataDetail,
+			(pos, dataDetail) -> this.getGenerationAvailability(new DataSourceRetrievalTask(pos, dataDetail)));
+	}
+
+	static long findPriorityRetrievalPos(
+		long requestedPos,
+		byte lowestDataDetail,
+		IPriorityAvailabilityResolver availabilityResolver)
+	{
+		byte requestedDataDetail = (byte) (DhSectionPos.getDetailLevel(requestedPos) - DhSectionPos.SECTION_MINIMUM_DETAIL_LEVEL);
+		for (int dataDetail = requestedDataDetail + 1; dataDetail <= lowestDataDetail; dataDetail++)
+		{
+			byte candidateDataDetail = (byte) dataDetail;
+			long candidatePos = DhSectionPos.convertToDetailLevel(
+				requestedPos,
+				(byte) (candidateDataDetail + DhSectionPos.SECTION_MINIMUM_DETAIL_LEVEL));
+			if (availabilityResolver.getAvailability(candidatePos, candidateDataDetail)
+				== IDhApiWorldGenerator.GENERATION_PRIORITY)
+			{
+				return candidatePos;
+			}
+		}
+
+		return requestedPos;
+	}
+
+	@FunctionalInterface
+	interface IPriorityAvailabilityResolver
+	{
+		byte getAvailability(long pos, byte dataDetail);
+	}
+
+	@Override
 	public CompletableFuture<DataSourceRetrievalResult> submitRetrievalTask(long pos, byte requiredDataDetail)
 	{
 		// the generator is shutting down, don't add new tasks
@@ -293,7 +330,11 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
 			// find the closest task
 			(TaskDistancePair aTaskPair, TaskDistancePair bTaskPair) ->
 			{
-				return (aTaskPair.dist < bTaskPair.dist) ? aTaskPair : bTaskPair;
+				return shouldPreferTask(
+					aTaskPair.dist, aTaskPair.availability,
+					bTaskPair.dist, bTaskPair.availability)
+					? aTaskPair
+					: bTaskPair;
 			});
 		
 		if (closestTaskPair == null)
@@ -357,9 +398,17 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
 		DhChunkPos chunkPosMin = new DhChunkPos(new DhBlockPos2D(DhSectionPos.getMinCornerBlockX(task.pos), DhSectionPos.getMinCornerBlockZ(task.pos)));
 		byte availability = this.generator.getGenerationAvailability(
 			chunkPosMin.getX(), chunkPosMin.getZ(), task.widthInChunks, task.requestDetailLevel);
-		return availability == IDhApiWorldGenerator.GENERATION_SPLIT || availability == IDhApiWorldGenerator.GENERATION_WAIT
+		return availability == IDhApiWorldGenerator.GENERATION_SPLIT
+			|| availability == IDhApiWorldGenerator.GENERATION_WAIT
+			|| availability == IDhApiWorldGenerator.GENERATION_PRIORITY
 			? availability
 			: IDhApiWorldGenerator.GENERATION_READY;
+	}
+	static boolean shouldPreferTask(int aDistance, byte aAvailability, int bDistance, byte bAvailability)
+	{
+		boolean aPriority = aAvailability == IDhApiWorldGenerator.GENERATION_PRIORITY;
+		boolean bPriority = bAvailability == IDhApiWorldGenerator.GENERATION_PRIORITY;
+		return aPriority != bPriority ? aPriority : aDistance < bDistance;
 	}
 	private boolean canGenerateDetailLevel(byte taskDetailLevel)
 	{

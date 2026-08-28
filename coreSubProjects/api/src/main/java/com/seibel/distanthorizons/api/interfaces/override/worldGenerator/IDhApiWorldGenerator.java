@@ -44,6 +44,8 @@ public interface IDhApiWorldGenerator extends Closeable, IDhApiOverrideable
 	byte GENERATION_SPLIT = 1;
 	/** The requested region is not cached yet and must remain queued. */
 	byte GENERATION_WAIT = 2;
+	/** The requested region is ready and should run before normal ready requests. */
+	byte GENERATION_PRIORITY = 3;
 
 	//============//
 	// parameters //
@@ -92,7 +94,8 @@ public interface IDhApiWorldGenerator extends Closeable, IDhApiOverrideable
 	/**
 	 * Gives a generator ownership of readiness without starting generation. The default preserves
 	 * upstream behavior. Implementations may return {@link #GENERATION_WAIT} while an external
-	 * cache manager downloads data, or {@link #GENERATION_SPLIT} to expose ready sub-regions.
+	 * cache manager downloads data, {@link #GENERATION_SPLIT} to expose ready sub-regions,
+	 * or {@link #GENERATION_PRIORITY} to make a coarse first-paint request run before normal work.
 	 */
 	default byte getGenerationAvailability(
 		int chunkPosMinX,

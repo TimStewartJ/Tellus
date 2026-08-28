@@ -284,9 +284,22 @@ public class GeneratedFullDataSourceProvider extends FullDataSourceProviderV2 im
 		{
 			return null;
 		}
-		
+
+		long priorityPos = worldGenQueue.getPriorityRetrievalPos(genPos);
+		if (priorityPos != genPos && !this.queuedRetrievalFutureByPos.containsKey(priorityPos))
+		{
+			this.queueSinglePositionForRetrieval(worldGenQueue, priorityPos);
+		}
+
+		return this.queueSinglePositionForRetrieval(worldGenQueue, genPos);
+	}
+
+	private CompletableFuture<DataSourceRetrievalResult> queueSinglePositionForRetrieval(
+		IFullDataSourceRetrievalQueue worldGenQueue,
+		long genPos)
+	{
 		CompletableFuture<DataSourceRetrievalResult> worldGenFuture = worldGenQueue.submitRetrievalTask(genPos, (byte) (DhSectionPos.getDetailLevel(genPos) - DhSectionPos.SECTION_MINIMUM_DETAIL_LEVEL));
-		
+
 		// only queue the when-complete once for each world gen task,
 		// otherwise we can end up trying to close the same datasource multiple times 
 		CompletableFuture<DataSourceRetrievalResult> oldWorldGenFuture = this.queuedRetrievalFutureByPos.putIfAbsent(genPos, worldGenFuture);

@@ -248,6 +248,12 @@ public class LodRenderSection implements IDebugRenderable, AutoCloseable
 	@Nullable
 	private synchronized LodQuadBuilder getAndBuildRenderData()
 	{
+		IClientLevelWrapper clientLevelWrapper = this.clientLevel.getClientLevelWrapper();
+		if (clientLevelWrapper == null)
+		{
+			return null;
+		}
+
 		try (ColumnRenderSource thisRenderSource = this.getRenderSourceForPos(this.pos, null))
 		{
 			if (thisRenderSource == null)
@@ -259,7 +265,7 @@ public class LodRenderSection implements IDebugRenderable, AutoCloseable
 			
 			
 			boolean enableTransparency = Config.Client.Advanced.Graphics.Quality.transparency.get() == EDhApiTransparency.COMPLETE;
-			LodQuadBuilder lodQuadBuilder = LodQuadBuilder.getBuilder(enableTransparency, this.clientLevel.getClientLevelWrapper());
+			LodQuadBuilder lodQuadBuilder = LodQuadBuilder.getBuilder(enableTransparency, clientLevelWrapper);
 			
 			
 			// get the adjacent positions
@@ -285,10 +291,18 @@ public class LodRenderSection implements IDebugRenderable, AutoCloseable
 				ColumnRenderBufferBuilder.makeLodRenderData(lodQuadBuilder, thisRenderSource, this.clientLevel, adjacentRenderSections, adjIsSameDetailLevel);
 				return lodQuadBuilder;
 			}
+			catch (CancellationException ignored)
+			{
+				return null;
+			}
 			catch (Exception e)
 			{
 				LOGGER.error("Unexpected error while loading LodRenderSection [" + DhSectionPos.toString(this.pos) + "] adjacent data, Error: [" + e.getMessage() + "].", e);
 			}
+		}
+		catch (CancellationException ignored)
+		{
+			return null;
 		}
 		catch (Exception e)
 		{

@@ -37,6 +37,8 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.concurrent.CancellationException;
+
 public class ColumnBox
 {
 	private static final IMinecraftRenderWrapper MC_RENDER = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
@@ -70,7 +72,7 @@ public class ColumnBox
 		IClientLevelWrapper clientLevelWrapper = clientLevel.getClientLevelWrapper();
 		if (clientLevelWrapper == null)
 		{
-			LodUtil.assertNotReach("addBoxQuadsToBuilder getClientLevelWrapper should always succeed");
+			throw new CancellationException("Client level unloaded while building LOD geometry");
 		}
 		
 		short maxX = (short) (minX + blockWidth);
