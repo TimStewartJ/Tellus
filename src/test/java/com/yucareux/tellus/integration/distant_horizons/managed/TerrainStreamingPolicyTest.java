@@ -23,7 +23,7 @@ class TerrainStreamingPolicyTest {
          EarthGeneratorSettings.DEFAULT, "test", 0, 0, 256, (byte)0
       );
 
-      assertEquals(ManagedTerrainAvailability.READY, availability);
+      assertEquals(ManagedTerrainAvailability.PRIORITY, availability);
       assertTrue(TerrainStreamingPolicy.usesCacheOnlyFastLod(EarthGeneratorSettings.DEFAULT, (byte)6));
    }
 

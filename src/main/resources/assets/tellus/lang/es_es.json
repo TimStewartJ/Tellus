@@ -62,6 +62,7 @@
   "tellus.managed_terrain.overlay.stage.complete": "Lista",
   "tellus.managed_terrain.overlay.stage.degraded": "Lista con datos alternativos",
   "tellus.managed_terrain.overlay.stage.failed": "Falló la descarga",
+  "tellus.managed_terrain.overlay.stage.processing": "Procesando",
   "tellus.managed_terrain.overlay.progress": "Celdas %s/%s · radio %s chunks · recentrar %s chunks",
   "tellus.managed_terrain.overlay.compatibility_fallback": "La versión instalada de Distant Horizons no incluye la compuerta de generación de Tellus; se usa el modo heredado.",
   "tellus.managed_terrain.overlay.failed_detail": "%s celda(s) de terreno requerida(s) fallaron tras los reintentos.",

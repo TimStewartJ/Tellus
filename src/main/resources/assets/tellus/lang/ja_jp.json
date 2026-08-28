@@ -62,6 +62,7 @@
   "tellus.managed_terrain.overlay.stage.complete": "準備完了",
   "tellus.managed_terrain.overlay.stage.degraded": "代替データで準備完了",
   "tellus.managed_terrain.overlay.stage.failed": "ダウンロード失敗",
+  "tellus.managed_terrain.overlay.stage.processing": "処理中",
   "tellus.managed_terrain.overlay.progress": "セル %s/%s・半径 %s チャンク・再中心化 %s チャンク",
   "tellus.managed_terrain.overlay.compatibility_fallback": "インストール済みのDistant HorizonsにはTellus生成ゲートがないため、従来モードを使用します。",
   "tellus.managed_terrain.overlay.failed_detail": "必須地形セル%s個が再試行後も取得できませんでした。",

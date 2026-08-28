@@ -62,6 +62,7 @@
   "tellus.managed_terrain.overlay.stage.complete": "Ready",
   "tellus.managed_terrain.overlay.stage.degraded": "Ready with fallbacks",
   "tellus.managed_terrain.overlay.stage.failed": "Download failed",
+  "tellus.managed_terrain.overlay.stage.processing": "Processing",
   "tellus.managed_terrain.overlay.progress": "Cells %s/%s · radius %s chunks · recenter %s chunks",
   "tellus.managed_terrain.overlay.compatibility_fallback": "The installed Distant Horizons build lacks the Tellus generation gate; using legacy mode.",
   "tellus.managed_terrain.overlay.failed_detail": "%s required terrain cell(s) failed after retries.",

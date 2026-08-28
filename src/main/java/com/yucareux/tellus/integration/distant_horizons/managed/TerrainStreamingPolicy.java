@@ -37,7 +37,7 @@ public final class TerrainStreamingPolicy {
       byte targetDataDetail
    ) {
       if (isAutomatic(settings) && generatedDetailForAvailability(widthChunks, targetDataDetail) >= COARSE_FIRST_MIN_DETAIL) {
-         return ManagedTerrainAvailability.READY;
+         return ManagedTerrainAvailability.PRIORITY;
       }
       return managedDownloadsActive(settings)
          ? ManagedTerrainAvailability.availability(managedTerrainKey, chunkPosMinX, chunkPosMinZ, widthChunks)

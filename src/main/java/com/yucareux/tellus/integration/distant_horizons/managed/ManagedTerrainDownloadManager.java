@@ -134,6 +134,7 @@ public final class ManagedTerrainDownloadManager {
 
       this.playerStates.entrySet().removeIf(entry -> !activePlayers.contains(entry.getKey()));
       this.requestedRenderRadii.keySet().removeIf(playerId -> !activePlayers.contains(playerId));
+      this.cancelSupersededPreloads(activeManagedStates);
       this.generatorStates.entrySet().removeIf(entry -> this.tick - entry.getValue().lastSeenTick > 200L && !hasPlayerForGenerator(entry.getKey()));
       Map<String, Integer> progressiveBatchWidths = new HashMap<>();
       for (PlayerState state : activeManagedStates) {
@@ -180,6 +181,26 @@ public final class ManagedTerrainDownloadManager {
 
    private boolean hasPlayerForGenerator(String generatorKey) {
       return this.playerStates.values().stream().anyMatch(state -> generatorKey.equals(state.generatorKey));
+   }
+
+   private void cancelSupersededPreloads(List<PlayerState> activeStates) {
+      this.activePreloads.forEach((key, job) -> {
+         boolean needed = activeStates.stream().anyMatch(
+            state -> key.generatorKey.equals(state.generatorKey)
+               && state.target.intersectsCells(key.minX, key.minZ, key.maxX, key.maxZ)
+         );
+         if (!needed) {
+            job.cancel();
+         }
+      });
+   }
+
+   private boolean batchStillNeeded(BatchKey key) {
+      return this.playerStates.values().stream().anyMatch(
+         state -> key.generatorKey.equals(state.generatorKey)
+            && state.target != null
+            && state.target.intersectsCells(key.minX, key.minZ, key.maxX, key.maxZ)
+      );
    }
 
    private void schedule(List<PlayerState> activeStates) {
@@ -322,6 +343,10 @@ public final class ManagedTerrainDownloadManager {
             if (epoch != this.sessionEpoch.get()) {
                return;
             }
+            if (!this.batchStillNeeded(request.key)) {
+               progress.detail = "Superseded by a new player-centered target";
+               return;
+            }
             RetryState retry = this.defer(generatorState.key, request.cells);
             progress.detail = "Terrain preload unavailable; retrying in " + formatDelay(retry.retryAtMillis - System.currentTimeMillis());
             Tellus.LOGGER.warn(
@@ -361,6 +386,10 @@ public final class ManagedTerrainDownloadManager {
       } catch (RuntimeException error) {
          progress.detail = message(error);
          if (epoch != this.sessionEpoch.get()) {
+            return;
+         }
+         if (!this.batchStillNeeded(request.key)) {
+            progress.detail = "Superseded by a new player-centered target";
             return;
          }
          RetryState retry = this.defer(generatorState.key, request.cells);
@@ -675,6 +704,7 @@ public final class ManagedTerrainDownloadManager {
          int active = 0;
          long bytesRead = 0L;
          long bytesExpected = 0L;
+         boolean processing = false;
          Set<CellProgress> countedProgress = Collections.newSetFromMap(new IdentityHashMap<>());
          String detail = "Caching terrain around the player";
          for (ManagedTerrainCell cell : cells) {
@@ -692,6 +722,7 @@ public final class ManagedTerrainDownloadManager {
             if (generatorState != null) {
                CellProgress progress = generatorState.progress.get(cell);
                if (progress != null && progress.active && countedProgress.add(progress)) {
+                  processing |= progress.isProcessing();
                   bytesRead += progress.bytesRead();
                   long expected = progress.bytesExpected();
                   if (expected > 0L) {
@@ -711,6 +742,8 @@ public final class ManagedTerrainDownloadManager {
          } else if (completed == cells.size()) {
             stage = degraded > 0 ? ManagedTerrainDownloadStatus.Stage.DEGRADED : ManagedTerrainDownloadStatus.Stage.COMPLETE;
             detail = degraded > 0 ? "Terrain cached with optional data fallbacks" : "Terrain cache is ready";
+         } else if (processing) {
+            stage = ManagedTerrainDownloadStatus.Stage.PROCESSING;
          } else {
             stage = ManagedTerrainDownloadStatus.Stage.DOWNLOADING;
          }
@@ -769,12 +802,29 @@ public final class ManagedTerrainDownloadManager {
 
       private long bytesRead() {
          TerrainPreloadJob job = this.preloadJob;
-         return job == null ? this.bytesRead.get() : job.progress().bytesRead();
+         if (job == null) {
+            return this.bytesRead.get();
+         }
+         TerrainPreloadProgress current = job.progress();
+         return isProcessing(current) ? current.completedUnits() : current.bytesRead();
       }
 
       private long bytesExpected() {
          TerrainPreloadJob job = this.preloadJob;
-         return job == null ? this.bytesExpected.get() : job.progress().bytesExpected();
+         if (job == null) {
+            return this.bytesExpected.get();
+         }
+         TerrainPreloadProgress current = job.progress();
+         return isProcessing(current) ? current.totalUnits() : current.bytesExpected();
+      }
+
+      private boolean isProcessing() {
+         TerrainPreloadJob job = this.preloadJob;
+         return job != null && isProcessing(job.progress());
+      }
+
+      private static boolean isProcessing(TerrainPreloadProgress current) {
+         return "Processing terrain data".equals(current.status()) || "Saving terrain data".equals(current.status());
       }
 
       private String detail() {
