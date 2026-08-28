@@ -66,6 +66,7 @@ tasks.register('benchmarkChunkGeneration', JavaExec) {
 	args "--experimentalHeight=${providers.gradleProperty('benchExperimentalHeight').getOrElse('true')}"
 	args "--prefetch=${providers.gradleProperty('benchPrefetch').getOrElse('false')}"
 	args "--perChunk=${providers.gradleProperty('benchPerChunk').getOrElse('false')}"
+	args "--verifyPreparedColumns=${providers.gradleProperty('benchVerifyPreparedColumns').getOrElse('false')}"
 	args "--warmupRadius=${providers.gradleProperty('benchWarmupRadius').getOrElse('-1')}"
 	args "--warmupOffsetChunks=${providers.gradleProperty('benchWarmupOffsetChunks').getOrElse('256')}"
 }
@@ -92,4 +93,16 @@ tasks.register('benchmarkCarverPreparation', JavaExec) {
 	args "--radius=${providers.gradleProperty('carverBenchRadius').getOrElse('6')}"
 	args "--threads=${providers.gradleProperty('carverBenchThreads').getOrElse('16')}"
 	args "--rounds=${providers.gradleProperty('carverBenchRounds').getOrElse('3')}"
+}
+
+tasks.named('runServer') {
+	def extraJvmArgs = providers.gradleProperty('serverBenchJvmArgs').orNull
+	if (extraJvmArgs) {
+		jvmArgs extraJvmArgs.split(' ')
+	}
+	def benchmarkGameDir = providers.gradleProperty('serverBenchGameDir').orNull
+	if (benchmarkGameDir) {
+		systemProperty 'tellus.gameDir', benchmarkGameDir
+		systemProperty 'tellus.configDir', new File(benchmarkGameDir, 'config').absolutePath
+	}
 }

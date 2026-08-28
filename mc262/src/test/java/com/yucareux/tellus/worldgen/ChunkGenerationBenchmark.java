@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import net.minecraft.SharedConstants;
 import net.minecraft.util.Util;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.LayeredRegistryAccess;
 import net.minecraft.core.Registry;
@@ -38,6 +39,7 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.world.level.chunk.ProtoChunk;
 import net.minecraft.world.level.chunk.UpgradeData;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 import net.minecraft.world.level.levelgen.RandomState;
@@ -218,6 +220,9 @@ public final class ChunkGenerationBenchmark {
                long afterBiomes = System.nanoTime();
                generator.fillFromNoise(Blender.empty(), randomState, structures, chunk).join();
                long end = System.nanoTime();
+               if (options.verifyPreparedColumns()) {
+                  verifyPreparedDecorationColumns(generator, chunk);
+               }
                cpuNs[index] = cpuTime ? threadMx.getCurrentThreadCpuTime() - cpuStart : 0L;
                biomesNs[index] = afterBiomes - start;
                fillNs[index] = end - afterBiomes;
@@ -307,6 +312,46 @@ public final class ChunkGenerationBenchmark {
                "CHUNKGEN_CHUNK pass=%d idx=%d chunk=[%d,%d] total_ms=%.2f biomes_ms=%.2f fill_ms=%.2f cpu_ms=%.2f sections=%d%n",
                pass, i, pos.x(), pos.z(), millis(totalNs[i]), millis(biomesNs[i]), millis(fillNs[i]), millis(cpuNs[i]), nonEmptySections[i]
             );
+         }
+      }
+   }
+
+   private static void verifyPreparedDecorationColumns(
+      EarthChunkGenerator generator, ProtoChunk chunk
+   ) {
+      BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+      int chunkMinX = chunk.getPos().getMinBlockX();
+      int chunkMinZ = chunk.getPos().getMinBlockZ();
+      for (int localZ = 0; localZ < 16; localZ++) {
+         for (int localX = 0; localX < 16; localX++) {
+            int worldX = chunkMinX + localX;
+            int worldZ = chunkMinZ + localZ;
+            int surfaceY = generator.getUndergroundPlacementSurfaceY(worldX, worldZ);
+            int searchBottomY = UndergroundGenerationDepthPolicy.deepestGenerationY(
+               surfaceY,
+               generator.settings().undergroundDepth(),
+               chunk.getMinY()
+            );
+            int referenceBottomY = searchBottomY;
+            cursor.set(worldX, surfaceY - 1, worldZ);
+            for (int y = surfaceY - 1; y >= searchBottomY; y--) {
+               cursor.setY(y);
+               if (chunk.getBlockState(cursor).is(Blocks.BEDROCK)) {
+                  referenceBottomY = Math.min(surfaceY - 1, y + 1);
+                  break;
+               }
+            }
+            int preparedBottomY = generator.getPreparedUndergroundPlacementBottomY(
+               worldX, worldZ
+            );
+            if (preparedBottomY != referenceBottomY) {
+               throw new IllegalStateException(
+                  "Prepared underground bottom mismatch at "
+                     + worldX + "," + worldZ
+                     + ": prepared=" + preparedBottomY
+                     + ", reference=" + referenceBottomY
+               );
+            }
          }
       }
    }
@@ -425,6 +470,7 @@ public final class ChunkGenerationBenchmark {
       boolean experimentalHeight,
       boolean prefetch,
       boolean perChunk,
+      boolean verifyPreparedColumns,
       int warmupRadius,
       int warmupOffsetChunks
    ) {
@@ -441,6 +487,7 @@ public final class ChunkGenerationBenchmark {
          boolean experimentalHeight = true;
          boolean prefetch = false;
          boolean perChunk = false;
+         boolean verifyPreparedColumns = false;
          int warmupRadius = -1;
          int warmupOffsetChunks = 256;
          for (String arg : args) {
@@ -466,6 +513,8 @@ public final class ChunkGenerationBenchmark {
                prefetch = Boolean.parseBoolean(value(arg));
             } else if (arg.startsWith("--perChunk=")) {
                perChunk = Boolean.parseBoolean(value(arg));
+            } else if (arg.startsWith("--verifyPreparedColumns=")) {
+               verifyPreparedColumns = Boolean.parseBoolean(value(arg));
             } else if (arg.startsWith("--warmupRadius=")) {
                warmupRadius = Integer.parseInt(value(arg));
             } else if (arg.startsWith("--warmupOffsetChunks=")) {
@@ -484,7 +533,20 @@ public final class ChunkGenerationBenchmark {
             throw new IllegalArgumentException("Warm-up radius must be at most 64 chunks");
          }
          return new Options(
-            latitude, longitude, radius, passes, threads, seed, profile, scale, experimentalHeight, prefetch, perChunk, warmupRadius, warmupOffsetChunks
+            latitude,
+            longitude,
+            radius,
+            passes,
+            threads,
+            seed,
+            profile,
+            scale,
+            experimentalHeight,
+            prefetch,
+            perChunk,
+            verifyPreparedColumns,
+            warmupRadius,
+            warmupOffsetChunks
          );
       }
 
