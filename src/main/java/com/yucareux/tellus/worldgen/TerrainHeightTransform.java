@@ -172,6 +172,36 @@ public final class TerrainHeightTransform {
       return roundedAwayFromSeaLevel(elevationMeters, scaled);
    }
 
+   public static double elevationMetersFromBlockOffset(
+      int blockOffset,
+      double blockZ,
+      double worldScale,
+      double terrestrialHeightScale,
+      double oceanicHeightScale,
+      boolean experimentalIncreaseHeight,
+      boolean automaticHeightScaling
+   ) {
+      if (!(worldScale > 0.0) || !Double.isFinite(worldScale)) {
+         return Double.NaN;
+      }
+      boolean land = blockOffset >= 0;
+      double heightScale = land ? terrestrialHeightScale : oceanicHeightScale;
+      if (!(heightScale > 0.0) || !Double.isFinite(heightScale)) {
+         return Double.NaN;
+      }
+      double scaled = land ? blockOffset : -blockOffset;
+      if (experimentalIncreaseHeight) {
+         scaled = land
+            ? expandExperimentalLandHeight(scaled)
+            : expandExperimentalOceanDepth(scaled, automaticHeightScaling);
+      }
+      double correction = heightScaleCorrection(
+         blockZ, worldScale, experimentalIncreaseHeight, automaticHeightScaling
+      );
+      double elevation = scaled * worldScale / (heightScale * correction);
+      return land ? elevation : -elevation;
+   }
+
    public static double heightScaleCorrectionAtLatitude(
       double latitude, double worldScale, boolean experimentalIncreaseHeight, boolean automaticHeightScaling
    ) {
@@ -207,6 +237,15 @@ public final class TerrainHeightTransform {
       return EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS + span * -Math.expm1(-excess / span);
    }
 
+   private static double expandExperimentalLandHeight(double heightBlocks) {
+      if (!(heightBlocks > EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS)) {
+         return heightBlocks;
+      }
+      double span = EXPERIMENTAL_LAND_SOFT_CEILING_BLOCKS - EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS;
+      double ratio = Math.min(Math.nextDown(1.0), (heightBlocks - EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS) / span);
+      return EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS - span * Math.log1p(-ratio);
+   }
+
    static double compressExperimentalOceanDepth(double depthBlocks, boolean automaticHeightScaling) {
       if (!(depthBlocks > 0.0)) {
          return Math.max(0.0, depthBlocks);
@@ -214,6 +253,12 @@ public final class TerrainHeightTransform {
 
       double limit = experimentalOceanDepthLimit(automaticHeightScaling);
       return limit * Math.tanh(depthBlocks / limit);
+   }
+
+   private static double expandExperimentalOceanDepth(double depthBlocks, boolean automaticHeightScaling) {
+      double limit = experimentalOceanDepthLimit(automaticHeightScaling);
+      double ratio = Math.min(Math.nextDown(1.0), Math.max(0.0, depthBlocks / limit));
+      return limit * 0.5 * Math.log((1.0 + ratio) / (1.0 - ratio));
    }
 
    public static double experimentalOceanDepthLimit(boolean automaticHeightScaling) {

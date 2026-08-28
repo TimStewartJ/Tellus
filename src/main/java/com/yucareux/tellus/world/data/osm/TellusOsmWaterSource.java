@@ -304,9 +304,21 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
          this.cache.invalidate(key);
       }
 
-      OsmQueryMode queryMode = ManagedTerrainNetworkPolicy.isCacheOnly()
-         ? OsmQueryMode.BLOCKING
-         : mode == null ? OsmQueryMode.BLOCKING : mode;
+      if (ManagedTerrainNetworkPolicy.isCacheOnly()) {
+         if (this.tileLoadFailures.contains(key)) {
+            return new TellusOsmWaterSource.TileLookup(OsmWaterTile.empty(), CoverageStatus.FAILED);
+         }
+         OsmWaterTile local = this.loadTile(key);
+         boolean complete = !local.isEmpty() || !this.tileLoadFailures.contains(key);
+         if (complete) {
+            this.cache.put(key, local);
+         }
+         return new TellusOsmWaterSource.TileLookup(
+            local, complete ? CoverageStatus.COMPLETE : CoverageStatus.FAILED
+         );
+      }
+
+      OsmQueryMode queryMode = mode == null ? OsmQueryMode.BLOCKING : mode;
       if (queryMode == OsmQueryMode.NON_BLOCKING) {
          this.queueAsyncLoad(key);
          return new TellusOsmWaterSource.TileLookup(OsmWaterTile.empty(), CoverageStatus.PENDING);
@@ -384,6 +396,12 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
             }
          }
 
+         if (ManagedTerrainNetworkPolicy.isCacheOnly()) {
+            this.tileLoadFailures.add(key);
+            OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_WATER, OsmPerf.TileLoadPath.FAILURE);
+            return OsmWaterTile.empty();
+         }
+
          long generation = TellusCacheRegistry.generation(TellusCacheDomain.OSM);
          byte[] payload = this.fetchTilePayloadWithRetry(key);
          if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.OSM, generation)) {
@@ -422,6 +440,7 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
       if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.OSM, generation) || !this.cacheTile(cachePath, payload, generation)) {
          throw new RuntimeException("Discarded stale Overture water cache write for " + key);
       }
+      this.tileLoadFailures.remove(key);
    }
 
    private void ensureInitialized() {

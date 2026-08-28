@@ -92,4 +92,10 @@ class ManagedTerrainTargetTest {
       assertEquals(4_000L, ManagedTerrainDownloadManager.retryDelayMillis(2));
       assertEquals(30_000L, ManagedTerrainDownloadManager.retryDelayMillis(20));
    }
+
+   @Test
+   void repeatedManagedFailuresEventuallyReleaseDegradedGeneration() {
+      assertTrue(!ManagedTerrainDownloadManager.shouldReleaseDegraded(2));
+      assertTrue(ManagedTerrainDownloadManager.shouldReleaseDegraded(3));
+   }
 }

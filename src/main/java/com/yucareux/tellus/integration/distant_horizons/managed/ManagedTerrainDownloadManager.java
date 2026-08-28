@@ -37,6 +37,7 @@ import net.minecraft.world.level.ChunkPos;
 public final class ManagedTerrainDownloadManager {
    private static final int DEFAULT_RENDER_RADIUS_CHUNKS = 128;
    private static final int MAX_CORE_ATTEMPTS = intProperty("tellus.managedDownloads.coreAttempts", 1, 1, 3);
+   private static final int MAX_DEFERRED_ATTEMPTS = intProperty("tellus.managedDownloads.degradeAfterAttempts", 3, 1, 20);
    private static final int UPDATE_INTERVAL_TICKS = 20;
    private static final int COORDINATOR_THREADS = intProperty("tellus.managedDownloads.coordinators", 4, 1, 16);
    private static final int MIN_BATCH_CELLS_PER_SIDE = intProperty("tellus.managedDownloads.batchCellsPerSide", 8, 1, 64);
@@ -94,7 +95,7 @@ public final class ManagedTerrainDownloadManager {
          }
 
          EarthGeneratorSettings settings = generator.settings();
-         if (!settings.tellusManagedTerrainDownloads()) {
+         if (!TerrainStreamingPolicy.isAutomatic(settings)) {
             this.playerStates.put(playerId, PlayerState.disabled(settings.showTerrainDownloadOverlay()));
             continue;
          }
@@ -204,9 +205,12 @@ public final class ManagedTerrainDownloadManager {
          boolean anyReady = false;
          int nonReady = 0;
          for (ManagedTerrainCell cell : targetCells) {
-            if (ManagedTerrainAvailability.isReady(playerState.generatorKey, cell)) {
+            boolean ready = ManagedTerrainAvailability.isReady(playerState.generatorKey, cell);
+            if (ready) {
                anyReady = true;
-               continue;
+               if (!ManagedTerrainAvailability.isDegraded(playerState.generatorKey, cell)) {
+                  continue;
+               }
             }
             if (ManagedTerrainAvailability.isFailed(playerState.generatorKey, cell)) {
                continue;
@@ -487,6 +491,9 @@ public final class ManagedTerrainDownloadManager {
             int attempt = previous == null ? 1 : previous.attempt + 1;
             return new RetryState(attempt, saturatedAdd(now, retryDelayMillis(attempt)));
          });
+         if (shouldReleaseDegraded(retry.attempt)) {
+            ManagedTerrainAvailability.markReady(generatorKey, cell, true);
+         }
          if (latest[0] == null || retry.attempt > latest[0].attempt || retry.retryAtMillis > latest[0].retryAtMillis) {
             latest[0] = retry;
          }
@@ -501,6 +508,10 @@ public final class ManagedTerrainDownloadManager {
          ? Long.MAX_VALUE
          : RETRY_BASE_DELAY_MILLIS * multiplier;
       return Math.min(RETRY_MAX_DELAY_MILLIS, delay);
+   }
+
+   static boolean shouldReleaseDegraded(int attempt) {
+      return attempt >= MAX_DEFERRED_ATTEMPTS;
    }
 
    private static long saturatedAdd(long value, long amount) {

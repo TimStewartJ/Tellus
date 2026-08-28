@@ -569,6 +569,21 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    private BlockPos getSurfacePosition(LevelHeightAccessor heightAccessor, double latitude, double longitude, boolean useDetailedWaterResolver) {
+      return this.getSurfacePosition(
+         heightAccessor.getMinBuildHeight(), heightAccessor.getMaxBuildHeight(), latitude, longitude, useDetailedWaterResolver
+      );
+   }
+
+   public BlockPos getSurfacePosition(int minY, int maxYExclusive, double latitude, double longitude) {
+      return this.getSurfacePosition(minY, maxYExclusive, latitude, longitude, true);
+   }
+
+   private BlockPos getSurfacePosition(
+      int minY, int maxYExclusive, double latitude, double longitude, boolean useDetailedWaterResolver
+   ) {
+      if (maxYExclusive <= minY) {
+         throw new IllegalArgumentException("Surface-position height range must not be empty");
+      }
       double blocksPerDegree = blocksPerDegree(this.settings.worldScale());
       int spawnX = Mth.floor(longitude * blocksPerDegree);
       int spawnZ = Mth.floor(EarthProjection.latToBlockZ(latitude, this.settings.worldScale()));
@@ -590,8 +605,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          surface = column.hasWater() ? Math.max(column.terrainSurface(), column.waterSurface()) : column.terrainSurface();
       }
 
-      int maxY = heightAccessor.getMaxBuildHeight() - 1;
-      int spawnY = Mth.clamp(surface + 1, heightAccessor.getMinBuildHeight(), maxY);
+      int maxY = maxYExclusive - 1;
+      int spawnY = Mth.clamp(surface + 1, minY, maxY);
       return new BlockPos(spawnX, spawnY, spawnZ);
    }
 
@@ -6333,12 +6348,15 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    private double generatedHeightToElevationMeters(int height, int blockZ, double heightScale) {
-      double projectionScale = this.settings.automaticHeightScaling()
-         ? EarthProjection.heightScaleCorrection(blockZ, this.settings.worldScale())
-         : 1.0;
-      return (height - this.settings.effectiveHeightOffset())
-         * this.settings.effectiveVerticalWorldScale()
-         / (heightScale * projectionScale);
+      return TerrainHeightTransform.elevationMetersFromBlockOffset(
+         height - this.settings.effectiveHeightOffset(),
+         blockZ,
+         this.settings.effectiveVerticalWorldScale(),
+         heightScale,
+         this.settings.effectiveOceanicHeightScale(),
+         this.settings.experimentalIncreaseHeight(),
+         this.settings.automaticHeightScaling()
+      );
    }
 
    public boolean shouldPlaceSnowAt(int worldX, int worldZ) {
@@ -10803,6 +10821,24 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    public int resolveLodTerrainSurface(int worldX, int worldZ, int coverClass, double previewResolutionMeters) {
       int surface = this.sampleSurfaceHeight(worldX, worldZ, previewResolutionMeters);
       return Mth.clamp(surface, this.minY, this.minY + this.height - 1);
+   }
+
+   public double sampleLodTerrainElevationMetersLocalOnly(int worldX, int worldZ, double previewResolutionMeters) {
+      return ELEVATION_SOURCE.samplePreviewElevationMetersLocalOnly(
+         worldX,
+         worldZ,
+         this.settings.worldScale(),
+         false,
+         this.settings.demSelection(),
+         previewResolutionMeters
+      );
+   }
+
+   public double lodTerrainHeightToElevationMeters(int height, int blockZ) {
+      double heightScale = this.settings.effectiveTerrestrialHeightScale();
+      return height == Integer.MIN_VALUE || !(heightScale > 0.0)
+         ? Double.NaN
+         : this.generatedHeightToElevationMeters(height, blockZ, heightScale);
    }
 
    public void repairLodTerrainSurfaceGrid(int[] surfaces, int[] coverClasses, int width) {

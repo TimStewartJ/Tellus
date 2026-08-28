@@ -32,7 +32,10 @@ class EarthGeneratorSettingsCodecTest {
       assertEquals(256, EarthGeneratorSettings.DEFAULT.undergroundDepth());
       assertTrue(EarthGeneratorSettings.DEFAULT.usesTerrainShell());
       assertFalse(EarthGeneratorSettings.DEFAULT.suppressesUndergroundGenerationForTerrainShell());
-      assertFalse(EarthGeneratorSettings.DEFAULT.tellusManagedTerrainDownloads());
+      assertEquals(
+         EarthGeneratorSettings.TerrainStreamingStrategy.AUTOMATIC,
+         EarthGeneratorSettings.DEFAULT.terrainStreamingStrategy()
+      );
       assertFalse(EarthGeneratorSettings.DEFAULT.showTerrainDownloadOverlay());
       assertFalse(EarthGeneratorSettings.DEFAULT.addStrongholds());
       assertFalse(EarthGeneratorSettings.DEFAULT.addVillages());
@@ -210,7 +213,10 @@ class EarthGeneratorSettingsCodecTest {
       assertEquals(192, decoded.undergroundDepth());
       assertTrue(decoded.climateBasedBuiltUpTerrain());
       assertTrue(decoded.randomBiomes());
-      assertFalse(decoded.tellusManagedTerrainDownloads());
+      assertEquals(
+         EarthGeneratorSettings.TerrainStreamingStrategy.LEGACY_COMPATIBILITY,
+         decoded.terrainStreamingStrategy()
+      );
       assertFalse(decoded.showTerrainDownloadOverlay());
       assertFalse(decoded.experimentalIncreaseHeight());
       assertFalse(decoded.automaticHeightScaling());
@@ -246,7 +252,8 @@ class EarthGeneratorSettingsCodecTest {
       assertEquals(192, encodedObject.get("underground_depth").getAsInt());
       assertTrue(encodedObject.get("climate_based_built_up_terrain").getAsBoolean());
       assertTrue(encodedObject.get("random_biomes").getAsBoolean());
-      assertFalse(encodedObject.get("tellus_managed_terrain_downloads").getAsBoolean());
+      assertEquals("legacy_compatibility", encodedObject.get("terrain_streaming_strategy").getAsString());
+      assertFalse(encodedObject.has("tellus_managed_terrain_downloads"));
       assertFalse(encodedObject.get("show_terrain_download_overlay").getAsBoolean());
       assertFalse(encodedObject.get("automatic_height_scaling").getAsBoolean());
       assertEquals(0.25, encodedObject.get("random_biome_density").getAsDouble());
@@ -281,7 +288,10 @@ class EarthGeneratorSettingsCodecTest {
       assertFalse(decoded.experimentalIncreaseHeight());
       assertFalse(decoded.cavesReachSurface());
       assertFalse(decoded.geologicalStonePatches());
-      assertFalse(decoded.tellusManagedTerrainDownloads());
+      assertEquals(
+         EarthGeneratorSettings.TerrainStreamingStrategy.LEGACY_COMPATIBILITY,
+         decoded.terrainStreamingStrategy()
+      );
       assertFalse(decoded.showTerrainDownloadOverlay());
       assertEquals(EarthGeneratorSettings.DEFAULT_RANDOM_BIOME_DENSITY, decoded.randomBiomeDensity());
       assertEquals(EarthGeneratorSettings.DEFAULT_RANDOM_BIOME_SEED, decoded.randomBiomeSeed());
@@ -295,6 +305,46 @@ class EarthGeneratorSettingsCodecTest {
       assertTrue(encodedObject.has("dem_enabled_providers"));
       assertFalse(encodedObject.has("dem_provider"));
       assertEquals(6, encodedObject.get("river_lake_shoreline_blend").getAsInt());
+   }
+
+   @Test
+   void migratesLegacyManagedDownloadsToAutomaticStreaming() {
+      EarthGeneratorSettings decoded = requireSuccess(
+         EarthGeneratorSettings.CODEC.parse(
+            JsonOps.INSTANCE, JsonParser.parseString("{\"tellus_managed_terrain_downloads\":true}")
+         )
+      );
+      JsonObject encoded = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, decoded)).getAsJsonObject();
+
+      assertEquals(EarthGeneratorSettings.TerrainStreamingStrategy.AUTOMATIC, decoded.terrainStreamingStrategy());
+      assertEquals("automatic", encoded.get("terrain_streaming_strategy").getAsString());
+      assertFalse(encoded.has("tellus_managed_terrain_downloads"));
+   }
+
+   @Test
+   void rejectsUnknownTerrainStreamingStrategy() {
+      DataResult<EarthGeneratorSettings> decoded = EarthGeneratorSettings.CODEC.parse(
+         JsonOps.INSTANCE, JsonParser.parseString("{\"terrain_streaming_strategy\":\"surprise_me\"}")
+      );
+
+      assertTrue(decoded.error().isPresent());
+   }
+
+   @Test
+   void bundledEarthPresetExplicitlyEnablesAutomaticStreaming() throws IOException {
+      JsonObject preset = loadFixture("data/tellus/worldgen/world_preset/earth.json").getAsJsonObject();
+      JsonObject generator = preset.getAsJsonObject("dimensions")
+         .getAsJsonObject("minecraft:overworld")
+         .getAsJsonObject("generator");
+
+      assertEquals("automatic", generator.getAsJsonObject("settings").get("terrain_streaming_strategy").getAsString());
+      assertEquals(
+         "automatic",
+         generator.getAsJsonObject("biome_source")
+            .getAsJsonObject("settings")
+            .get("terrain_streaming_strategy")
+            .getAsString()
+      );
    }
 
    private static JsonElement loadFixture(String path) throws IOException {

@@ -271,9 +271,19 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
          this.cache.invalidate(key);
       }
 
-      OsmQueryMode queryMode = ManagedTerrainNetworkPolicy.isCacheOnly()
-         ? OsmQueryMode.BLOCKING
-         : mode == null ? OsmQueryMode.BLOCKING : mode;
+      if (ManagedTerrainNetworkPolicy.isCacheOnly()) {
+         if (this.tileLoadFailures.contains(key)) {
+            return new TellusOsmSandSource.TileLookup(OsmSandTile.empty(), true);
+         }
+         OsmSandTile local = this.loadTile(key);
+         boolean incomplete = local.isEmpty() && this.tileLoadFailures.contains(key);
+         if (!incomplete) {
+            this.cache.put(key, local);
+         }
+         return new TellusOsmSandSource.TileLookup(local, incomplete);
+      }
+
+      OsmQueryMode queryMode = mode == null ? OsmQueryMode.BLOCKING : mode;
       if (queryMode == OsmQueryMode.NON_BLOCKING) {
          this.queueAsyncLoad(key);
          return new TellusOsmSandSource.TileLookup(OsmSandTile.empty(), true);
@@ -350,6 +360,12 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
             }
          }
 
+         if (ManagedTerrainNetworkPolicy.isCacheOnly()) {
+            this.tileLoadFailures.add(key);
+            OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_SAND, OsmPerf.TileLoadPath.FAILURE);
+            return OsmSandTile.empty();
+         }
+
          long generation = TellusCacheRegistry.generation(TellusCacheDomain.OSM);
          byte[] payload = this.fetchTilePayloadWithRetry(key);
          if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.OSM, generation)) {
@@ -388,6 +404,7 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
       if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.OSM, generation) || !this.cacheTile(cachePath, payload, generation)) {
          throw new RuntimeException("Discarded stale Overture sand cache write for " + key);
       }
+      this.tileLoadFailures.remove(key);
    }
 
    private void ensureInitialized() {

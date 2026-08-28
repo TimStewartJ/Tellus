@@ -39,4 +39,14 @@ class ManagedTerrainAvailabilityTest {
       assertEquals(ManagedTerrainAvailability.WAIT, ManagedTerrainAvailability.availability(KEY, 0, 0, 2048));
       assertEquals(ManagedTerrainAvailability.SPLIT, ManagedTerrainAvailability.availability(KEY, 0, 0, 4096));
    }
+
+   @Test
+   void degradedCoverageReleasesGenerationWhileRemainingObservable() {
+      ManagedTerrainCell cell = new ManagedTerrainCell(0, 0);
+
+      ManagedTerrainAvailability.markReady(KEY, cell, true);
+
+      assertEquals(ManagedTerrainAvailability.READY, ManagedTerrainAvailability.availability(KEY, 0, 0, 32));
+      assertEquals(true, ManagedTerrainAvailability.isDegraded(KEY, cell));
+   }
 }

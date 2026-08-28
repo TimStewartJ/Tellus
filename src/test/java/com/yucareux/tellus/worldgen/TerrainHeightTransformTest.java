@@ -119,7 +119,23 @@ class TerrainHeightTransformTest {
                   );
                }
             }
+
          }
       }
+   }
+
+   @Test
+   void generatedHeightInversePreservesHighLatitudeReliefMeters() {
+      double latitude = 63.0695;
+      double blockZ = EarthProjection.latToBlockZ(latitude, ONE_TO_ONE);
+      int blockOffset = TerrainHeightTransform.blockOffset(
+         150.0, blockZ, ONE_TO_ONE, 1.0, 1.0, true, true
+      );
+
+      double restored = TerrainHeightTransform.elevationMetersFromBlockOffset(
+         blockOffset, blockZ, ONE_TO_ONE, 1.0, 1.0, true, true
+      );
+
+      assertEquals(150.0, restored, 1.0);
    }
 }

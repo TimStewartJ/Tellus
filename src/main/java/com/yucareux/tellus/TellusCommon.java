@@ -10,6 +10,7 @@ import com.mojang.serialization.DynamicOps;
 import com.mojang.serialization.JsonOps;
 import com.yucareux.tellus.integration.distant_horizons.DistantHorizonsIntegration;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainDownloadManager;
+import com.yucareux.tellus.integration.geotp.GeoTeleportManager;
 import com.yucareux.tellus.integration.voxy.TellusVoxyPregenManager;
 import com.yucareux.tellus.compat.MinecraftRelease;
 import com.yucareux.tellus.compat.MinecraftVersionCompat;
@@ -82,6 +83,7 @@ public class TellusCommon {
    private static final TellusRealtimeManager REALTIME_MANAGER = new TellusRealtimeManager();
    private static final TellusVoxyPregenManager VOXY_PREGEN_MANAGER = new TellusVoxyPregenManager();
    private static final ManagedTerrainDownloadManager MANAGED_TERRAIN_DOWNLOAD_MANAGER = new ManagedTerrainDownloadManager();
+   private static final GeoTeleportManager GEO_TELEPORT_MANAGER = new GeoTeleportManager();
    public static final Logger LOGGER = LoggerFactory.getLogger("tellus");
 
 
@@ -212,6 +214,7 @@ public class TellusCommon {
          REALTIME_MANAGER.onServerStopping(server);
          VOXY_PREGEN_MANAGER.shutdown();
          MANAGED_TERRAIN_DOWNLOAD_MANAGER.reset();
+         GEO_TELEPORT_MANAGER.onServerStopping();
       });
       runtime.onServerTick(REALTIME_MANAGER::onServerTick);
       runtime.onServerTick(VOXY_PREGEN_MANAGER::onServerTick);
@@ -239,7 +242,10 @@ public class TellusCommon {
          }
       });
       runtime.onPlayerJoin(REALTIME_MANAGER::onPlayerJoin);
-      runtime.onPlayerDisconnect(MANAGED_TERRAIN_DOWNLOAD_MANAGER::onPlayerDisconnect);
+      runtime.onPlayerDisconnect(player -> {
+         MANAGED_TERRAIN_DOWNLOAD_MANAGER.onPlayerDisconnect(player);
+         GEO_TELEPORT_MANAGER.onPlayerDisconnect(player);
+      });
       if (TellusPlatform.isModLoaded("distanthorizons")) {
          DistantHorizonsIntegration.bootstrap();
       }
@@ -615,29 +621,30 @@ public class TellusCommon {
    }
 
    public static void handleGeoTeleport(GeoTpTeleportPayload payload, ServerPlayer player) {
-      if (Double.isFinite(payload.latitude()) && Double.isFinite(payload.longitude())) {
-         MinecraftServer server = MinecraftVersionCompat.serverLevel(player).getServer();
-         if (server == null) {
+      if (!Double.isFinite(payload.latitude()) || !Double.isFinite(payload.longitude())) {
+         player.sendSystemMessage(Component.translatable("tellus.command.geotp.invalid"));
+         return;
+      }
+      MinecraftServer server = MinecraftVersionCompat.serverLevel(player).getServer();
+      if (server == null) {
+         return;
+      }
+
+      server.execute(() -> {
+         if (!TellusMinecraftCompat.hasGamemasterPermission(player.createCommandSourceStack())) {
+            player.sendSystemMessage(Component.translatable("tellus.command.geotp.no_permission"));
             return;
          }
 
-         server.execute(() -> {
-            if (!TellusMinecraftCompat.hasGamemasterPermission(player.createCommandSourceStack())) {
-               player.sendSystemMessage(Component.translatable("tellus.command.geotp.no_permission"));
-               return;
-            }
-
-            ServerLevel level = MinecraftVersionCompat.serverLevel(player);
-            if (level.getChunkSource().getGenerator() instanceof EarthChunkGenerator earthGenerator) {
-               double latitude = clampLatitude(payload.latitude());
-               double longitude = clampLongitude(payload.longitude());
-               BlockPos target = earthGenerator.getSurfacePosition(level, latitude, longitude);
-               player.teleportTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
-            } else {
-               player.sendSystemMessage(Component.translatable("tellus.command.geotp.tellus_world_only"));
-            }
-         });
-      }
+         ServerLevel level = MinecraftVersionCompat.serverLevel(player);
+         if (level.getChunkSource().getGenerator() instanceof EarthChunkGenerator earthGenerator) {
+            GEO_TELEPORT_MANAGER.request(
+               server, player, level, earthGenerator, clampLatitude(payload.latitude()), clampLongitude(payload.longitude())
+            );
+         } else {
+            player.sendSystemMessage(Component.translatable("tellus.command.geotp.tellus_world_only"));
+         }
+      });
    }
 
    public static void handleManagedTerrainView(ManagedTerrainViewPayload payload, ServerPlayer player) {

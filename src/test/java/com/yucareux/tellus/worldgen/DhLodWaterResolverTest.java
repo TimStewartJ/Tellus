@@ -66,6 +66,50 @@ class DhLodWaterResolverTest {
             TellusOsmWaterSource.CoverageStatus.FAILED, OsmQueryMode.NON_BLOCKING
          )
       );
+      assertFalse(
+         DhLodWaterResolver.shouldRetryPendingCoverage(
+            TellusOsmWaterSource.CoverageStatus.PENDING,
+            OsmQueryMode.NON_BLOCKING,
+            DhLodWaterResolver.ResolutionMode.COARSE_CACHE_ONLY
+         )
+      );
+      assertTrue(
+         DhLodWaterResolver.shouldRetryPendingCoverage(
+            TellusOsmWaterSource.CoverageStatus.PENDING,
+            OsmQueryMode.NON_BLOCKING,
+            DhLodWaterResolver.ResolutionMode.EXACT
+         )
+      );
+   }
+
+   @Test
+   void coarseWaterDegradesInsteadOfRejectingIncompleteCoverage() {
+      assertFalse(
+         DhLodWaterResolver.shouldRejectIncompleteCoverage(
+            false, DhLodWaterResolver.ResolutionMode.COARSE_CACHE_ONLY
+         )
+      );
+      assertTrue(
+         DhLodWaterResolver.shouldRejectIncompleteCoverage(false, DhLodWaterResolver.ResolutionMode.EXACT)
+      );
+      assertFalse(
+         DhLodWaterResolver.shouldRejectIncompleteCoverage(
+            false, DhLodWaterResolver.ResolutionMode.EXACT, true
+         )
+      );
+      assertFalse(
+         DhLodWaterResolver.shouldRejectIncompleteCoverage(
+            false, DhLodWaterResolver.ResolutionMode.MANAGED_CACHE_ONLY, false
+         )
+      );
+      assertFalse(
+         DhLodWaterResolver.shouldRetryPendingCoverage(
+            TellusOsmWaterSource.CoverageStatus.PENDING,
+            OsmQueryMode.NON_BLOCKING,
+            DhLodWaterResolver.ResolutionMode.EXACT,
+            true
+         )
+      );
    }
 
    @Test

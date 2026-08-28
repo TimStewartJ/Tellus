@@ -6,8 +6,8 @@ import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiWorldGenerator
 import com.seibel.distanthorizons.api.interfaces.override.worldGenerator.AbstractDhApiChunkWorldGenerator;
 import com.seibel.distanthorizons.api.objects.data.DhApiChunk;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainAvailability;
-import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainCompatibility;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
+import com.yucareux.tellus.integration.distant_horizons.managed.TerrainStreamingPolicy;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -51,7 +51,7 @@ public final class TellusChunkLodGenerator extends AbstractDhApiChunkWorldGenera
    }
 
    private boolean managedDownloadsActive() {
-      return this.generator.settings().tellusManagedTerrainDownloads() && ManagedTerrainCompatibility.isGenerationGateAvailable();
+      return TerrainStreamingPolicy.managedDownloadsActive(this.generator.settings());
    }
 
    public Object[] generateChunk(int chunkPosX, int chunkPosZ, EDhApiDistantGeneratorMode generatorMode) {
