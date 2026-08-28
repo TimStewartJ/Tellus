@@ -785,6 +785,16 @@ public class Config
 							+ "")
 						.build();
 					
+					public static ConfigEntry<Boolean> enableNativeChunkReadinessHandoff = new ConfigEntry.Builder<Boolean>()
+						.set(false)
+						.comment(""
+							+ "Experimental Minecraft 26.2 Sodium integration.\n"
+							+ "Keeps each nearby DH chunk visible until every native render section\n"
+							+ "in that chunk has been built, then fades the DH chunk away.\n"
+							+ "\n"
+							+ "Unsupported renderers and shader packs retain normal overdraw prevention.\n"
+							+ "")
+						.build();
 					public static ConfigUISpacer speedSpacer = new ConfigUISpacer.Builder().build();
 					
 					public static ConfigEntry<Boolean> enableCaveCulling = new ConfigEntry.Builder<Boolean>()

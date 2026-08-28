@@ -71,6 +71,11 @@ public class GlDhTerrainShaderProgram extends GlShaderProgram implements IDhApiS
 	// fragment shader uniforms
 	public int uClipDistance = -1;
 	public int uDitherDhRendering = -1;
+	public int uNativeReadinessSampler = -1;
+	public int uNativeReadinessEnabled = -1;
+	public int uNativeReadinessMaskMinOffset = -1;
+	public int uNativeReadinessMaskSize = -1;
+	public int uNativeReadinessCameraSubChunk = -1;
 	
 	// Noise Uniforms
 	public int uNoiseEnabled = -1;
@@ -119,6 +124,11 @@ public class GlDhTerrainShaderProgram extends GlShaderProgram implements IDhApiS
 		
 		// Fog/Clip Uniforms
 		this.uClipDistance = this.getUniformLocation("uClipDistance");
+		this.uNativeReadinessSampler = this.getUniformLocation(GlNativeChunkReadinessTexture.SAMPLER_NAME);
+		this.uNativeReadinessEnabled = this.getUniformLocation("dhNativeReadinessEnabled");
+		this.uNativeReadinessMaskMinOffset = this.getUniformLocation("dhNativeReadinessMaskMinOffset");
+		this.uNativeReadinessMaskSize = this.getUniformLocation("dhNativeReadinessMaskSize");
+		this.uNativeReadinessCameraSubChunk = this.getUniformLocation("dhNativeReadinessCameraSubChunk");
 		
 		// Noise Uniforms
 		this.uNoiseEnabled = this.getUniformLocation("uNoiseEnabled");
@@ -251,6 +261,16 @@ public class GlDhTerrainShaderProgram extends GlShaderProgram implements IDhApiS
 			dhNearClipDistance += 16f;
 		}
 		this.setUniform(this.uClipDistance, dhNearClipDistance);
+		boolean irisShaderActive = IRIS_ACCESSOR != null && IRIS_ACCESSOR.isShaderPackInUse();
+		boolean readinessPrepared = !irisShaderActive
+			&& GlNativeChunkReadinessTexture.INSTANCE.prepareForDefaultShader();
+		GlNativeChunkReadinessTexture.INSTANCE.applyDefaultShaderUniforms(
+			readinessPrepared,
+			this.uNativeReadinessSampler,
+			this.uNativeReadinessEnabled,
+			this.uNativeReadinessMaskMinOffset,
+			this.uNativeReadinessMaskSize,
+			this.uNativeReadinessCameraSubChunk);
 	}
 	
 	@Override

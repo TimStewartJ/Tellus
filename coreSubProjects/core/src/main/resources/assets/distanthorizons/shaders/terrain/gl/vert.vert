@@ -8,6 +8,7 @@ in uvec4 irisData;
 out vec4 vPos;
 out vec4 vertexColor;
 out vec3 vertexWorldPos;
+out vec2 nativeReadinessRelativeBlockPos;
 out float vertexYPos;
 // block-grid position used to generate texture UVs, fract() of this repeats per block
 out vec3 vBlockPos;
@@ -44,6 +45,7 @@ void main()
     vTextureTileId = irisData.z | (irisData.w << 8u);
     
     vertexWorldPos = vPosition.xyz + uModelOffset;
+    nativeReadinessRelativeBlockPos = vertexWorldPos.xz;
     
     vertexYPos = vPosition.y + uWorldYOffset;
     

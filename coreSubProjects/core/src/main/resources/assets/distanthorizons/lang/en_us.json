@@ -368,6 +368,10 @@
     "Reduce Overdraw With Fast Movement",
   "distanthorizons.config.client.advanced.graphics.culling.reduceOverdrawWithFastMovement.@tooltip":
     "If set to true the overdraw prevention radius will get closer \nto the camera when flying/moving quickly. \n\nThis helps reduce issues where Minecraft can't load or \ngenerate chunks fast enough to keep up with DH.",
+  "distanthorizons.config.client.advanced.graphics.culling.enableNativeChunkReadinessHandoff":
+    "Native Chunk Readiness Handoff",
+  "distanthorizons.config.client.advanced.graphics.culling.enableNativeChunkReadinessHandoff.@tooltip":
+    "Experimental Minecraft 26.2 + Sodium prototype. \n\nKeeps each nearby DH chunk visible until all of its native render sections are built, then fades the DH chunk away. \n\nUnsupported renderers and shader packs retain normal overdraw prevention.",
   "distanthorizons.config.client.advanced.graphics.culling.enableCaveCulling":
     "Enable Cave Culling",
   "distanthorizons.config.client.advanced.graphics.culling.enableCaveCulling.@tooltip":

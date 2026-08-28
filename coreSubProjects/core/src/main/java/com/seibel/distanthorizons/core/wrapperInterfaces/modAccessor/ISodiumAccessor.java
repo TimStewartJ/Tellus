@@ -19,11 +19,17 @@
 
 package com.seibel.distanthorizons.core.wrapperInterfaces.modAccessor;
 
-import com.seibel.distanthorizons.core.pos.DhChunkPos;
-
-import java.util.HashSet;
-
 public interface ISodiumAccessor extends IModAccessor
 {
+	/**
+	 * Fills a row-major chunk grid with {@code 0xFF} for native chunk columns
+	 * whose render sections are all built and {@code 0x00} otherwise.
+	 *
+	 * @return false when this Sodium version does not expose usable readiness state
+	 */
+	boolean fillNativeChunkRenderReadinessMask(
+		int minChunkX, int minChunkZ,
+		int width, int height,
+		byte[] output);
 	
 }

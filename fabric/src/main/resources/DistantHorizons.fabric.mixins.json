@@ -23,7 +23,12 @@
     "client.MixinLightTexture",
     "client.MixinMinecraft",
     "client.MixinOptionsScreen",
-    "client.MixinSharedConstants"
+    "client.MixinSharedConstants",
+    "mods.sodium.MixinSodiumRenderSectionNativeChunkReadiness",
+    "mods.sodium.MixinSodiumRenderSectionManagerNativeChunkReadiness",
+    "mods.iris.MixinIrisTransformPatcherNativeChunkReadiness",
+    "mods.iris.MixinIrisLodRenderProgramNativeChunkReadiness",
+    "mods.iris.MixinIrisRenderingPipelineNativeChunkReadiness"
   ],
   "server": [],
   "injectors": {

@@ -26,6 +26,7 @@ import java.lang.invoke.MethodType;
 import com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
+import com.seibel.distanthorizons.core.render.nativeReadiness.NativeChunkRenderReadinessTracker;
 import com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper;
 import com.seibel.distanthorizons.core.wrapperInterfaces.modAccessor.ISodiumAccessor;
 import net.minecraft.client.Minecraft;
@@ -68,7 +69,18 @@ public class SodiumAccessor implements ISodiumAccessor
 	@Override
 	public String getModName() { return "Sodium-Fabric"; }
 	
-	
+	@Override
+	public boolean fillNativeChunkRenderReadinessMask(
+			int minChunkX, int minChunkZ,
+			int width, int height,
+			byte[] output)
+	{
+		return NativeChunkRenderReadinessTracker.INSTANCE.fillReadinessMask(
+			minChunkX, minChunkZ,
+			width, height,
+			output);
+	}
+
 	
 	//================//
 	// helper methods //

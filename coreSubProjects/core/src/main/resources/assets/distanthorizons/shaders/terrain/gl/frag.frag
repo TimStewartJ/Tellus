@@ -3,6 +3,7 @@
 in vec4 vPos;
 in vec4 vertexColor;
 in vec3 vertexWorldPos;
+in vec2 nativeReadinessRelativeBlockPos;
 in vec3 vBlockPos;
 flat in uint vNormalIndex;
 flat in uint vTextureTileId;
@@ -25,6 +26,12 @@ uniform int uNoiseSteps;
 uniform float uNoiseIntensity;
 uniform int uNoiseDropoff;
 uniform bool uDitherDhRendering;
+
+uniform sampler2D dhNativeReadinessTexture;
+uniform ivec2 dhNativeReadinessMaskMinOffset;
+uniform ivec2 dhNativeReadinessMaskSize;
+uniform vec2 dhNativeReadinessCameraSubChunk;
+uniform bool dhNativeReadinessEnabled;
 
 
 // The random functions for diffrent dimentions
@@ -90,6 +97,25 @@ float bayerMatrix4x4(vec2 st)
     return bayer4x4[index] / 16.0;
 }
 
+float nativeReadinessAtFragment()
+{
+    if (!dhNativeReadinessEnabled)
+    {
+        return 1.0;
+    }
+
+    ivec2 relativeChunk = ivec2(floor(
+        (nativeReadinessRelativeBlockPos + dhNativeReadinessCameraSubChunk) / 16.0));
+    ivec2 texel = relativeChunk - dhNativeReadinessMaskMinOffset;
+    if (any(lessThan(texel, ivec2(0)))
+        || any(greaterThanEqual(texel, dhNativeReadinessMaskSize)))
+    {
+        return 1.0;
+    }
+
+    return texelFetch(dhNativeReadinessTexture, texel, 0).r;
+}
+
 
 
 /**
@@ -146,6 +172,8 @@ void main()
         worldNoise += 0.001;
         
         float fadeStep = smoothstep(uClipDistance, uClipDistance * 1.5, viewDist);
+        float nativeReadiness = nativeReadinessAtFragment();
+        fadeStep = 1.0 - nativeReadiness * (1.0 - fadeStep);
         if (fadeStep <= worldNoise)
         {
             discard;
@@ -155,7 +183,11 @@ void main()
     {
         if (viewDist < uClipDistance && uClipDistance > 0.0)
         {
-            discard;
+            if (!dhNativeReadinessEnabled
+                || nativeReadinessAtFragment() > bayerMatrix4x4(gl_FragCoord.xy))
+            {
+                discard;
+            }
         }
     }
     

@@ -20,6 +20,12 @@ public class FabricMixinPlugin extends AbstractDhMixinPlugin implements IMixinCo
 	@Override
 	public boolean shouldApplyMixin(String targetClassName, String mixinClassName)
 	{
+		if (mixinClassName.contains("NativeChunkReadiness"))
+		{
+			#if MC_VER != MC_26_2_0
+			return false;
+			#endif
+		}
 		if (mixinClassName.contains(".mods."))
 		{
 			String cleanedMixinName = mixinClassName
