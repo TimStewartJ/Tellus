@@ -78,3 +78,18 @@ tasks.register('benchmarkTileDecode', JavaExec) {
 	args providers.gradleProperty('tileDir').getOrElse(layout.buildDirectory.dir('chunkgen-benchmark-game/tellus/cache/elevation-mapterhorn').get().asFile.absolutePath)
 	args providers.gradleProperty('tileRounds').getOrElse('4')
 }
+
+tasks.register('benchmarkCarverPreparation', JavaExec) {
+	group = 'verification'
+	description = 'Measures vanilla cave-field planning serialized versus in parallel fill workers.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yucareux.tellus.worldgen.CarverPreparationBenchmark'
+	maxHeapSize = providers.gradleProperty('carverBenchHeap').getOrElse('4g')
+	def extraJvmArgs = providers.gradleProperty('carverBenchJvmArgs').orNull
+	if (extraJvmArgs) {
+		jvmArgs extraJvmArgs.split(' ')
+	}
+	args "--radius=${providers.gradleProperty('carverBenchRadius').getOrElse('6')}"
+	args "--threads=${providers.gradleProperty('carverBenchThreads').getOrElse('16')}"
+	args "--rounds=${providers.gradleProperty('carverBenchRounds').getOrElse('3')}"
+}

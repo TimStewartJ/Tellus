@@ -79,6 +79,7 @@ public final class ChunkGenerationBenchmark {
       java.lang.reflect.Field worldSeed = EarthChunkGenerator.class.getDeclaredField("worldSeed");
       worldSeed.setAccessible(true);
       worldSeed.setLong(generator, options.seed());
+      generator.initializeParallelCarverPreparation((RegistryAccess)registries);
 
       int minY = generator.getMinY();
       int height = generator.getGenDepth();
@@ -112,11 +113,15 @@ public final class ChunkGenerationBenchmark {
       );
       System.out.printf(
          Locale.ROOT,
-         "CHUNKGEN_BENCH_FLAGS fastFullChunk=%s nonBlockingTerrainInputs=%s deferTerrainRefinement=%s legacyBlocking=%s fullChunkPerf=%s chunkgenTiming=%s availableProcessors=%d maxHeapMb=%d%n",
+         "CHUNKGEN_BENCH_FLAGS fastFullChunk=%s nonBlockingTerrainInputs=%s deferTerrainRefinement=%s legacyBlocking=%s "
+            + "prepareDecorationColumns=%s parallelCarverPreparation=%s fullChunkPerf=%s chunkgenTiming=%s "
+            + "availableProcessors=%d maxHeapMb=%d%n",
          System.getProperty("tellus.chunkgen.fastFullChunk", "true"),
          System.getProperty("tellus.chunkgen.nonBlockingTerrainInputs", "false"),
          System.getProperty("tellus.chunkgen.deferTerrainRefinement", "false"),
          System.getProperty("tellus.chunkdetail.legacyBlocking", "true"),
+         System.getProperty("tellus.chunkgen.prepareDecorationColumns", "true"),
+         System.getProperty("tellus.chunkgen.parallelCarverPreparation", "true"),
          System.getProperty("tellus.debug.fullChunkPerf", "false"),
          System.getProperty("tellus.chunkgen.timing", "false"),
          Runtime.getRuntime().availableProcessors(),
@@ -334,7 +339,7 @@ public final class ChunkGenerationBenchmark {
     * {@code VanillaRegistries.createLookup()} leaves tags unbound, which the
     * surface palette code dereferences).
     */
-   private static RegistryAccess.Frozen loadServerRegistries() {
+   static RegistryAccess.Frozen loadServerRegistries() {
       VanillaPackResources vanilla = ServerPacksSource.createVanillaPackSource();
       CloseableResourceManager resourceManager = new MultiPackResourceManager(PackType.SERVER_DATA, List.of(vanilla));
       LayeredRegistryAccess<RegistryLayer> layered = RegistryLayer.createRegistryAccess();

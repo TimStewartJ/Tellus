@@ -1,5 +1,7 @@
 package com.yucareux.tellus.worldgen;
 
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.mojang.datafixers.util.Pair;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.preload.TerrainPreloadPackage;
@@ -40,6 +42,7 @@ import com.yucareux.tellus.worldgen.building.TellusBuildingProfiles;
 import com.yucareux.tellus.worldgen.caves.TellusCaveDepthMapper;
 import com.yucareux.tellus.worldgen.caves.TellusNoiseSettingsAdapter;
 import com.yucareux.tellus.worldgen.caves.TellusVanillaCarverRunner;
+import com.yucareux.tellus.worldgen.caves.TellusVanillaNoiseCaveSampler;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
@@ -252,6 +255,22 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       "tellus.chunkgen.surfaceMode", EarthChunkGenerator.SurfaceMode.TWO_TIER
    );
    private static final int HEIGHT_GRID_CACHE_ENTRIES = intProperty("tellus.chunkgen.heightGrid.cacheEntries", 512, 0, 8192);
+   private static final boolean PARALLEL_CARVER_PREPARATION = Boolean.parseBoolean(
+      System.getProperty("tellus.chunkgen.parallelCarverPreparation", "true")
+   );
+   private static final boolean PREPARE_DECORATION_COLUMNS = Boolean.parseBoolean(
+      System.getProperty("tellus.chunkgen.prepareDecorationColumns", "true")
+   );
+   private static final int PREPARED_CAVE_PLAN_CACHE_MIB = intProperty(
+      "tellus.chunkgen.preparedCavePlanCacheMiB",
+      PreparedChunkWorkBudget.cavePlanCacheMiB(
+         Runtime.getRuntime().maxMemory(), Runtime.getRuntime().availableProcessors()
+      ),
+      0,
+      512
+   );
+   private static final long PREPARED_CAVE_PLAN_CACHE_BYTES =
+      (long)PREPARED_CAVE_PLAN_CACHE_MIB * 1024L * 1024L;
    private static final boolean CHUNK_DETAIL_DEFER_ROADS = Boolean.parseBoolean(System.getProperty("tellus.chunkdetail.deferRoads", "false"));
    private static final boolean CHUNK_DETAIL_DEFER_BUILDINGS = Boolean.parseBoolean(System.getProperty("tellus.chunkdetail.deferBuildings", "false"));
    private static final boolean CHUNK_DETAIL_DEFER_DETAILED_WATER = Boolean.parseBoolean(System.getProperty("tellus.chunkdetail.deferDetailedWater", "false"));
@@ -389,6 +408,14 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private final Map<Long, EarthChunkGenerator.PreparedChunkBuildings> preparedChunkBuildings = new ConcurrentHashMap<>();
    private final Map<Long, EarthChunkGenerator.PreparedChunkRoadLights> preparedChunkRoadLights = new ConcurrentHashMap<>();
    private final Map<Long, EarthChunkGenerator.ChunkDecorationContext> chunkDecorationContexts = new ConcurrentHashMap<>();
+   private final Cache<Long, EarthChunkGenerator.PreparedCarverData> preparedCavePlans =
+      CacheBuilder.<Long, EarthChunkGenerator.PreparedCarverData>newBuilder()
+         .maximumWeight(PREPARED_CAVE_PLAN_CACHE_BYTES)
+         .weigher(
+            (Long key, EarthChunkGenerator.PreparedCarverData data) ->
+               data.estimatedBytes()
+         )
+         .build();
    private final ConcurrentHashMap<Long, Long> preparedChunkStateTouchedAt = new ConcurrentHashMap<>();
    private final EarthChunkGenerator.HeightGridCache heightGridCache = new EarthChunkGenerator.HeightGridCache(HEIGHT_GRID_CACHE_ENTRIES);
    private final EarthChunkGenerator.ChunkDetailManager chunkDetailManager = new EarthChunkGenerator.ChunkDetailManager();
@@ -449,6 +476,17 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return this.settings;
    }
 
+   public void initializeParallelCarverPreparation(RegistryAccess registryAccess) {
+      if (PARALLEL_CARVER_PREPARATION
+         && PREPARED_CAVE_PLAN_CACHE_BYTES > 0L
+         && !this.settings.suppressesUndergroundGenerationForTerrainShell()
+         && (this.settings.caveGeneration()
+            || this.settings.oreDistribution()
+            || this.settings.geologicalStonePatches())) {
+         this.getTellusCarverRunner(registryAccess);
+      }
+   }
+
    public boolean shouldSuppressWaterSourceConversion(int blockX, int blockZ) {
       return this.waterResolver.shouldSuppressWaterSourceConversion(blockX, blockZ);
    }
@@ -467,6 +505,17 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          blockZ,
          this::sampleSurfaceHeight
       );
+   }
+
+   public int getPreparedUndergroundPlacementBottomY(int blockX, int blockZ) {
+      EarthChunkGenerator.ChunkDecorationContext context = this.chunkDecorationContexts.get(
+         ChunkPos.asLong(blockX >> 4, blockZ >> 4)
+      );
+      return context == null
+         ? Integer.MIN_VALUE
+         : UndergroundSurfaceGrid.columnValue(
+            context.undergroundBottomYs(), blockX, blockZ
+         );
    }
 
    public boolean isUndergroundStructureFeaturePlacementBlocked(int blockX, int blockY, int blockZ) {
@@ -615,6 +664,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       this.preparedChunkBuildings.remove(chunkKey);
       this.preparedChunkRoadLights.remove(chunkKey);
       this.chunkDecorationContexts.remove(chunkKey);
+      this.preparedCavePlans.invalidate(chunkKey);
       this.preparedChunkStateTouchedAt.remove(chunkKey);
    }
 
@@ -625,7 +675,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private void clearPreparedChunkStateTracking(long chunkKey) {
       if (!this.preparedChunkBuildings.containsKey(chunkKey)
          && !this.preparedChunkRoadLights.containsKey(chunkKey)
-         && !this.chunkDecorationContexts.containsKey(chunkKey)) {
+         && !this.chunkDecorationContexts.containsKey(chunkKey)
+         && this.preparedCavePlans.getIfPresent(chunkKey) == null) {
          this.preparedChunkStateTouchedAt.remove(chunkKey);
       }
    }
@@ -649,6 +700,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             this.preparedChunkBuildings.remove(chunkKey);
             this.preparedChunkRoadLights.remove(chunkKey);
             this.chunkDecorationContexts.remove(chunkKey);
+            this.preparedCavePlans.invalidate(chunkKey);
          }
       }
    }
@@ -725,6 +777,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       List<UndergroundStructureExclusion.Box> structureExclusions =
          this.collectUndergroundStructureExclusions(structures, chunk.getPos());
       long chunkKey = ChunkPos.asLong(chunk.getPos().x, chunk.getPos().z);
+      EarthChunkGenerator.PreparedCarverData preparedCarverData =
+         this.preparedCavePlans.asMap().remove(chunkKey);
       this.chunkDecorationContexts.computeIfPresent(
          chunkKey,
          (ignored, context) -> context.withUndergroundStructureExclusions(structureExclusions)
@@ -739,55 +793,19 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          if ((applyCaves || applyOreVeins || applyGeologicalStonePatches)
             && !this.settings.suppressesUndergroundGenerationForTerrainShell()) {
             long phaseStartNs = beginFullChunkProfiling();
-            boolean[] waterFlags = new boolean[CHUNK_AREA];
-            int[] terrainSurfaceYByColumn = new int[CHUNK_AREA];
-            WaterSurfaceResolver.WaterChunkData waterData = this.resolveChunkWaterData(chunk.getPos());
-            int waterColumnCount = 0;
-
-            for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
-               for (int localX = 0; localX < CHUNK_SIDE; localX++) {
-                  boolean hasWater = waterData.hasWater(localX, localZ);
-                  int index = chunkIndex(localX, localZ);
-                  waterFlags[index] = hasWater;
-                  terrainSurfaceYByColumn[index] = waterData.terrainSurface(localX, localZ);
-                  if (hasWater) {
-                     waterColumnCount++;
-                  }
-               }
-            }
-
-            boolean[] floodGuardColumns = computeFloodGuardColumns(waterFlags);
-            int defaultFloodGuardY = this.seaLevel - SPAGHETTI_WATER_GUARD_DEPTH;
-            int[] floodGuardYByColumn = new int[CHUNK_AREA];
-            Arrays.fill(floodGuardYByColumn, Integer.MAX_VALUE);
-
-            for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
-               for (int localXx = 0; localXx < CHUNK_SIDE; localXx++) {
-                  int index = chunkIndex(localXx, localZ);
-                  if (floodGuardColumns[index]) {
-                     floodGuardYByColumn[index] = defaultFloodGuardY;
-                  }
-               }
-            }
-
-            if (waterColumnCount >= Math.ceil(CHUNK_AREA * OCEAN_CHUNK_CARVER_GUARD_RATIO)) {
-               for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
-                  for (int localXxx = 0; localXxx < CHUNK_SIDE; localXxx++) {
-                     int index = chunkIndex(localXxx, localZ);
-                     if (floodGuardColumns[index] && waterData.hasWater(localXxx, localZ)) {
-                        int terrainSurface = waterData.terrainSurface(localXxx, localZ);
-                        int oceanFloorGuardY = Math.max(chunk.getMinBuildHeight(), terrainSurface - OCEAN_CARVER_FLOOR_BUFFER);
-                        floodGuardYByColumn[index] = Math.min(floodGuardYByColumn[index], oceanFloorGuardY);
-                     }
-                  }
-               }
-            }
-
+            EarthChunkGenerator.CarverColumnData carverColumns = preparedCarverData != null
+               ? preparedCarverData.columns()
+               : this.buildCarverColumnData(
+                  chunk.getMinBuildHeight(), this.resolveChunkWaterData(chunk.getPos())
+               );
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.CARVERS_WATER_GUARD, phaseStartNs);
+            recordFullChunkProfilingCount(
+               preparedCarverData != null
+                  ? EarthChunkGenerator.FullChunkPhase.CARVERS_PREPARED_HIT
+                  : EarthChunkGenerator.FullChunkPhase.CARVERS_PREPARED_MISS,
+               1
+            );
             phaseStartNs = beginFullChunkProfiling();
-            int[] generationFloorYByColumn = this.settings.usesTerrainShell()
-               ? this.computeCarverGenerationFloorYByColumn(chunk, waterData)
-               : null;
             this.getTellusCarverRunner(level.registryAccess())
                .applyCarvers(
                   level,
@@ -800,11 +818,12 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                   this.settings.cavesReachSurface(),
                   applyOreVeins,
                   applyGeologicalStonePatches,
-                  terrainSurfaceYByColumn,
+                  carverColumns.terrainSurfaceYByColumn(),
                   this::sampleSurfaceHeight,
-                  floodGuardYByColumn,
-                  generationFloorYByColumn,
-                  structureExclusions
+                  carverColumns.floodGuardYByColumn(),
+                  carverColumns.generationFloorYByColumn(),
+                  structureExclusions,
+                  preparedCarverData != null ? preparedCarverData.plan() : null
                );
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.CARVERS_RUNNER, phaseStartNs);
          }
@@ -814,6 +833,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       } catch (RuntimeException | Error error) {
          EarthChunkGenerator.FullChunkPerf.finishTrace(timingTrace, "failed", error);
          throw error;
+      } finally {
+         this.clearPreparedChunkStateTracking(chunkKey);
       }
    }
 
@@ -992,6 +1013,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          EarthChunkGenerator.FullChunkPerf.finishTrace(timingTrace, "success", null);
          return Objects.requireNonNull(CompletableFuture.completedFuture(chunk), "completedFuture");
       } catch (RuntimeException | Error error) {
+         this.discardPreparedChunkState(chunk.getPos());
          EarthChunkGenerator.FullChunkPerf.finishTrace(timingTrace, "failed", error);
          throw error;
       }
@@ -1201,11 +1223,6 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          recordFullChunkProfilingCount(EarthChunkGenerator.FullChunkPhase.FILL_BIOME_CACHE_KOPPEN_MISS, climateCache.missCount());
       }
       recordFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.FILL_BLOCKS_SURFACE_COVER_RESOLVE, surfaceCoverResolveNs);
-      this.chunkDecorationContexts.put(
-         chunkKey, EarthChunkGenerator.ChunkDecorationContext.capture(pos, terrainSurfaces, waterFlags, coverClasses, biomeCache)
-      );
-      this.markPreparedChunkState(chunkKey);
-
       EarthChunkGenerator.TerrainWarmupTicket warmupTicket = new EarthChunkGenerator.TerrainWarmupTicket(
          heightGridResult.missingCount(), shellCoverMisses, shellVisualCoverMisses, waterData.approximate(), heightGridResult.usedFallback()
       );
@@ -1628,6 +1645,42 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          this.carveStructureClearanceVolumes(structures, chunk);
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.FILL_STRUCTURE_CLEARANCE, phaseStartNs);
       }
+
+      phaseStartNs = beginFullChunkProfiling();
+      int[] undergroundBottomYs = PREPARE_DECORATION_COLUMNS
+         ? this.computeUndergroundPlacementBottomYs(chunk, terrainSurfaces)
+         : null;
+      this.chunkDecorationContexts.put(
+         chunkKey,
+         EarthChunkGenerator.ChunkDecorationContext.capture(
+            pos,
+            terrainSurfaces,
+            undergroundBottomYs,
+            waterFlags,
+            coverClasses,
+            biomeCache
+         )
+      );
+      this.markPreparedChunkState(chunkKey);
+      endFullChunkProfiling(
+         EarthChunkGenerator.FullChunkPhase.FILL_DECORATION_PREP, phaseStartNs
+      );
+
+      phaseStartNs = beginFullChunkProfiling();
+      EarthChunkGenerator.PreparedCarverData preparedCarverData = this.prepareCarverData(
+         pos, chunkMinY, waterData
+      );
+      if (preparedCarverData != null) {
+         this.preparedCavePlans.put(chunkKey, preparedCarverData);
+         this.markPreparedChunkState(chunkKey);
+         recordFullChunkProfilingCount(
+            EarthChunkGenerator.FullChunkPhase.FILL_CARVER_PREP_MUTATIONS,
+            preparedCarverData.plan().mutationCount()
+         );
+      }
+      endFullChunkProfiling(
+         EarthChunkGenerator.FullChunkPhase.FILL_CARVER_PREP, phaseStartNs
+      );
    }
 
    private static void validateExperimentalChunkBounds(EarthGeneratorSettings settings, ChunkPos pos) {
@@ -3392,16 +3445,152 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return result;
    }
 
-   private int[] computeCarverGenerationFloorYByColumn(ChunkAccess chunk, WaterSurfaceResolver.WaterChunkData waterData) {
+   private EarthChunkGenerator.PreparedCarverData prepareCarverData(
+      ChunkPos pos, int chunkMinY, WaterSurfaceResolver.WaterChunkData waterData
+   ) {
+      TellusVanillaCarverRunner runner = this.tellusCarverRunner;
+      if (!PARALLEL_CARVER_PREPARATION
+         || PREPARED_CAVE_PLAN_CACHE_BYTES <= 0L
+         || runner == null
+         || this.settings.suppressesUndergroundGenerationForTerrainShell()) {
+         return null;
+      }
+
+      boolean applyCaves = !SharedConstants.DEBUG_DISABLE_CARVERS
+         && this.settings.caveGeneration();
+      boolean applyOreVeins = this.settings.oreDistribution();
+      boolean applyGeologicalStonePatches = this.settings.geologicalStonePatches();
+      if (!applyCaves && !applyOreVeins && !applyGeologicalStonePatches) {
+         return null;
+      }
+
+      EarthChunkGenerator.CarverColumnData columns = this.buildCarverColumnData(
+         chunkMinY, waterData
+      );
+      TellusVanillaNoiseCaveSampler.PreparedVanillaCavePlan plan =
+         runner.prepareVanillaNoise(
+            pos,
+            this.seaLevel,
+            applyCaves,
+            this.settings.cavesReachSurface(),
+            applyOreVeins,
+            applyGeologicalStonePatches,
+            columns.terrainSurfaceYByColumn(),
+            this::sampleSurfaceHeight,
+            columns.floodGuardYByColumn(),
+            columns.generationFloorYByColumn()
+         );
+      return new EarthChunkGenerator.PreparedCarverData(columns, plan);
+   }
+
+   /**
+    * Snapshot used by the one-time vanilla decoration pass. It is captured after fill has written
+    * shell/structure-protection bedrock; carvers preserve bedrock. If underground decoration is
+    * ever replayed after terrain refinement, that path must recapture these bottoms first.
+    */
+   private int[] computeUndergroundPlacementBottomYs(
+      ChunkAccess chunk, int[] terrainSurfaces
+   ) {
+      int chunkMinY = chunk.getMinBuildHeight();
+      if (!this.settings.usesTerrainShell()) {
+         return UndergroundSurfaceGrid.usableBottomYByColumn(
+            terrainSurfaces, null, this.settings.undergroundDepth(), chunkMinY
+         );
+      }
+
+      int[] bottoms = new int[CHUNK_AREA];
+      BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+      int chunkMinX = chunk.getPos().getMinBlockX();
+      int chunkMinZ = chunk.getPos().getMinBlockZ();
+      for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
+         for (int localX = 0; localX < CHUNK_SIDE; localX++) {
+            int index = chunkIndex(localX, localZ);
+            int surfaceY = terrainSurfaces[index];
+            int searchBottomY = UndergroundGenerationDepthPolicy.deepestGenerationY(
+               surfaceY, this.settings.undergroundDepth(), chunkMinY
+            );
+            int usableBottomY = searchBottomY;
+            cursor.set(chunkMinX + localX, surfaceY - 1, chunkMinZ + localZ);
+            for (int y = surfaceY - 1; y >= searchBottomY; y--) {
+               cursor.setY(y);
+               if (chunk.getBlockState(cursor).is(Blocks.BEDROCK)) {
+                  usableBottomY = Math.min(surfaceY - 1, y + 1);
+                  break;
+               }
+            }
+            bottoms[index] = usableBottomY;
+         }
+      }
+      return bottoms;
+   }
+
+   private EarthChunkGenerator.CarverColumnData buildCarverColumnData(
+      int chunkMinY, WaterSurfaceResolver.WaterChunkData waterData
+   ) {
+      boolean[] waterFlags = new boolean[CHUNK_AREA];
+      int[] terrainSurfaceYByColumn = new int[CHUNK_AREA];
+      int waterColumnCount = 0;
+      for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
+         for (int localX = 0; localX < CHUNK_SIDE; localX++) {
+            int index = chunkIndex(localX, localZ);
+            boolean hasWater = waterData.hasWater(localX, localZ);
+            waterFlags[index] = hasWater;
+            terrainSurfaceYByColumn[index] = waterData.terrainSurface(localX, localZ);
+            if (hasWater) {
+               waterColumnCount++;
+            }
+         }
+      }
+
+      boolean[] floodGuardColumns = computeFloodGuardColumns(waterFlags);
+      int[] floodGuardYByColumn = new int[CHUNK_AREA];
+      Arrays.fill(floodGuardYByColumn, Integer.MAX_VALUE);
+      int defaultFloodGuardY = this.seaLevel - SPAGHETTI_WATER_GUARD_DEPTH;
+      for (int index = 0; index < CHUNK_AREA; index++) {
+         if (floodGuardColumns[index]) {
+            floodGuardYByColumn[index] = defaultFloodGuardY;
+         }
+      }
+
+      if (waterColumnCount >= Math.ceil(CHUNK_AREA * OCEAN_CHUNK_CARVER_GUARD_RATIO)) {
+         for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
+            for (int localX = 0; localX < CHUNK_SIDE; localX++) {
+               int index = chunkIndex(localX, localZ);
+               if (floodGuardColumns[index] && waterData.hasWater(localX, localZ)) {
+                  int terrainSurface = waterData.terrainSurface(localX, localZ);
+                  int oceanFloorGuardY = Math.max(
+                     chunkMinY, terrainSurface - OCEAN_CARVER_FLOOR_BUFFER
+                  );
+                  floodGuardYByColumn[index] = Math.min(
+                     floodGuardYByColumn[index], oceanFloorGuardY
+                  );
+               }
+            }
+         }
+      }
+
+      int[] generationFloorYByColumn = this.settings.usesTerrainShell()
+         ? this.computeCarverGenerationFloorYByColumn(chunkMinY, waterData)
+         : null;
+      return new EarthChunkGenerator.CarverColumnData(
+         terrainSurfaceYByColumn, floodGuardYByColumn, generationFloorYByColumn
+      );
+   }
+
+   private int[] computeCarverGenerationFloorYByColumn(
+      int chunkMinY, WaterSurfaceResolver.WaterChunkData waterData
+   ) {
       int[] result = new int[CHUNK_AREA];
-      int minY = chunk.getMinBuildHeight();
 
       for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
          for (int localX = 0; localX < CHUNK_SIDE; localX++) {
             int index = chunkIndex(localX, localZ);
             int terrainSurface = waterData.terrainSurface(localX, localZ);
             result[index] = Math.max(
-               minY, UndergroundGenerationDepthPolicy.generationFloorY(terrainSurface, this.settings.undergroundDepth())
+               chunkMinY,
+               UndergroundGenerationDepthPolicy.generationFloorY(
+                  terrainSurface, this.settings.undergroundDepth()
+               )
             );
          }
       }
@@ -10531,11 +10720,19 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                   adaptedCarverNoiseSettings,
                   this.minY,
                   this.height,
-                  this.settings.undergroundDepth()
+                  this.settings.undergroundDepth(),
+                  registryAccess,
+                  this.worldSeed
                );
                Tellus.LOGGER.debug(
                   "Tellus caves use the live Overworld density router; biome-registered custom carvers remain unsupported"
                );
+               if (PARALLEL_CARVER_PREPARATION && PREPARED_CAVE_PLAN_CACHE_BYTES > 0L) {
+                  Tellus.LOGGER.info(
+                     "Initialized parallel cave-plan preparation (cache budget={} MiB)",
+                     PREPARED_CAVE_PLAN_CACHE_MIB
+                  );
+               }
                this.tellusCarverRunner = cached;
             }
 
@@ -13126,6 +13323,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private record ChunkDecorationContext(
       ChunkPos pos,
       int[] terrainSurfaces,
+      int[] undergroundBottomYs,
       boolean[] waterFlags,
       int[] coverClasses,
       Holder<Biome>[] biomeCache,
@@ -13133,7 +13331,12 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       List<UndergroundStructureExclusion.Box> undergroundStructureExclusions
    ) {
       private static EarthChunkGenerator.ChunkDecorationContext capture(
-         ChunkPos pos, int[] terrainSurfaces, boolean[] waterFlags, int[] coverClasses, Holder<Biome>[] biomeCache
+         ChunkPos pos,
+         int[] terrainSurfaces,
+         int[] undergroundBottomYs,
+         boolean[] waterFlags,
+         int[] coverClasses,
+         Holder<Biome>[] biomeCache
       ) {
          Holder<Biome> fallbackBiome = null;
 
@@ -13148,7 +13351,14 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             throw new IllegalStateException("Chunk decoration context captured without a biome sample");
          } else {
             return new EarthChunkGenerator.ChunkDecorationContext(
-               pos, terrainSurfaces, waterFlags, coverClasses, biomeCache, fallbackBiome, List.of()
+               pos,
+               terrainSurfaces,
+               undergroundBottomYs,
+               waterFlags,
+               coverClasses,
+               biomeCache,
+               fallbackBiome,
+               List.of()
             );
          }
       }
@@ -13159,6 +13369,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          return new EarthChunkGenerator.ChunkDecorationContext(
             this.pos,
             this.terrainSurfaces,
+            this.undergroundBottomYs,
             this.waterFlags,
             this.coverClasses,
             this.biomeCache,
@@ -13194,6 +13405,32 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          }
 
          return false;
+      }
+   }
+
+   private record CarverColumnData(
+      int[] terrainSurfaceYByColumn,
+      int[] floodGuardYByColumn,
+      int[] generationFloorYByColumn
+   ) {
+      private int estimatedBytes() {
+         int generationFloorBytes = this.generationFloorYByColumn == null
+            ? 0
+            : this.generationFloorYByColumn.length * Integer.BYTES;
+         return 48
+            + this.terrainSurfaceYByColumn.length * Integer.BYTES
+            + this.floodGuardYByColumn.length * Integer.BYTES
+            + generationFloorBytes;
+      }
+   }
+
+   private record PreparedCarverData(
+      EarthChunkGenerator.CarverColumnData columns,
+      TellusVanillaNoiseCaveSampler.PreparedVanillaCavePlan plan
+   ) {
+      private int estimatedBytes() {
+         long estimated = 32L + this.columns.estimatedBytes() + this.plan.estimatedBytes();
+         return (int)Math.min(Integer.MAX_VALUE, estimated);
       }
    }
 
@@ -14236,6 +14473,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       FILL_BIOME_CACHE("biomeCache"),
       FILL_BIOME_CACHE_KOPPEN_HIT("koppenHit"),
       FILL_BIOME_CACHE_KOPPEN_MISS("koppenMiss"),
+      FILL_DECORATION_PREP("decorationPrep"),
+      FILL_CARVER_PREP("carverPrep"),
+      FILL_CARVER_PREP_MUTATIONS("carverMutations"),
       FILL_DETAIL_SCHEDULE("detailSchedule"),
       FILL_DETAIL_TREE_PREP("treePrep"),
       FILL_BLOCKS("blockFill"),
@@ -14260,6 +14500,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       CARVERS_TOTAL("total"),
       CARVERS_WATER_GUARD("waterGuard"),
       CARVERS_RUNNER("runner"),
+      CARVERS_PREPARED_HIT("preparedHit"),
+      CARVERS_PREPARED_MISS("preparedMiss"),
       DECORATION_TOTAL("total"),
       DECORATION_SUPER("super"),
       DECORATION_AXOLOTLS("axolotls"),
@@ -14417,11 +14659,20 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             EarthChunkGenerator.FullChunkPhase.FILL_BUILDING_PREP,
             EarthChunkGenerator.FullChunkPhase.FILL_BUILDING_TERRAIN,
             EarthChunkGenerator.FullChunkPhase.FILL_BIOME_CACHE,
+            EarthChunkGenerator.FullChunkPhase.FILL_DECORATION_PREP,
+            EarthChunkGenerator.FullChunkPhase.FILL_CARVER_PREP,
             EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_SCHEDULE,
             EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_TREE_PREP,
             EarthChunkGenerator.FullChunkPhase.FILL_BLOCKS,
             EarthChunkGenerator.FullChunkPhase.FILL_ROADS,
             EarthChunkGenerator.FullChunkPhase.FILL_STRUCTURE_CLEARANCE
+        );
+        logGroup(
+           "fill.carverPrep",
+           totals,
+           calls,
+           EarthChunkGenerator.FullChunkPhase.FILL_CARVER_PREP,
+           EarthChunkGenerator.FullChunkPhase.FILL_CARVER_PREP_MUTATIONS
         );
          logGroup(
             "fill.heightGrid.detail",
@@ -14479,7 +14730,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             calls,
             EarthChunkGenerator.FullChunkPhase.CARVERS_TOTAL,
             EarthChunkGenerator.FullChunkPhase.CARVERS_WATER_GUARD,
-            EarthChunkGenerator.FullChunkPhase.CARVERS_RUNNER
+            EarthChunkGenerator.FullChunkPhase.CARVERS_RUNNER,
+            EarthChunkGenerator.FullChunkPhase.CARVERS_PREPARED_HIT,
+            EarthChunkGenerator.FullChunkPhase.CARVERS_PREPARED_MISS
          );
          logGroup(
             "decoration",

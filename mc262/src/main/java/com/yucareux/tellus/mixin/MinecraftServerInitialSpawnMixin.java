@@ -37,6 +37,7 @@ public abstract class MinecraftServerInitialSpawnMixin {
          return;
       }
 
+      earthGenerator.initializeParallelCarverPreparation(level.registryAccess());
       BlockPos spawn = earthGenerator.getInitialSpawnPosition(level);
       listener.start(LevelLoadListener.Stage.PREPARE_GLOBAL_SPAWN, 0);
       listener.updateFocus(level.dimension(), ChunkPos.containing(spawn));

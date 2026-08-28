@@ -201,6 +201,7 @@ public class TellusCommon {
             ChunkGenerator generator = world.getChunkSource().getGenerator();
             logOverworldSettings(server, world, generator);
             if (generator instanceof EarthChunkGenerator earthGenerator) {
+               earthGenerator.initializeParallelCarverPreparation(world.registryAccess());
                ExperimentalHeightSupport.configureWorldBorder(earthGenerator.settings(), world.getWorldBorder());
                TellusMinecraftCompat.configureInitialSpawn(world, earthGenerator);
                ensureDynamicDimensionPack(server, world.dimensionTypeRegistration(), world.dimensionType(), earthGenerator);

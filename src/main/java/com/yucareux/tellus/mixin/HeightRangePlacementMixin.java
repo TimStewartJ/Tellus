@@ -64,7 +64,12 @@ public abstract class HeightRangePlacementMixin {
          }
       };
       int actualSurfaceY = earthGenerator.getUndergroundPlacementSurfaceY(origin.getX(), origin.getZ());
-      int actualBottomY = findUsableUndergroundBottom(context, earthGenerator, origin, actualSurfaceY);
+      int preparedBottomY = earthGenerator.getPreparedUndergroundPlacementBottomY(
+         origin.getX(), origin.getZ()
+      );
+      int actualBottomY = preparedBottomY != Integer.MIN_VALUE
+         ? preparedBottomY
+         : findUsableUndergroundBottom(context, earthGenerator, origin, actualSurfaceY);
       int virtualSurfaceY = TellusCaveDepthMapper.virtualSurfaceForTellusColumn(
          actualSurfaceY, earthGenerator.getSeaLevel()
       );
@@ -86,7 +91,9 @@ public abstract class HeightRangePlacementMixin {
          )
          : 1;
       int minimumNearbySurfaceY = featureKind == UndergroundFeatureClassifier.Kind.GEOLOGICAL_STONE
-         ? minimumNearbySurfaceY(earthGenerator, origin, GeologicalStonePlacementPolicy.BLOB_SURFACE_SAMPLE_RADIUS)
+         ? minimumNearbySurfaceY(
+            earthGenerator, origin, GeologicalStonePlacementPolicy.BLOB_SURFACE_SAMPLE_RADIUS
+         )
          : Integer.MAX_VALUE;
       Stream.Builder<BlockPos> positions = Stream.builder();
       for (int sample = 0; sample < sampleCount; sample++) {
