@@ -120,4 +120,12 @@ public final class MinecraftVersionCompat {
    public static Block paleOakLeavesOr(Block fallback) {
       return Blocks.PALE_OAK_LEAVES;
    }
+
+   public static Block shortGrass() {
+      return Blocks.SHORT_GRASS;
+   }
+
+   public static Block leafLitterOr(Block fallback) {
+      return Blocks.LEAF_LITTER;
+   }
 }

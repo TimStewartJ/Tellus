@@ -6,6 +6,7 @@ import com.yucareux.tellus.world.data.resolve.ResolveBiome;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.ResolveRealm;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Random;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -74,7 +75,11 @@ public final class TellusProceduralTreeGenerator {
       TellusCanopyHeightSource.CanopySample canopy,
       long seed
    ) {
-      return plan(regionalProfile(profileForBiome(biome), ecoregion, seed), canopy, seed);
+      return plan(profile(biome, ecoregion, seed), canopy, seed);
+   }
+
+   public static Profile profile(Holder<Biome> biome, ResolveEcoregion ecoregion, long seed) {
+      return regionalProfile(profileForBiome(biome), ecoregion, seed);
    }
 
    /**
@@ -89,7 +94,11 @@ public final class TellusProceduralTreeGenerator {
       TellusCanopyHeightSource.CanopySample canopy,
       long seed
    ) {
-      return plan(regionalProfile(profileForBiome(biomeKey), ecoregion, seed), canopy, seed);
+      return plan(profile(biomeKey, ecoregion, seed), canopy, seed);
+   }
+
+   public static Profile profile(ResourceKey<Biome> biomeKey, ResolveEcoregion ecoregion, long seed) {
+      return regionalProfile(profileForBiome(biomeKey), ecoregion, seed);
    }
 
    public static TreePlan plan(
@@ -225,7 +234,11 @@ public final class TellusProceduralTreeGenerator {
       TellusCanopyHeightSource.CanopySample canopy,
       long seed
    ) {
-      TreePlan plan = plan(biome, ecoregion, canopy, seed);
+      return place(level, ground, plan(biome, ecoregion, canopy, seed), seed);
+   }
+
+   public static boolean place(WorldGenLevel level, BlockPos ground, TreePlan initialPlan, long seed) {
+      TreePlan plan = Objects.requireNonNull(initialPlan, "initialPlan");
       if (!plan.present()) {
          return false;
       }
@@ -1541,7 +1554,7 @@ public final class TellusProceduralTreeGenerator {
          return this.bush || this.height >= MIN_TREE_HEIGHT;
       }
 
-      private TreePlan withHeight(int newHeight) {
+      public TreePlan withHeight(int newHeight) {
          if (this.bush) {
             return this;
          }

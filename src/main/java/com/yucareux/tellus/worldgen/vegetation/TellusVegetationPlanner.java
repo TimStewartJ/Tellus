@@ -71,6 +71,7 @@ public final class TellusVegetationPlanner {
       return new Placement(
          stratum,
          environment.community(),
+         environment.treeProfile(),
          stand,
          anchor.worldX(),
          anchor.worldZ(),
@@ -431,6 +432,7 @@ public final class TellusVegetationPlanner {
    public record Placement(
       Stratum stratum,
       VegetationCommunity community,
+      TellusProceduralTreeGenerator.Profile treeProfile,
       StandState standState,
       int worldX,
       int worldZ,
@@ -441,6 +443,7 @@ public final class TellusVegetationPlanner {
       public Placement {
          Objects.requireNonNull(stratum, "stratum");
          Objects.requireNonNull(community, "community");
+         Objects.requireNonNull(treeProfile, "treeProfile");
          Objects.requireNonNull(standState, "standState");
       }
    }
