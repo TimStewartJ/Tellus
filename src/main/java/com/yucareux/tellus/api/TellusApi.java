@@ -6,8 +6,8 @@ import com.yucareux.tellus.world.realtime.TellusRealtimeState;
 import com.yucareux.tellus.world.realtime.TemperatureGrid;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
-import com.yucareux.tellus.worldgen.EarthProjection;
 import com.yucareux.tellus.worldgen.TellusWorldgenSources;
+import com.yucareux.tellus.worldgen.WorldProjection;
 import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.core.BlockPos;
@@ -25,7 +25,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
  */
 public final class TellusApi {
    /** Incremented whenever a method here changes signature or semantics. */
-   public static final int API_VERSION = 1;
+   public static final int API_VERSION = 2;
 
    private TellusApi() {
    }
@@ -42,38 +42,50 @@ public final class TellusApi {
       return earthGenerator(level).isPresent();
    }
 
+   /** The exact per-world projection, including an optional spawn-centred origin. */
+   public static WorldProjection projection(EarthChunkGenerator generator) {
+      return Objects.requireNonNull(generator, "generator").settings().projection();
+   }
+
    /** Real-world terrain elevation in metres above sea level at a block column, or {@code NaN} when unavailable. */
-   public static double elevationMeters(double blockX, double blockZ, double worldScale) {
-      return TellusWorldgenSources.elevation().sampleElevationMeters(blockX, blockZ, worldScale);
+   public static double elevationMeters(double blockX, double blockZ, WorldProjection projection) {
+      return TellusWorldgenSources.elevation().sampleElevationMeters(blockX, blockZ, projection);
    }
 
    /**
     * Elevation from tiles already on disk or in memory only; never downloads. Returns {@code NaN} for
     * unexplored areas. Use this from the server thread for positions the player is not standing on.
     */
-   public static double elevationMetersLocalOnly(double blockX, double blockZ, double worldScale) {
+   public static double elevationMetersLocalOnly(double blockX, double blockZ, WorldProjection projection) {
       return TellusWorldgenSources.elevation()
-         .samplePreviewElevationMetersLocalOnly(blockX, blockZ, worldScale, false, EarthGeneratorSettings.DEFAULT.demSelection(), worldScale);
+         .samplePreviewElevationMetersLocalOnly(
+            blockX,
+            blockZ,
+            projection,
+            false,
+            EarthGeneratorSettings.DEFAULT.demSelection(),
+            projection.worldScale()
+         );
    }
 
    /** Terrain slope in degrees from already cached elevation tiles only, or {@code NaN} when not cached yet. */
-   public static double slopeDegreesLocalOnly(double blockX, double blockZ, double worldScale) {
-      return TellusWorldgenSources.elevation().sampleTerrainSlopeDegreesLocalOnly(blockX, blockZ, worldScale);
+   public static double slopeDegreesLocalOnly(double blockX, double blockZ, WorldProjection projection) {
+      return TellusWorldgenSources.elevation().sampleTerrainSlopeDegreesLocalOnly(blockX, blockZ, projection);
    }
 
    /** ESA WorldCover class code (10 tree cover .. 100 moss/lichen, 0 no data) at a block column. */
-   public static int landCoverClass(double blockX, double blockZ, double worldScale) {
-      return TellusWorldgenSources.landCover().sampleCoverClass(blockX, blockZ, worldScale);
+   public static int landCoverClass(double blockX, double blockZ, WorldProjection projection) {
+      return TellusWorldgenSources.landCover().sampleCoverClass(blockX, blockZ, projection);
    }
 
    /** Koppen-Geiger code such as {@code "Cfb"} at a block column, or {@code null} when unknown. */
-   public static String koppenCode(double blockX, double blockZ, double worldScale) {
-      return TellusWorldgenSources.koppen().sampleRawCode(blockX, blockZ, worldScale);
+   public static String koppenCode(double blockX, double blockZ, WorldProjection projection) {
+      return TellusWorldgenSources.koppen().sampleRawCode(blockX, blockZ, projection);
    }
 
    /** RESOLVE 2017 ecoregion metadata at a block column; {@link ResolveEcoregion#UNKNOWN} when unavailable. */
-   public static ResolveEcoregion ecoregion(double blockX, double blockZ, double worldScale) {
-      return TellusResolveSource.shared().sampleEcoregion(blockX, blockZ, worldScale);
+   public static ResolveEcoregion ecoregion(double blockX, double blockZ, WorldProjection projection) {
+      return TellusResolveSource.shared().sampleEcoregion(blockX, blockZ, projection);
    }
 
    /** Latest real-world 2 m air temperature near {@code pos} in Celsius, or {@code NaN} when no data is loaded. */
@@ -96,24 +108,24 @@ public final class TellusApi {
       return TellusRealtimeState.isWeatherEnabled();
    }
 
-   public static double latitudeFromBlockZ(double blockZ, double worldScale) {
-      return EarthProjection.blockZToLat(blockZ, worldScale);
+   public static double latitudeFromBlockZ(double blockZ, WorldProjection projection) {
+      return projection.blockZToLat(blockZ);
    }
 
-   public static double longitudeFromBlockX(double blockX, double worldScale) {
-      return EarthProjection.blockXToLongitude(blockX, worldScale);
+   public static double longitudeFromBlockX(double blockX, WorldProjection projection) {
+      return projection.blockXToLon(blockX);
    }
 
-   public static double blockZFromLatitude(double latitude, double worldScale) {
-      return EarthProjection.latToBlockZ(latitude, worldScale);
+   public static double blockZFromLatitude(double latitude, WorldProjection projection) {
+      return projection.latToBlockZ(latitude);
    }
 
-   public static double blockXFromLongitude(double longitude, double worldScale) {
-      return EarthProjection.longitudeToBlockX(longitude, worldScale);
+   public static double blockXFromLongitude(double longitude, WorldProjection projection) {
+      return projection.lonToBlockX(longitude);
    }
 
    /** Real ground metres covered by one block along X or Z at the given block row (Mercator corrected). */
-   public static double groundMetersPerBlock(double blockZ, double worldScale) {
-      return EarthProjection.groundMetersPerBlockX(blockZ, worldScale);
+   public static double groundMetersPerBlock(double blockZ, WorldProjection projection) {
+      return projection.groundMetersPerBlockX(blockZ);
    }
 }

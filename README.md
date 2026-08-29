@@ -92,7 +92,9 @@ More commands will be added over time.
 [Tellus Expeditions](https://github.com/TimStewartJ/Tellus-Expeditions)): elevation, slope, land cover,
 Koppen class, RESOLVE ecoregion, real-time temperature, and block/geographic coordinate conversions.
 Companions should depend on this class instead of internal packages; `TellusApi.API_VERSION` is bumped
-whenever a method changes signature or semantics.
+whenever a method changes signature or semantics. API v2 takes the world's `WorldProjection`, obtained
+from `TellusApi.projection(generator)`, so spawn-centred and historical global worlds resolve the same
+real location as Tellus terrain, OSM features, previews and teleports.
 
 <details>
   <summary>Settings</summary>
