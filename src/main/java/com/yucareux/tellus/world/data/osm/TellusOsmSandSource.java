@@ -45,7 +45,6 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
    private static final double MAX_LAT = 85.05112878;
    private static final double MIN_LON = -180.0;
    private static final double MAX_LON = 180.0;
-   private static final double METERS_PER_DEGREE = 111319.49166666667;
    private static final double POINT_EPSILON = 1.0E-9;
    private static final int DEFAULT_TILE_EXTENT = 4096;
    private static final int CONNECT_TIMEOUT_MS = intProperty("tellus.overture.sand.connectTimeoutMs", 30000, 1, 120000);
@@ -121,6 +120,67 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
             }
          }
       }
+   }
+
+   public boolean[] containsSandGrid(
+      int[] blockXs, int[] blockZs, boolean[] queryMask, WorldProjection projection, OsmQueryMode mode
+   ) {
+      int width = blockXs.length;
+      if (width == 0 || blockZs.length != width || queryMask.length != width * width) {
+         throw new IllegalArgumentException("Invalid OSM sand grid dimensions");
+      }
+
+      boolean[] mask = new boolean[width * width];
+      boolean hasQueries = false;
+      for (boolean query : queryMask) {
+         hasQueries |= query;
+      }
+      if (!hasQueries) {
+         return mask;
+      }
+      this.ensureInitialized();
+      if (!this.available || !(projection.worldScale() > 0.0)) {
+         return mask;
+      }
+
+      int zoom = this.queryZoomForScale(projection.worldScale());
+      double[] longitudes = new double[width];
+      double[] latitudes = new double[width];
+      int[] tileXs = new int[width];
+      int[] tileYs = new int[width];
+      for (int x = 0; x < width; x++) {
+         longitudes[x] = projection.blockXToLon(blockXs[x]);
+         tileXs[x] = tileXForLongitude(longitudes[x], zoom);
+      }
+      for (int z = 0; z < width; z++) {
+         latitudes[z] = projection.blockZToLat(blockZs[z]);
+         tileYs[z] = tileYForLatitude(latitudes[z], zoom);
+      }
+
+      Map<TellusOsmSandSource.TileKey, OsmSandTile> tiles = new HashMap<>();
+      for (int z = 0; z < width; z++) {
+         if (tileYs[z] < 0) {
+            continue;
+         }
+         int row = z * width;
+         for (int x = 0; x < width; x++) {
+            if (!queryMask[row + x] || tileXs[x] < 0) {
+               continue;
+            }
+            TellusOsmSandSource.TileKey key = new TellusOsmSandSource.TileKey(zoom, tileXs[x], tileYs[z]);
+            OsmSandTile tile = tiles.computeIfAbsent(key, ignored -> this.getTileLookup(key, mode).tile());
+            if (tile.isEmpty()) {
+               continue;
+            }
+            for (OsmSandFeature feature : tile.features()) {
+               if (feature.containsLonLat(longitudes[x], latitudes[z])) {
+                  mask[row + x] = true;
+                  break;
+               }
+            }
+         }
+      }
+      return mask;
    }
 
    public void prefetchTiles(double blockX, double blockZ, WorldProjection projection, int radius) {
@@ -276,9 +336,19 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
          this.cache.invalidate(key);
       }
 
-      OsmQueryMode queryMode = ManagedTerrainNetworkPolicy.isCacheOnly()
-         ? OsmQueryMode.BLOCKING
-         : mode == null ? OsmQueryMode.BLOCKING : mode;
+      if (ManagedTerrainNetworkPolicy.isCacheOnly()) {
+         if (this.tileLoadFailures.contains(key)) {
+            return new TellusOsmSandSource.TileLookup(OsmSandTile.empty(), true);
+         }
+         OsmSandTile local = this.loadTile(key);
+         boolean incomplete = local.isEmpty() && this.tileLoadFailures.contains(key);
+         if (!incomplete) {
+            this.cache.put(key, local);
+         }
+         return new TellusOsmSandSource.TileLookup(local, incomplete);
+      }
+
+      OsmQueryMode queryMode = mode == null ? OsmQueryMode.BLOCKING : mode;
       if (queryMode == OsmQueryMode.NON_BLOCKING) {
          this.queueAsyncLoad(key);
          return new TellusOsmSandSource.TileLookup(OsmSandTile.empty(), true);
@@ -355,6 +425,12 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
             }
          }
 
+         if (ManagedTerrainNetworkPolicy.isCacheOnly()) {
+            this.tileLoadFailures.add(key);
+            OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_SAND, OsmPerf.TileLoadPath.FAILURE);
+            return OsmSandTile.empty();
+         }
+
          long generation = TellusCacheRegistry.generation(TellusCacheDomain.OSM);
          byte[] payload = this.fetchTilePayloadWithRetry(key);
          if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.OSM, generation)) {
@@ -393,6 +469,7 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
       if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.OSM, generation) || !this.cacheTile(cachePath, payload, generation)) {
          throw new RuntimeException("Discarded stale Overture sand cache write for " + key);
       }
+      this.tileLoadFailures.remove(key);
    }
 
    private void ensureInitialized() {
@@ -846,13 +923,25 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
       if (projection.worldScale() <= 0.0) {
          return null;
       } else {
-         double lon = clampLon(projection.blockXToLon(blockX));
-         double lat = clampLat(projection.blockZToLat(blockZ));
-         double n = tilesPerAxis(zoom);
-         double x = (lon + 180.0) / 360.0 * n;
-         double y = (1.0 - Math.log(Math.tan(Math.toRadians(lat)) + 1.0 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2.0 * n;
-         return !(x < 0.0) && !(y < 0.0) && !(x >= n) && !(y >= n) ? new TellusOsmSandSource.TileKey(zoom, Mth.floor(x), Mth.floor(y)) : null;
+         double lon = projection.blockXToLon(blockX);
+         double lat = projection.blockZToLat(blockZ);
+         int x = tileXForLongitude(lon, zoom);
+         int y = tileYForLatitude(lat, zoom);
+         return x >= 0 && y >= 0 ? new TellusOsmSandSource.TileKey(zoom, x, y) : null;
       }
+   }
+
+   private static int tileXForLongitude(double longitude, int zoom) {
+      double n = tilesPerAxis(zoom);
+      double x = (clampLon(longitude) + 180.0) / 360.0 * n;
+      return !(x < 0.0) && x < n ? Mth.floor(x) : -1;
+   }
+
+   private static int tileYForLatitude(double latitude, int zoom) {
+      double lat = clampLat(latitude);
+      double n = tilesPerAxis(zoom);
+      double y = (1.0 - Math.log(Math.tan(Math.toRadians(lat)) + 1.0 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2.0 * n;
+      return !(y < 0.0) && y < n ? Mth.floor(y) : -1;
    }
 
    private static double clampLat(double latitude) {

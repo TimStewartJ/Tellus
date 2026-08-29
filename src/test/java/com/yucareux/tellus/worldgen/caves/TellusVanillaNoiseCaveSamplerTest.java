@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import net.minecraft.server.Bootstrap;
+import net.minecraft.SharedConstants;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test;
 class TellusVanillaNoiseCaveSamplerTest {
    @BeforeAll
    static void bootstrapMinecraft() {
+      SharedConstants.tryDetectVersion();
       Bootstrap.bootStrap();
    }
 

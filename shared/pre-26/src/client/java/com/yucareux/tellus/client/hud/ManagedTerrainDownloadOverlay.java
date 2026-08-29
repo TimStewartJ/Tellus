@@ -57,6 +57,9 @@ public final class ManagedTerrainDownloadOverlay {
       if (status.stage() == ManagedTerrainDownloadStatus.Stage.FAILED) {
          return Component.translatable("tellus.managed_terrain.overlay.failed_detail", status.failedCells()).getString();
       }
+      if (status.detail() != null && !status.detail().isBlank()) {
+         return status.detail();
+      }
       return Component.translatable(
          "tellus.managed_terrain.overlay.progress",
          status.completedCells(),

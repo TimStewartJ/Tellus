@@ -3,6 +3,7 @@ package com.yucareux.tellus.world.data.elevation;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import com.yucareux.tellus.cache.LastValueMemo;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheHandle;
@@ -29,6 +30,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -58,7 +61,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
    public static final double MAPTERHORN_SEA_LEVEL_THRESHOLD_METERS = 0.0;
    private static final String MAPTERHORN_ENDPOINT = "https://tiles.mapterhorn.com";
    private static final String OPENWATERS_ENDPOINT = "https://tiles.openwaters.io/seascape";
-   private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", 512);
+   private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", defaultCacheTiles());
    private static final int AREA_PREFETCH_SAMPLE_POINTS = intProperty("tellus.elevation.areaPrefetch.samples", 25);
    private static final int AREA_PREFETCH_TERRAIN_TILE_LIMIT = intProperty("tellus.elevation.areaPrefetch.terrainTileLimit", 512);
    private static final int TILE_DOWNLOAD_ATTEMPTS = intProperty("tellus.elevation.downloadAttempts", 3);
@@ -81,6 +84,12 @@ public final class TellusElevationSource implements TellusCacheHandle {
    private final Path oceanCacheRoot;
    private final LoadingCache<TellusElevationSource.TileKey, ShortRaster> cache;
    private final LoadingCache<TellusElevationSource.TileKey, ShortRaster> oceanCache;
+   // Per-thread last-tile memos: consecutive samples on a worker almost always hit the same tile, so
+   // answer them without the shared cache's hashing and recency bookkeeping (the Guava LRU
+   // segments are a measured contention point under the chunk worker pool).
+   private final LastValueMemo<TellusElevationSource.TileKey, ShortRaster> tileMemo = new LastValueMemo<>();
+   private final LastValueMemo<TellusElevationSource.TileKey, ShortRaster> oceanTileMemo = new LastValueMemo<>();
+   private final ConcurrentHashMap<TellusElevationSource.TileKey, CompletableFuture<ShortRaster>> localTileLoads = new ConcurrentHashMap<>();
    private final MapterhornCoverageResolutionSource mapterhornResolutionSource = new MapterhornCoverageResolutionSource();
    private final TellusLandMaskSource landMask = TellusWorldgenSources.landMask();
    private volatile EarthGeneratorSettings.DemSelection lastLoggedSelection;
@@ -197,6 +206,137 @@ public final class TellusElevationSource implements TellusCacheHandle {
       return isUsablePreviewElevation(sample) ? sample : missingResolvedElevation(Double.NaN);
    }
 
+   /**
+    * Whether {@link #newTerrainRowSampler} reproduces {@link #sampleResolvedPreviewElevationMeters}
+    * exactly. The optional normalized-elevation cache layer is not mirrored by the row sampler.
+    */
+   public static boolean supportsRowSampling() {
+      return !NORMALIZED_ENABLED;
+   }
+
+   /**
+    * Creates a sampler for dense horizontal runs of land samples. For a fixed row it reproduces
+    * {@code sampleResolvedPreviewElevationMeters(x, z, worldScale, false, ..., previewResolutionMeters)
+    * .mapterhornElevationMeters()} bit for bit, but computes the latitude-dependent Mercator math once
+    * per row and keeps the current tile raster across adjacent columns, so the per-sample tile-cache
+    * lookup and key allocation disappear. Not thread-safe; create one per build.
+    */
+   public TellusElevationSource.TerrainRowSampler newTerrainRowSampler(WorldProjection projection, double previewResolutionMeters) {
+      return new TellusElevationSource.TerrainRowSampler(projection, previewResolutionMeters);
+   }
+
+   public final class TerrainRowSampler {
+      private final WorldProjection projection;
+      private final int step;
+      private final int zoom;
+      private final int zoomCount;
+      private final double[] zoomN;
+      private final double[] rowY;
+      private final int[] rowTileY;
+      private final boolean[] rowYValid;
+      private final int[] tileX;
+      private final ShortRaster[] tileRaster;
+      private final boolean[] tileResolved;
+      private double rowSampleZ = Double.NaN;
+      private boolean rowLatValid;
+      private boolean localOnly;
+
+      private TerrainRowSampler(WorldProjection projection, double previewResolutionMeters) {
+         this.projection = projection;
+         double worldScale = projection.worldScale();
+         this.step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
+         this.zoom = selectPreviewZoom(worldScale, previewResolutionMeters, LAND_MAX_ZOOM);
+         int minFallbackZoom = mapterhornMinimumFallbackZoom(this.zoom);
+         this.zoomCount = Math.max(1, this.zoom - minFallbackZoom + 1);
+         this.zoomN = new double[this.zoomCount];
+         for (int i = 0; i < this.zoomCount; i++) {
+            this.zoomN[i] = Math.pow(2.0, this.zoom - i);
+         }
+         this.rowY = new double[this.zoomCount];
+         this.rowTileY = new int[this.zoomCount];
+         this.rowYValid = new boolean[this.zoomCount];
+         this.tileX = new int[this.zoomCount];
+         this.tileRaster = new ShortRaster[this.zoomCount];
+         this.tileResolved = new boolean[this.zoomCount];
+      }
+
+      /** Prepares the latitude-dependent state for every sample on the row at {@code blockZ}. */
+      public void beginRow(double blockZ) {
+         this.localOnly = ManagedTerrainNetworkPolicy.isCacheOnly();
+         double sampleZ = this.step > 1 ? downsampleBlock(blockZ, this.step) : blockZ;
+         if (sampleZ == this.rowSampleZ) {
+            return;
+         }
+         this.rowSampleZ = sampleZ;
+         java.util.Arrays.fill(this.tileResolved, false);
+         double lat = this.projection.blockZToLat(sampleZ);
+         this.rowLatValid = !(lat < MIN_LAT) && !(lat > MAX_LAT);
+         if (!this.rowLatValid) {
+            return;
+         }
+         double latRad = Math.toRadians(lat);
+         // Same association as sampleAtZoom: ((1 - log(..)/PI) / 2) * n.
+         double yBase = (1.0 - Math.log(Math.tan(latRad) + 1.0 / Math.cos(latRad)) / Math.PI) / 2.0;
+         for (int i = 0; i < this.zoomCount; i++) {
+            double n = this.zoomN[i];
+            double y = yBase * n;
+            this.rowY[i] = y;
+            this.rowYValid[i] = !(y < 0.0) && !(y >= n);
+            this.rowTileY[i] = Mth.floor(y);
+         }
+      }
+
+      /**
+       * Mapterhorn elevation in meters at {@code blockX} on the current row, or NaN when no tile is
+       * available at any fallback zoom (the same contract as the per-sample path).
+       */
+      public double sampleMeters(double blockX) {
+         if (!(this.projection.worldScale() > 0.0) || !this.rowLatValid) {
+            return Double.NaN;
+         }
+         double sampleX = this.step > 1 ? downsampleBlock(blockX, this.step) : blockX;
+         double lon = this.projection.blockXToLon(sampleX);
+         if (lon < MIN_LON || lon > MAX_LON) {
+            return Double.NaN;
+         }
+         for (int i = 0; i < this.zoomCount; i++) {
+            if (!this.rowYValid[i]) {
+               continue;
+            }
+            double n = this.zoomN[i];
+            double x = (lon + 180.0) / 360.0 * n;
+            if (x < 0.0 || x >= n) {
+               continue;
+            }
+            int currentZoom = this.zoom - i;
+            int tx = Mth.floor(x);
+            int ty = this.rowTileY[i];
+            ShortRaster raster;
+            if (this.tileResolved[i] && this.tileX[i] == tx) {
+               raster = this.tileRaster[i];
+            } else {
+               TellusElevationSource.TileKey key = new TellusElevationSource.TileKey(currentZoom, tx, ty);
+               raster = this.localOnly ? TellusElevationSource.this.getTileLocalOnly(key) : TellusElevationSource.this.getTile(key);
+               this.tileX[i] = tx;
+               this.tileRaster[i] = raster;
+               this.tileResolved[i] = true;
+            }
+            if (raster == null) {
+               continue;
+            }
+            double globalX = x * TILE_SIZE;
+            double globalY = this.rowY[i] * TILE_SIZE;
+            double sample = this.localOnly
+               ? TellusElevationSource.this.sampleBilinearAcrossTilesLocalOnly(currentZoom, globalX, globalY, tx, ty, raster)
+               : TellusElevationSource.this.sampleBilinearAcrossTiles(currentZoom, globalX, globalY, tx, ty, raster);
+            if (!Double.isNaN(sample)) {
+               return sample;
+            }
+         }
+         return Double.NaN;
+      }
+   }
+
    public double samplePreviewElevationMetersLocalOnly(
       double blockX,
       double blockZ,
@@ -245,6 +385,20 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    public double sampleTerrainSlopeDegreesLocalOnly(double blockX, double blockZ, WorldProjection projection) {
+      return this.sampleTerrainSlopeDegreesLocalOnly(
+         blockX, blockZ, projection, projection.worldScale(), TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS
+      );
+   }
+
+   /**
+    * Slope from the zoom that {@code previewResolutionMeters} selects (the zoom LOD surfaces are
+    * sampled from) instead of the full-resolution tiles. Downsampled previews snap every sample to a
+    * step-sized grid, so the stencil radius is rounded up to that step to keep the east/west and
+    * north/south pairs genuinely {@code 2 * radius} blocks apart.
+    */
+   public double sampleTerrainSlopeDegreesLocalOnly(
+      double blockX, double blockZ, WorldProjection projection, double previewResolutionMeters, int sampleRadiusBlocks
+   ) {
       if (!(projection.worldScale() > 0.0)) {
          return Double.NaN;
       }
@@ -255,9 +409,11 @@ public final class TellusElevationSource implements TellusCacheHandle {
          return Double.NaN;
       }
 
-      double sampleResolutionMeters = projection.worldScale();
-      int stepX = TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS;
-      int stepZ = TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS;
+      double worldScale = projection.worldScale();
+      double sampleResolutionMeters = effectiveSampleResolutionMeters(worldScale, previewResolutionMeters);
+      int snapStep = downsampleStep(worldScale, RESOLUTION_METERS, sampleResolutionMeters);
+      int stepX = slopeStencilRadius(sampleRadiusBlocks, snapStep);
+      int stepZ = stepX;
       double center = this.sampleTerrainTilesMetersLocalOnlyOrMissing(
          blockX, blockZ, projection, sampleResolutionMeters
       );
@@ -282,6 +438,14 @@ public final class TellusElevationSource implements TellusCacheHandle {
          stepX * groundMetersPerBlockX,
          stepZ * groundMetersPerBlockZ
       );
+   }
+
+   static int slopeStencilRadius(int requestedRadiusBlocks, int snapStep) {
+      int radius = Math.max(1, requestedRadiusBlocks);
+      if (snapStep <= 1) {
+         return radius;
+      }
+      return Math.max(snapStep, (radius + snapStep - 1) / snapStep * snapStep);
    }
 
    public TellusElevationSource.ResolvedElevationSample sampleResolvedPreviewElevationMetersMemoryOnly(
@@ -1052,8 +1216,10 @@ public final class TellusElevationSource implements TellusCacheHandle {
       if (!TellusCacheRegistry.isCurrent(domain, generation)) {
          if (request.openWaters()) {
             this.oceanCache.invalidate(request.key());
+            this.oceanTileMemo.invalidateAll();
          } else {
             this.cache.invalidate(request.key());
+            this.tileMemo.invalidateAll();
          }
          throw new IllegalStateException("Discarded stale " + request.label() + " elevation preload");
       }
@@ -1083,21 +1249,46 @@ public final class TellusElevationSource implements TellusCacheHandle {
          return;
       }
 
-      this.prefetchTile(center);
       int tilesPerAxis = 1 << zoom;
       int clampedRadius = Math.max(0, radius);
       int minX = Math.max(0, center.x() - clampedRadius);
       int maxX = Math.min(tilesPerAxis - 1, center.x() + clampedRadius);
       int minY = Math.max(0, center.y() - clampedRadius);
       int maxY = Math.min(tilesPerAxis - 1, center.y() + clampedRadius);
-
+      List<TellusElevationSource.TileKey> missing = new ArrayList<>();
+      if (this.cache.getIfPresent(center) == null) {
+         missing.add(center);
+      }
       for (int tileY = minY; tileY <= maxY; tileY++) {
          for (int tileX = minX; tileX <= maxX; tileX++) {
             if (tileX != center.x() || tileY != center.y()) {
-               this.prefetchTile(new TellusElevationSource.TileKey(zoom, tileX, tileY));
+               TellusElevationSource.TileKey key = new TellusElevationSource.TileKey(zoom, tileX, tileY);
+               if (this.cache.getIfPresent(key) == null) {
+                  missing.add(key);
+               }
             }
          }
       }
+      this.prefetchMissingTiles(missing, this::prefetchTile);
+   }
+
+   /**
+    * Loads tiles that are not yet in memory. A single tile is loaded inline; several are fanned out
+    * through the shared bounded download pool so a new area's tiles arrive concurrently instead of
+    * one request at a time while chunk workers wait on the tile cache.
+    */
+   private void prefetchMissingTiles(List<TellusElevationSource.TileKey> missing, java.util.function.Consumer<TellusElevationSource.TileKey> loader) {
+      if (missing.isEmpty()) {
+         return;
+      }
+      if (missing.size() == 1) {
+         loader.accept(missing.get(0));
+         return;
+      }
+      // No download scope: the tile caches already collapse concurrent loads of one key, and a scope
+      // would skip tiles that were loaded recently but have since been evicted from memory.
+      ParallelDownloadRunner.run(missing, 0, loader::accept, (item, completed, total) -> {
+      });
    }
 
    private void prefetchOpenWatersTiles(
@@ -1844,6 +2035,8 @@ public final class TellusElevationSource implements TellusCacheHandle {
    public void retryMissingTiles() {
       this.cache.asMap().entrySet().removeIf(entry -> entry.getValue() == MISSING_RASTER);
       this.oceanCache.asMap().entrySet().removeIf(entry -> entry.getValue() == MISSING_RASTER);
+      this.tileMemo.invalidateAll();
+      this.oceanTileMemo.invalidateAll();
       this.mapterhornResolutionSource.retryMissingTiles();
    }
 
@@ -1855,6 +2048,21 @@ public final class TellusElevationSource implements TellusCacheHandle {
             Tellus.LOGGER.debug("Failed to prefetch OpenWaters bathymetry tile {}", key, error);
          }
       }
+   }
+
+   /**
+    * Decoded-tile budget: 512 tiles (256 MB) on small heaps, up to 1536 when ~3% of the heap can hold
+    * them. At 1:1 a moving player's chunk ring plus the detail-0 DH ring exceed 512 distinct zoom-16
+    * tiles, and every eviction costs a ~20 ms WebP decode on the next touch.
+    */
+   static int defaultCacheTiles() {
+      return defaultCacheTiles(Runtime.getRuntime().maxMemory());
+   }
+
+   static int defaultCacheTiles(long maxHeapBytes) {
+      long tileBytes = (long)TILE_SIZE * TILE_SIZE * Short.BYTES;
+      long budgetTiles = maxHeapBytes / 32 / tileBytes;
+      return (int)Math.max(512L, Math.min(1536L, budgetTiles));
    }
 
    private static int intProperty(String key, int defaultValue) {
@@ -1876,8 +2084,13 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    private ShortRaster getTile( TellusElevationSource.TileKey key) {
+      ShortRaster memoized = this.tileMemo.get(key);
+      if (memoized != null) {
+         return memoized == MISSING_RASTER ? null : memoized;
+      }
       try {
          ShortRaster raster = (ShortRaster)this.cache.get(key);
+         this.tileMemo.put(key, raster);
          return raster == MISSING_RASTER ? null : raster;
       } catch (Exception var3) {
          Tellus.LOGGER.warn("Failed to load elevation tile {}", key, var3);
@@ -1886,8 +2099,13 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    private ShortRaster getOpenWatersTile(TellusElevationSource.TileKey key) {
+      ShortRaster memoized = this.oceanTileMemo.get(key);
+      if (memoized != null) {
+         return memoized == MISSING_RASTER ? null : memoized;
+      }
       try {
          ShortRaster raster = (ShortRaster)this.oceanCache.get(key);
+         this.oceanTileMemo.put(key, raster);
          return raster == MISSING_RASTER ? null : raster;
       } catch (Exception error) {
          Tellus.LOGGER.warn("Failed to load OpenWaters bathymetry tile {}", key, error);
@@ -1896,54 +2114,98 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    private ShortRaster getTileLocalOnly(TellusElevationSource.TileKey key) {
+      ShortRaster memoized = this.tileMemo.get(key);
+      if (memoized != null) {
+         return memoized == MISSING_RASTER ? null : memoized;
+      }
       ShortRaster cached = (ShortRaster)this.cache.getIfPresent(key);
       if (cached != null) {
+         this.tileMemo.put(key, cached);
          return cached == MISSING_RASTER ? null : cached;
-      } else {
-         Path cachePath = this.cachePath(key);
-         if (!Files.exists(cachePath)) {
-            return null;
-         } else {
-            try {
-               ShortRaster raster = readCachedTerrainRaster(cachePath);
-               this.cache.put(key, raster);
-               return raster;
-            } catch (IOException error) {
-               this.handleInvalidTile(cachePath, key, error);
-               return null;
-            }
-         }
       }
+      Path cachePath = this.cachePath(key);
+      if (!Files.exists(cachePath)) {
+         return null;
+      }
+      ShortRaster raster = this.loadLocalTileDeduplicated(key, cachePath, this.cache);
+      if (raster != null) {
+         this.tileMemo.put(key, raster);
+      }
+      return raster;
    }
 
    private ShortRaster getOpenWatersTileLocalOnly(TellusElevationSource.TileKey key) {
+      ShortRaster memoized = this.oceanTileMemo.get(key);
+      if (memoized != null) {
+         return memoized == MISSING_RASTER ? null : memoized;
+      }
       ShortRaster cached = (ShortRaster)this.oceanCache.getIfPresent(key);
       if (cached != null) {
+         this.oceanTileMemo.put(key, cached);
          return cached == MISSING_RASTER ? null : cached;
-      } else {
-         Path cachePath = this.openWatersCachePath(key);
-         if (!Files.exists(cachePath)) {
-            return null;
-         } else {
-            try {
-               ShortRaster raster = readCachedTerrainRaster(cachePath);
-               this.oceanCache.put(key, raster);
-               return raster;
-            } catch (IOException error) {
-               this.handleInvalidTile(cachePath, key, error);
-               return null;
-            }
-         }
+      }
+      Path cachePath = this.openWatersCachePath(key);
+      if (!Files.exists(cachePath)) {
+         return null;
+      }
+      ShortRaster raster = this.loadLocalTileDeduplicated(key, cachePath, this.oceanCache);
+      if (raster != null) {
+         this.oceanTileMemo.put(key, raster);
+      }
+      return raster;
+   }
+
+   /**
+    * Decodes a cached tile once even when several workers miss on it at the same time (a WebP tile
+    * costs ~20 ms to decode; the first touch of a tile otherwise had every chunk worker decoding it).
+    * Never downloads, so it stays valid under the cache-only network policy.
+    */
+   private ShortRaster loadLocalTileDeduplicated(
+      TellusElevationSource.TileKey key, Path cachePath, LoadingCache<TellusElevationSource.TileKey, ShortRaster> target
+   ) {
+      CompletableFuture<ShortRaster> mine = new CompletableFuture<>();
+      CompletableFuture<ShortRaster> inFlight = this.localTileLoads.putIfAbsent(key, mine);
+      if (inFlight != null) {
+         return inFlight.join();
+      }
+      try {
+         ShortRaster raster = readCachedTerrainRaster(cachePath);
+         target.put(key, raster);
+         mine.complete(raster);
+         return raster;
+      } catch (IOException error) {
+         this.handleInvalidTile(cachePath, key, error);
+         mine.complete(null);
+         return null;
+      } catch (RuntimeException | Error error) {
+         mine.complete(null);
+         throw error;
+      } finally {
+         this.localTileLoads.remove(key, mine);
       }
    }
 
    private ShortRaster getTileMemoryOnly(TellusElevationSource.TileKey key) {
+      ShortRaster memoized = this.tileMemo.get(key);
+      if (memoized != null) {
+         return memoized == MISSING_RASTER ? null : memoized;
+      }
       ShortRaster cached = (ShortRaster)this.cache.getIfPresent(key);
+      if (cached != null) {
+         this.tileMemo.put(key, cached);
+      }
       return cached == null || cached == MISSING_RASTER ? null : cached;
    }
 
    private ShortRaster getOpenWatersTileMemoryOnly(TellusElevationSource.TileKey key) {
+      ShortRaster memoized = this.oceanTileMemo.get(key);
+      if (memoized != null) {
+         return memoized == MISSING_RASTER ? null : memoized;
+      }
       ShortRaster cached = (ShortRaster)this.oceanCache.getIfPresent(key);
+      if (cached != null) {
+         this.oceanTileMemo.put(key, cached);
+      }
       return cached == null || cached == MISSING_RASTER ? null : cached;
    }
 
@@ -2540,7 +2802,12 @@ public final class TellusElevationSource implements TellusCacheHandle {
       if (size > MAX_TILE_BYTES) {
          throw new IOException("Cached elevation tile exceeds the " + MAX_TILE_BYTES + " byte safety limit");
       }
-      try (InputStream input = Files.newInputStream(path)) {
+      // The WebP decoder pulls single bytes through MemoryCacheImageInputStream, which issues one
+      // read() on the underlying stream per byte. Decoding straight from an unbuffered file channel
+      // therefore costs one syscall per byte (~170k per tile, hundreds of ms while holding the tile
+      // cache's load lock). Read the whole tile once and decode from memory like the download path.
+      byte[] bytes = Files.readAllBytes(path);
+      try (InputStream input = new ByteArrayInputStream(bytes)) {
          return readTerrainRaster(input);
       }
    }
@@ -2559,6 +2826,8 @@ public final class TellusElevationSource implements TellusCacheHandle {
    public void clearCache() {
       this.cache.invalidateAll();
       this.oceanCache.invalidateAll();
+      this.tileMemo.invalidateAll();
+      this.oceanTileMemo.invalidateAll();
       this.mapterhornResolutionSource.clearCache();
       this.cache.cleanUp();
       this.oceanCache.cleanUp();

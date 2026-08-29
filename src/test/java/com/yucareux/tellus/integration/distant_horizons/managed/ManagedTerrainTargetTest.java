@@ -28,6 +28,15 @@ class ManagedTerrainTargetTest {
    }
 
    @Test
+   void farRecenterStopsIntersectingThePreviousDownloadBatch() {
+      ManagedTerrainTarget initial = ManagedTerrainTarget.initial(0, 0, 128);
+      ManagedTerrainTarget moved = initial.update(10_000, -10_000, 128);
+
+      assertTrue(initial.intersectsCells(-1, -1, 1, 1));
+      assertTrue(!moved.intersectsCells(-1, -1, 1, 1));
+   }
+
+   @Test
    void cellsAreProgressiveFromPlayerCenter() {
       ManagedTerrainTarget target = ManagedTerrainTarget.initial(40, 40, 32);
       List<ManagedTerrainCell> cells = target.prioritizedCells(40, 40);
@@ -91,5 +100,11 @@ class ManagedTerrainTargetTest {
       assertEquals(2_000L, ManagedTerrainDownloadManager.retryDelayMillis(1));
       assertEquals(4_000L, ManagedTerrainDownloadManager.retryDelayMillis(2));
       assertEquals(30_000L, ManagedTerrainDownloadManager.retryDelayMillis(20));
+   }
+
+   @Test
+   void repeatedManagedFailuresEventuallyReleaseDegradedGeneration() {
+      assertTrue(!ManagedTerrainDownloadManager.shouldReleaseDegraded(2));
+      assertTrue(ManagedTerrainDownloadManager.shouldReleaseDegraded(3));
    }
 }

@@ -508,8 +508,8 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       int distantHorizonsOsmRoadMaxDetail = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmRoadMaxDetail();
       int distantHorizonsOsmBuildingMaxDetail = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmBuildingMaxDetail();
       boolean distantHorizonsOsmNonBlockingFetch = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmNonBlockingFetch();
-      boolean tellusManagedTerrainDownloads = this.findToggleValue(
-         "tellus_managed_terrain_downloads", EarthGeneratorSettings.DEFAULT.tellusManagedTerrainDownloads()
+      EarthGeneratorSettings.TerrainStreamingStrategy terrainStreamingStrategy = this.findTerrainStreamingStrategy(
+         "terrain_streaming_strategy", EarthGeneratorSettings.DEFAULT.terrainStreamingStrategy()
       );
       boolean showTerrainDownloadOverlay = this.findToggleValue(
          "show_terrain_download_overlay", EarthGeneratorSettings.DEFAULT.showTerrainDownloadOverlay()
@@ -594,7 +594,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          this.randomBiomeSeed,
          randomBiomeIds,
          experimentalIncreaseHeight,
-         tellusManagedTerrainDownloads,
+         terrainStreamingStrategy,
          showTerrainDownloadOverlay,
          cavesReachSurface,
          undergroundDepth,
@@ -680,7 +680,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       this.setToggleValue("add_trial_chambers", initialSettings.addTrialChambers());
       this.setToggleValue("add_trail_ruins", initialSettings.addTrailRuins());
       this.setToggleValue("distant_horizons_water_resolver", initialSettings.distantHorizonsWaterResolver());
-      this.setToggleValue("tellus_managed_terrain_downloads", initialSettings.tellusManagedTerrainDownloads());
+      this.setTerrainStreamingStrategyValue("terrain_streaming_strategy", initialSettings.terrainStreamingStrategy());
       this.setToggleValue("show_terrain_download_overlay", initialSettings.showTerrainDownloadOverlay());
       this.setToggleValue("realtime_time", initialSettings.realtimeTime());
       this.setToggleValue("realtime_weather", initialSettings.realtimeWeather());
@@ -724,6 +724,17 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       }
    }
 
+   private void setTerrainStreamingStrategyValue(String key, EarthGeneratorSettings.TerrainStreamingStrategy value) {
+      for (EarthCustomizeScreen.CategoryDefinition category : this.categories) {
+         for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
+            if (setting instanceof EarthCustomizeScreen.StreamingStrategyDefinition strategy && strategy.key.equals(key)) {
+               strategy.value = value;
+               return;
+            }
+         }
+      }
+   }
+
    private void setDemSelectionValue(EarthGeneratorSettings.DemSelection demSelection) {
    }
 
@@ -760,6 +771,19 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          }
       }
 
+      return fallback;
+   }
+
+   private EarthGeneratorSettings.TerrainStreamingStrategy findTerrainStreamingStrategy(
+      String key, EarthGeneratorSettings.TerrainStreamingStrategy fallback
+   ) {
+      for (EarthCustomizeScreen.CategoryDefinition category : this.categories) {
+         for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
+            if (setting instanceof EarthCustomizeScreen.StreamingStrategyDefinition strategy && strategy.key.equals(key)) {
+               return strategy.value;
+            }
+         }
+      }
       return fallback;
    }
 
@@ -895,7 +919,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          new EarthCustomizeScreen.CategoryDefinition(
             "network",
             List.of(
-               toggle("tellus_managed_terrain_downloads", EarthGeneratorSettings.DEFAULT.tellusManagedTerrainDownloads()),
+               streamingStrategy("terrain_streaming_strategy", EarthGeneratorSettings.DEFAULT.terrainStreamingStrategy()),
                toggle("show_terrain_download_overlay", EarthGeneratorSettings.DEFAULT.showTerrainDownloadOverlay())
             )
          ).hideFromRoot()
@@ -1022,6 +1046,12 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
 
    private static EarthCustomizeScreen.ModeDefinition mode(String key, EarthGeneratorSettings.DistantHorizonsRenderMode defaultValue) {
       return new EarthCustomizeScreen.ModeDefinition(key, defaultValue);
+   }
+
+   private static EarthCustomizeScreen.StreamingStrategyDefinition streamingStrategy(
+      String key, EarthGeneratorSettings.TerrainStreamingStrategy defaultValue
+   ) {
+      return new EarthCustomizeScreen.StreamingStrategyDefinition(key, defaultValue);
    }
 
    private EarthCustomizeScreen.CategoryLinkDefinition categoryLink( EarthCustomizeScreen.CategoryDefinition targetCategory) {
@@ -1190,6 +1220,12 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
    
    private static Component formatRenderMode(EarthGeneratorSettings.DistantHorizonsRenderMode mode) {
       return Objects.requireNonNull(Component.translatable("property.tellus.distant_horizons_render_mode.value." + mode.id()), "renderModeLabel");
+   }
+
+   private static Component formatTerrainStreamingStrategy(EarthGeneratorSettings.TerrainStreamingStrategy strategy) {
+      return Objects.requireNonNull(
+         Component.translatable("property.tellus.terrain_streaming_strategy.value." + strategy.id()), "terrainStreamingStrategyLabel"
+      );
    }
 
    
@@ -1574,17 +1610,18 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
             cavesReachSurface.forceDisabled(caveGeneration == null || !caveGeneration.value);
          }
       } else if ("network".equals(category.getId())) {
-         EarthCustomizeScreen.ToggleDefinition managedDownloads = null;
+         EarthCustomizeScreen.StreamingStrategyDefinition strategy = null;
          EarthCustomizeScreen.ToggleDefinition overlay = null;
          for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
-            if (setting instanceof EarthCustomizeScreen.ToggleDefinition toggle && toggle.key.equals("tellus_managed_terrain_downloads")) {
-               managedDownloads = toggle;
+            if (setting instanceof EarthCustomizeScreen.StreamingStrategyDefinition streaming
+               && streaming.key.equals("terrain_streaming_strategy")) {
+               strategy = streaming;
             } else if (setting instanceof EarthCustomizeScreen.ToggleDefinition toggle && toggle.key.equals("show_terrain_download_overlay")) {
                overlay = toggle;
             }
          }
-         if (managedDownloads != null && overlay != null) {
-            overlay.forceDisabled(!managedDownloads.value);
+         if (strategy != null && overlay != null) {
+            overlay.forceDisabled(!strategy.value.isAutomatic());
          }
       } else if ("openstreetmaps_features".equals(category.getId())) {
          EarthCustomizeScreen.ToggleDefinition roads = null;
@@ -2318,6 +2355,33 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          });
          button.active = !this.locked && !this.forceDisabled && !this.unavailable;
          return button;
+      }
+   }
+
+   private static final class StreamingStrategyDefinition implements EarthCustomizeScreen.SettingDefinition {
+      private static final List<EarthGeneratorSettings.TerrainStreamingStrategy> STRATEGIES = List.of(
+         EarthGeneratorSettings.TerrainStreamingStrategy.AUTOMATIC,
+         EarthGeneratorSettings.TerrainStreamingStrategy.LEGACY_COMPATIBILITY
+      );
+      private final String key;
+      private EarthGeneratorSettings.TerrainStreamingStrategy value;
+
+      private StreamingStrategyDefinition(String key, EarthGeneratorSettings.TerrainStreamingStrategy defaultValue) {
+         this.key = key;
+         this.value = Objects.requireNonNull(defaultValue, "defaultValue");
+      }
+
+      @Override
+      public AbstractWidget createWidget(Runnable onChange) {
+         Component name = EarthCustomizeScreen.settingName(this.key);
+         Component tooltip = EarthCustomizeScreen.settingTooltip(this.key);
+         Builder<EarthGeneratorSettings.TerrainStreamingStrategy> builder = configureCycleButton(
+            CycleButton.builder(EarthCustomizeScreen::formatTerrainStreamingStrategy), this.value, STRATEGIES
+         ).withTooltip(value -> Tooltip.create(tooltip));
+         return builder.create(0, 0, 0, 20, name, (button, value) -> {
+            this.value = value;
+            onChange.run();
+         });
       }
    }
 

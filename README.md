@@ -44,6 +44,39 @@ Tellus integrates with the Distant Horizons (DH) mod to render planet-scale terr
 
 Because Tellus worlds are Earth-scale, DH is strongly recommended and is almost essential for comfortable exploration and long-distance views.
 
+### Offline Fast LOD profiling
+
+The Minecraft 26.2 target includes a headless source-loading simulation for Fast LOD development. It uses experimental 1:1 true-height settings, prefetches the real elevation, land-cover, land-mask, Overture water/road/building inputs, and reports cold/warm sampling timings without starting Minecraft or creating a world:
+
+```bash
+./gradlew :mc262:simulateFastLodDataLoading
+```
+
+The default 64×64 detail-11 pass spans 8192 chunks, matching a 4096-chunk render radius. Use `-PsimDetails=0,6,11`, `-PsimGrid=64`, `-PsimLatitude=...`, and `-PsimLongitude=...` to select a smaller profile. The task stores its isolated cache under `mc262/build/lod-simulation-game`; `-PsimGameDir=...` selects another cache for cold-run comparisons.
+
+### Offline full-chunk generation benchmark
+
+The Minecraft 26.2 target also has a headless benchmark that constructs the real `EarthChunkGenerator` and runs `createBiomes` + `fillFromNoise` on real `ProtoChunk`s, reporting per-chunk wall/CPU latency percentiles, throughput, and GC time. Pass 1 on a fresh cache is network-cold; later passes are in-memory warm:
+
+```bash
+./gradlew :mc262:benchmarkChunkGeneration -PbenchRadius=8 -PbenchThreads=16 -PbenchPasses=2 -PbenchWarmupRadius=3
+```
+
+Useful knobs: `-PbenchLatitude/-PbenchLongitude`, `-PbenchProfile=yosemite|default|osm`, `-PbenchScale=1.0`, `-PbenchWarmupRadius=3` (JIT warm-up on an area 256 chunks away so pass 1 measures a memory-cold area at steady state instead of interpreter start-up), `-PbenchPerChunk=true` (per-chunk rows), `-PbenchVerifyPreparedColumns=true` (independently rescans all 256 generated columns and fails if the cached decoration bottom differs), `-PbenchChunkTiming=true -PbenchChunkTimingThresholdMs=40` (per-chunk phase traces from the generator's own profiler), `-PbenchJvmArgs="-Dtellus.debugWater=true -XX:StartFlightRecording=filename=bench.jfr,settings=profile"` (per water-region build and `surface/osm/coast` input timings, plus a JFR CPU profile), and `-PbenchGameDir=...` (delete `mc262/build/chunkgen-benchmark-game` for a network-cold run). The benchmark runs at the standard height range because Increase Height requires the Tellus mixins; stages that need a `WorldGenRegion` (structures, carver mutation, decoration, lighting) must be measured in-game with `-Dtellus.debug.fullChunkPerf=true -Dtellus.chunkgen.timing=true`.
+
+Tellus prepares two formerly serialized underground-generation inputs in `fillFromNoise`, where Minecraft can run many chunks concurrently:
+
+- `tellus.chunkgen.prepareDecorationColumns` (default `true`) scans each terrain-shell column once after fill and caches the first usable block above bedrock. Vanilla underground placements reuse it instead of scanning as many as 512 blocks for every ore/stone placement. `false` restores the live per-placement scan.
+- `tellus.chunkgen.parallelCarverPreparation` (default `true`) compiles the vanilla Overworld density field into a compact ordered mutation plan. The serialized carver status only validates live block/structure state and applies it. `tellus.chunkgen.preparedCavePlanCacheMiB` overrides the device-aware cache budget (default: the smaller of 1/128 max heap and 2 MiB/logical processor, clamped to 4–64 MiB; `0` disables preparation). Eviction is safe: the carver stage regenerates the same plan synchronously.
+
+The cave preparation lane has its own deterministic scaling benchmark; serialized and parallel checksums must match:
+
+```bash
+./gradlew :mc262:benchmarkCarverPreparation -PcarverBenchRadius=6 -PcarverBenchThreads=16 -PcarverBenchRounds=3
+```
+
+Water-region builds sample elevation row by row with the tile raster and Mercator math hoisted per row (`-Dtellus.water.rowSampling=false` restores the per-sample path for A/B comparisons; results are identical). The dense grid margin is the hydrology context only (`tellus.water.flowContextBlocks`, default 192); Overture waterfall markers are queried separately out to `WaterfallNoCarveZone.queryMarginBlocks`, so lowering `tellus.water.waterfallNoCarveRadiusChunks` no longer changes the grid size.
+
 ## Commands
 
 - `/tellus map`: Opens the GeoTP map UI (requires gamemaster permissions).
@@ -166,7 +199,7 @@ This section lets you toggle vanilla structures and world features on or off, su
 - Tiles: https://tiles.openwaters.io/seascape/
 - License: CC BY 4.0 for the published tile compilation.
 - In-game processing: Overture `ocean` and `sea` polygons define ocean membership independently of either elevation source. OpenWaters Terrarium pixels are bilinearly sampled at a zoom selected for the requested world/LOD resolution. Negative elevations are scaled by the oceanic height scale; zero or positive samples remain ocean and are clamped to a one-block minimum depth. Deterministic fallback bathymetry is used only when OpenWaters is unavailable.
-- Coastal safety: naturally shallow OpenWaters profiles are preserved. Abrupt, invalid, or missing profiles receive a smooth one-block-to-raw-depth ramp over 512 blocks by default. Configure it with `tellus.water.oceanFloorTransitionBlocks` (`0..2048`); DH inherits this unless `tellus.dhWaterOceanFloorTransitionBlocks` is supplied. The 512-block Overture coastline macro-tile cache defaults to 32 entries and can be set with `tellus.oceanCoastCacheTiles` (`4..256`).
+- Coastal safety: naturally shallow OpenWaters profiles are preserved. Abrupt, invalid, or missing profiles receive a smooth one-block-to-raw-depth ramp over 512 blocks by default. Configure it with `tellus.water.oceanFloorTransitionBlocks` (`0..2048`); DH inherits this unless `tellus.dhWaterOceanFloorTransitionBlocks` is supplied. The 512-block Overture coastline macro-tile cache defaults to 128 entries and can be set with `tellus.oceanCoastCacheTiles` (`4..1024`).
 - DH renders the raw profiled ocean floor by default so deep-water variation remains continuous. Legacy logarithmic depth compression is opt-in through `tellus.dhWaterOceanDepthCompressionEnabled=true` and no longer uses a fixed maximum-depth plateau.
 - When raw bathymetry is deeper than the dimension permits, Tellus now fits it monotonically into the available vertical range instead of clamping every sample to the same bottom Y. Ocean floors reserve eight solid support blocks above the world minimum, configurable with `tellus.water.oceanFloorSupportBlocks` (`2..32`).
 - Compatibility: the serialized `ocean_shoreline_blend` setting is retained but is a no-op for oceans. River/lake shoreline blending is unchanged.

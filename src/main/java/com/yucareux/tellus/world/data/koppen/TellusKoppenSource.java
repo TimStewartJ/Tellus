@@ -2,6 +2,7 @@ package com.yucareux.tellus.world.data.koppen;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import com.yucareux.tellus.cache.LastValueMemo;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheHandle;
@@ -328,6 +329,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       private final double tieLat;
       private final double pixelSizeMeters;
       private final Cache<Integer, byte[]> tileCache;
+      private final LastValueMemo<Integer, byte[]> tileMemo = new LastValueMemo<>();
 
       private GeoTiffRaster() {
          this.path = null;
@@ -397,6 +399,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
       void close() {
          if (this.channel != null) {
+            this.tileMemo.invalidateAll();
             this.tileCache.invalidateAll();
             this.tileCache.cleanUp();
 
@@ -565,8 +568,13 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
 
       private byte[] getTile(int tileIndex) throws IOException {
+         Integer key = tileIndex;
+         byte[] memoized = this.tileMemo.get(key);
+         if (memoized != null) {
+            return memoized;
+         }
          try {
-            return this.tileCache.get(tileIndex, () -> this.readTile(tileIndex));
+            return this.tileMemo.put(key, this.tileCache.get(key, () -> this.readTile(tileIndex)));
          } catch (ExecutionException error) {
             Throwable cause = error.getCause();
             if (cause instanceof IOException io) {

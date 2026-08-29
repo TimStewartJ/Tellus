@@ -304,7 +304,30 @@ public final class EarthBiomeSource extends BiomeSource {
       int blockX, int blockZ, int rawCoverClass, int visualCoverClass, boolean hasWater, boolean isOcean, double previewResolutionMeters
    ) {
       return this.resolveSurfaceBiomeAtBlock(
-         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, null, previewResolutionMeters
+         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, null, previewResolutionMeters, null
+      );
+   }
+
+   public Holder<Biome> getLodBiomeAtBlock(
+      int blockX,
+      int blockZ,
+      int rawCoverClass,
+      int visualCoverClass,
+      boolean hasWater,
+      boolean isOcean,
+      double previewResolutionMeters,
+      double regionalReliefMeters
+   ) {
+      return this.resolveSurfaceBiomeAtBlock(
+         blockX,
+         blockZ,
+         rawCoverClass,
+         visualCoverClass,
+         hasWater,
+         isOcean,
+         null,
+         previewResolutionMeters,
+         regionalReliefMeters
       );
    }
 
@@ -421,7 +444,7 @@ public final class EarthBiomeSource extends BiomeSource {
       int blockX, int blockZ, int rawCoverClass, int visualCoverClass, boolean hasWater, boolean isOcean, String precomputedKoppen
    ) {
       return this.resolveSurfaceBiomeAtBlock(
-         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, precomputedKoppen, Double.NaN
+         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, precomputedKoppen, Double.NaN, null
       );
    }
 
@@ -433,7 +456,8 @@ public final class EarthBiomeSource extends BiomeSource {
       boolean hasWater,
       boolean isOcean,
       String precomputedKoppen,
-      double previewResolutionMeters
+      double previewResolutionMeters,
+      Double precomputedRegionalReliefMeters
    ) {
       if (rawCoverClass == ESA_MANGROVES) {
          return this.mangrove;
@@ -444,7 +468,9 @@ public final class EarthBiomeSource extends BiomeSource {
       if (this.settings.enableWater() && !hasWater) {
          visualCoverClass = this.resolveDryOsmVisualCoverClass(blockX, blockZ, rawCoverClass, visualCoverClass);
       }
-      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, visualCoverClass, precomputedKoppen);
+      return this.resolveSurfaceBiomeAfterWater(
+         blockX, blockZ, visualCoverClass, precomputedKoppen, precomputedRegionalReliefMeters
+      );
    }
 
    private int resolveDryOsmVisualCoverClass(int blockX, int blockZ, int rawCoverClass, int visualCoverClass) {
@@ -508,6 +534,12 @@ public final class EarthBiomeSource extends BiomeSource {
    }
 
    private Holder<Biome> resolveSurfaceBiomeAfterWater(int blockX, int blockZ, int visualCoverClass, String precomputedKoppen) {
+      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, visualCoverClass, precomputedKoppen, null);
+   }
+
+   private Holder<Biome> resolveSurfaceBiomeAfterWater(
+      int blockX, int blockZ, int visualCoverClass, String precomputedKoppen, Double precomputedRegionalReliefMeters
+   ) {
       if (visualCoverClass == ESA_SNOW_ICE) {
          return this.applyRandomLandBiome(this.frozenPeaks, blockX, blockZ, null);
       }
@@ -536,7 +568,9 @@ public final class EarthBiomeSource extends BiomeSource {
          && BadlandsTerrainPolicy.isDryCanyonCover(visualCoverClass)
          && BadlandsTerrainPolicy.isAridClimate(koppen)
          && BadlandsTerrainPolicy.shouldPromoteToBadlands(
-            visualCoverClass, koppen, this.sampleRegionalReliefMeters(blockX, blockZ)
+            visualCoverClass,
+            koppen,
+            precomputedRegionalReliefMeters == null ? this.sampleRegionalReliefMeters(blockX, blockZ) : precomputedRegionalReliefMeters
          )) {
          biomeKey = Biomes.BADLANDS;
       }

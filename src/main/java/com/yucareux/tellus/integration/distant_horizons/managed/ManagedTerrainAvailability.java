@@ -9,6 +9,7 @@ public final class ManagedTerrainAvailability {
    public static final byte READY = 0;
    public static final byte SPLIT = 1;
    public static final byte WAIT = 2;
+   public static final byte PRIORITY = 3;
    private static final int DEFAULT_BATCH_CELLS_PER_SIDE = intProperty("tellus.managedDownloads.batchCellsPerSide", 8, 1, 64);
    static final int DEFAULT_PROGRESSIVE_BATCH_WIDTH_CHUNKS = ManagedTerrainCell.SIZE_CHUNKS * DEFAULT_BATCH_CELLS_PER_SIDE;
    private static final Map<String, Coverage> COVERAGE = new ConcurrentHashMap<>();
