@@ -14,23 +14,6 @@ Server support note: Tellus must be installed on the server, but is not required
 
 *Note: generative AI was used during the creation of this mod.*
 
-## Building
-
-Build every supported Minecraft/loader target with:
-
-```bash
-./gradlew build
-```
-
-Individual targets remain available through `build1201`, `build1201Forge`, `build1211`,
-`build1211NeoForge`, `build262`, and `build262NeoForge`. Production jars are written
-to each target's `build/libs` directory.
-
-Version projects are thin compatibility overlays. Universal implementations live in
-`src`, while reusable Minecraft-version and loader-family implementations live in
-`shared`; see [`shared/README.md`](shared/README.md) for the layer rules. The build's
-`checkVersionSourceDuplication` task rejects byte-identical Java copies across layers.
-
 ## Features
 
 - Earth-scale terrain generated from geographic elevation data
