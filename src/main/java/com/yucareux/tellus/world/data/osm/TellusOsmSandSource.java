@@ -123,6 +123,68 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
       }
    }
 
+   public boolean[] containsSandGrid(
+      int[] blockXs, int[] blockZs, boolean[] queryMask, double worldScale, OsmQueryMode mode
+   ) {
+      int width = blockXs.length;
+      if (width == 0 || blockZs.length != width || queryMask.length != width * width) {
+         throw new IllegalArgumentException("Invalid OSM sand grid dimensions");
+      }
+
+      boolean[] mask = new boolean[width * width];
+      boolean hasQueries = false;
+      for (boolean query : queryMask) {
+         hasQueries |= query;
+      }
+      if (!hasQueries) {
+         return mask;
+      }
+      this.ensureInitialized();
+      if (!this.available || !(worldScale > 0.0)) {
+         return mask;
+      }
+
+      int zoom = this.queryZoomForScale(worldScale);
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double[] longitudes = new double[width];
+      double[] latitudes = new double[width];
+      int[] tileXs = new int[width];
+      int[] tileYs = new int[width];
+      for (int x = 0; x < width; x++) {
+         longitudes[x] = blockXs[x] / blocksPerDegree;
+         tileXs[x] = tileXForLongitude(longitudes[x], zoom);
+      }
+      for (int z = 0; z < width; z++) {
+         latitudes[z] = EarthProjection.blockZToLat(blockZs[z], worldScale);
+         tileYs[z] = tileYForLatitude(latitudes[z], zoom);
+      }
+
+      Map<TellusOsmSandSource.TileKey, OsmSandTile> tiles = new HashMap<>();
+      for (int z = 0; z < width; z++) {
+         if (tileYs[z] < 0) {
+            continue;
+         }
+         int row = z * width;
+         for (int x = 0; x < width; x++) {
+            if (!queryMask[row + x] || tileXs[x] < 0) {
+               continue;
+            }
+            TellusOsmSandSource.TileKey key = new TellusOsmSandSource.TileKey(zoom, tileXs[x], tileYs[z]);
+            OsmSandTile tile = tiles.computeIfAbsent(key, ignored -> this.getTileLookup(key, mode).tile());
+            if (tile.isEmpty()) {
+               continue;
+            }
+            for (OsmSandFeature feature : tile.features()) {
+               if (feature.containsLonLat(longitudes[x], latitudes[z])) {
+                  mask[row + x] = true;
+                  break;
+               }
+            }
+         }
+      }
+      return mask;
+   }
+
    public void prefetchTiles(double blockX, double blockZ, double worldScale, int radius) {
       this.ensureInitialized();
       if (this.available && !(worldScale <= 0.0) && radius > 0) {
@@ -859,13 +921,23 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
          return null;
       } else {
          double blocksPerDegree = METERS_PER_DEGREE / worldScale;
-         double lon = clampLon(blockX / blocksPerDegree);
-         double lat = clampLat(EarthProjection.blockZToLat(blockZ, worldScale));
-         double n = tilesPerAxis(zoom);
-         double x = (lon + 180.0) / 360.0 * n;
-         double y = (1.0 - Math.log(Math.tan(Math.toRadians(lat)) + 1.0 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2.0 * n;
-         return !(x < 0.0) && !(y < 0.0) && !(x >= n) && !(y >= n) ? new TellusOsmSandSource.TileKey(zoom, Mth.floor(x), Mth.floor(y)) : null;
+         int x = tileXForLongitude(blockX / blocksPerDegree, zoom);
+         int y = tileYForLatitude(EarthProjection.blockZToLat(blockZ, worldScale), zoom);
+         return x >= 0 && y >= 0 ? new TellusOsmSandSource.TileKey(zoom, x, y) : null;
       }
+   }
+
+   private static int tileXForLongitude(double longitude, int zoom) {
+      double n = tilesPerAxis(zoom);
+      double x = (clampLon(longitude) + 180.0) / 360.0 * n;
+      return !(x < 0.0) && x < n ? Mth.floor(x) : -1;
+   }
+
+   private static int tileYForLatitude(double latitude, int zoom) {
+      double lat = clampLat(latitude);
+      double n = tilesPerAxis(zoom);
+      double y = (1.0 - Math.log(Math.tan(Math.toRadians(lat)) + 1.0 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2.0 * n;
+      return !(y < 0.0) && y < n ? Mth.floor(y) : -1;
    }
 
    private static double clampLat(double latitude) {

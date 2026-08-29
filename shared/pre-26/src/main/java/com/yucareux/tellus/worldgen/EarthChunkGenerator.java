@@ -6291,6 +6291,12 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return OSM_SAND_SOURCE.containsSand(worldX, worldZ, this.settings.worldScale(), queryMode);
    }
 
+   public boolean[] sampleLodSandMask(
+      int[] worldXs, int[] worldZs, boolean[] queryMask, OsmQueryMode queryMode
+   ) {
+      return OSM_SAND_SOURCE.containsSandGrid(worldXs, worldZs, queryMask, this.settings.worldScale(), queryMode);
+   }
+
    public double sampleDemSlopeDegrees(int worldX, int worldZ) {
       EarthChunkGenerator.LodSlopeSampling lodSampling = this.lodSlopeSampling.get();
       if (lodSampling != null) {
@@ -6360,7 +6366,14 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    public boolean shouldPlaceSnowAt(int worldX, int worldZ) {
-      return SnowSlopePolicy.shouldCover(worldX, worldZ, this.sampleDemSlopeDegrees(worldX, worldZ));
+      return this.shouldPlaceSnowAt(worldX, worldZ, Double.NaN);
+   }
+
+   public boolean shouldPlaceSnowAt(int worldX, int worldZ, double precomputedSlopeDegrees) {
+      double slopeDegrees = Double.isFinite(precomputedSlopeDegrees)
+         ? precomputedSlopeDegrees
+         : this.sampleDemSlopeDegrees(worldX, worldZ);
+      return SnowSlopePolicy.shouldCover(worldX, worldZ, slopeDegrees);
    }
 
    private boolean shouldRetainPersistentSnowAt(
@@ -6372,8 +6385,23 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int convexity,
       boolean snowLikeTerrain
    ) {
+      return this.shouldRetainPersistentSnowAt(
+         worldX, worldZ, surfaceCoverClass, heightAboveSea, slopeDiff, convexity, snowLikeTerrain, Double.NaN
+      );
+   }
+
+   private boolean shouldRetainPersistentSnowAt(
+      int worldX,
+      int worldZ,
+      int surfaceCoverClass,
+      int heightAboveSea,
+      int slopeDiff,
+      int convexity,
+      boolean snowLikeTerrain,
+      double precomputedSlopeDegrees
+   ) {
       if (snowLikeTerrain) {
-         return this.shouldPlaceSnowAt(worldX, worldZ);
+         return this.shouldPlaceSnowAt(worldX, worldZ, precomputedSlopeDegrees);
       }
 
       boolean localSnowSource = surfaceCoverClass == MountainSurfaceRules.ESA_SNOW_ICE;
@@ -6385,7 +6413,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return SnowTransitionPolicy.shouldCover(
          worldX,
          worldZ,
-         this.sampleDemSlopeDegrees(worldX, worldZ),
+         Double.isFinite(precomputedSlopeDegrees)
+            ? precomputedSlopeDegrees
+            : this.sampleDemSlopeDegrees(worldX, worldZ),
          localSnowSource,
          this.snowTransitionSourceSampler,
          this.worldSeed
@@ -6404,11 +6434,31 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       boolean underwater,
       int localReliefBlocks
    ) {
+      return this.applyDemDeepslateSlopePaletteOverride(
+         palette, biome, worldX, worldZ, underwater, localReliefBlocks, Double.NaN
+      );
+   }
+
+   private EarthChunkGenerator.SurfacePalette applyDemDeepslateSlopePaletteOverride(
+      EarthChunkGenerator.SurfacePalette palette,
+      Holder<Biome> biome,
+      int worldX,
+      int worldZ,
+      boolean underwater,
+      int localReliefBlocks,
+      double precomputedSlopeDegrees
+   ) {
       if (palette == null
          || underwater
          || biome.is(BiomeTags.IS_BADLANDS)
          || palette.top().is(Blocks.SNOW_BLOCK)
-         || !this.shouldPlaceDeepslateAt(worldX, worldZ)) {
+         || !DeepslateSlopePolicy.shouldCover(
+            worldX,
+            worldZ,
+            Double.isFinite(precomputedSlopeDegrees)
+               ? precomputedSlopeDegrees
+               : this.sampleDemSlopeDegrees(worldX, worldZ)
+         )) {
          return palette;
       }
 
@@ -6451,9 +6501,42 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int worldZ,
       OsmQueryMode mountainOsmQueryMode
    ) {
+      return this.classifyMountainSurface(
+         surfaceCoverClass,
+         heightAboveSea,
+         slopeDiff,
+         convexity,
+         snowLikeTerrain,
+         vegetationTransitionWeight,
+         worldX,
+         worldZ,
+         mountainOsmQueryMode,
+         Double.NaN
+      );
+   }
+
+   private MountainSurfaceRules.ApproximateSurface classifyMountainSurface(
+      int surfaceCoverClass,
+      int heightAboveSea,
+      int slopeDiff,
+      int convexity,
+      boolean snowLikeTerrain,
+      float vegetationTransitionWeight,
+      int worldX,
+      int worldZ,
+      OsmQueryMode mountainOsmQueryMode,
+      double precomputedSlopeDegrees
+   ) {
       boolean rawSnowSource = MountainSurfaceRules.hasSnowSource(surfaceCoverClass, snowLikeTerrain);
       boolean retainSnow = this.shouldRetainPersistentSnowAt(
-         worldX, worldZ, surfaceCoverClass, heightAboveSea, slopeDiff, convexity, snowLikeTerrain
+         worldX,
+         worldZ,
+         surfaceCoverClass,
+         heightAboveSea,
+         slopeDiff,
+         convexity,
+         snowLikeTerrain,
+         precomputedSlopeDegrees
       );
       MountainSurfaceRules.ApproximateSurface classified = MountainSurfaceRules.classifyApproximateSurface(
          surfaceCoverClass,
@@ -6814,6 +6897,77 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       OsmQueryMode mountainOsmQueryMode,
       boolean allowOsmSand
    ) {
+      return this.resolveUltraFastLodSurface(
+         biome,
+         worldX,
+         worldZ,
+         surface,
+         underwater,
+         rawCoverClass,
+         visualCoverClass,
+         slopeDiff,
+         convexity,
+         snowLikeTerrain,
+         mountainOsmQueryMode,
+         allowOsmSand,
+         Double.NaN,
+         false,
+         false
+      );
+   }
+
+   public EarthChunkGenerator.LodSurface resolveUltraFastLodSurface(
+      Holder<Biome> biome,
+      int worldX,
+      int worldZ,
+      int surface,
+      boolean underwater,
+      int rawCoverClass,
+      int visualCoverClass,
+      int slopeDiff,
+      int convexity,
+      boolean snowLikeTerrain,
+      OsmQueryMode mountainOsmQueryMode,
+      boolean allowOsmSand,
+      double precomputedSlopeDegrees,
+      boolean hasOsmSand
+   ) {
+      return this.resolveUltraFastLodSurface(
+         biome,
+         worldX,
+         worldZ,
+         surface,
+         underwater,
+         rawCoverClass,
+         visualCoverClass,
+         slopeDiff,
+         convexity,
+         snowLikeTerrain,
+         mountainOsmQueryMode,
+         allowOsmSand,
+         precomputedSlopeDegrees,
+         true,
+         hasOsmSand
+      );
+   }
+
+   private EarthChunkGenerator.LodSurface resolveUltraFastLodSurface(
+      Holder<Biome> biome,
+      int worldX,
+      int worldZ,
+      int surface,
+      boolean underwater,
+      int rawCoverClass,
+      int visualCoverClass,
+      int slopeDiff,
+      int convexity,
+      boolean snowLikeTerrain,
+      OsmQueryMode mountainOsmQueryMode,
+      boolean allowOsmSand,
+      double precomputedSlopeDegrees,
+      boolean osmSandPrecomputed,
+      boolean hasOsmSand
+   ) {
       int effectiveCoverClass = this.resolveEffectiveCoverClassForTerrain(rawCoverClass);
       int surfaceCoverClass = this.resolveSurfaceCoverClassForTerrain(effectiveCoverClass, visualCoverClass);
       EarthChunkGenerator.SurfacePalette palette;
@@ -6826,7 +6980,16 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       if (!underwater && !preservesBiomeSurfacePalette(biome)) {
          float vegetationTransitionWeight = MountainSurfaceRules.vegetationTransitionWeightForSurfaceCoverClass(surfaceCoverClass, heightAboveSea);
          MountainSurfaceRules.ApproximateSurface mountainSurface = this.classifyMountainSurface(
-            surfaceCoverClass, heightAboveSea, slopeDiff, convexity, snowLikeTerrain, vegetationTransitionWeight, worldX, worldZ, mountainOsmQueryMode
+            surfaceCoverClass,
+            heightAboveSea,
+            slopeDiff,
+            convexity,
+            snowLikeTerrain,
+            vegetationTransitionWeight,
+            worldX,
+            worldZ,
+            mountainOsmQueryMode,
+            precomputedSlopeDegrees
          );
          if (mountainSurface.isSnow() || mountainSurface.isMountain()) {
             palette = mapApproximateSurfacePalette(mountainSurface, palette);
@@ -6840,13 +7003,29 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       }
 
       if (allowOsmSand) {
-         palette = this.applyOvertureSandPaletteOverride(palette, worldX, worldZ, underwater, mountainOsmQueryMode);
+         palette = osmSandPrecomputed
+            ? this.applyOvertureSandPaletteOverride(palette, underwater, hasOsmSand)
+            : this.applyOvertureSandPaletteOverride(palette, worldX, worldZ, underwater, mountainOsmQueryMode);
       }
-      palette = this.applyDemDeepslateSlopePaletteOverride(palette, biome, worldX, worldZ, underwater, slopeDiff);
+      palette = this.applyDemDeepslateSlopePaletteOverride(
+         palette, biome, worldX, worldZ, underwater, slopeDiff, precomputedSlopeDegrees
+      );
       palette = applyBadlandsCliffPalette(palette, biome, worldX, worldZ, surface, underwater, slopeDiff);
       BlockState top = underwater ? palette.underwaterTop() : palette.top();
       BlockState filler = this.resolveLodSurfaceFiller(
-         palette, top, underwater, biome, surfaceCoverClass, surface, slopeDiff, convexity, worldX, worldZ, snowLikeTerrain, mountainOsmQueryMode
+         palette,
+         top,
+         underwater,
+         biome,
+         surfaceCoverClass,
+         surface,
+         slopeDiff,
+         convexity,
+         worldX,
+         worldZ,
+         snowLikeTerrain,
+         mountainOsmQueryMode,
+         precomputedSlopeDegrees
       );
       return new EarthChunkGenerator.LodSurface(top, filler);
    }
@@ -6900,10 +7079,52 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       boolean snowLikeTerrain,
       OsmQueryMode mountainOsmQueryMode
    ) {
+      return this.resolveLodSurfaceFiller(
+         palette,
+         top,
+         underwater,
+         biome,
+         surfaceCoverClass,
+         surface,
+         slopeDiff,
+         convexity,
+         worldX,
+         worldZ,
+         snowLikeTerrain,
+         mountainOsmQueryMode,
+         Double.NaN
+      );
+   }
+
+   private BlockState resolveLodSurfaceFiller(
+      EarthChunkGenerator.SurfacePalette palette,
+      BlockState top,
+      boolean underwater,
+      Holder<Biome> biome,
+      int surfaceCoverClass,
+      int surface,
+      int slopeDiff,
+      int convexity,
+      int worldX,
+      int worldZ,
+      boolean snowLikeTerrain,
+      OsmQueryMode mountainOsmQueryMode,
+      double precomputedSlopeDegrees
+   ) {
       BlockState filler = palette.filler();
       return !underwater && top.is(Blocks.SNOW_BLOCK)
          ? this.resolveLodSnowFillerBlock(
-            biome, surfaceCoverClass, surface, slopeDiff, convexity, worldX, worldZ, snowLikeTerrain, filler, mountainOsmQueryMode
+            biome,
+            surfaceCoverClass,
+            surface,
+            slopeDiff,
+            convexity,
+            worldX,
+            worldZ,
+            snowLikeTerrain,
+            filler,
+            mountainOsmQueryMode,
+            precomputedSlopeDegrees
          )
          : filler;
    }
@@ -6920,13 +7141,49 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       BlockState fallback,
       OsmQueryMode mountainOsmQueryMode
    ) {
+      return this.resolveLodSnowFillerBlock(
+         biome,
+         surfaceCoverClass,
+         surface,
+         slopeDiff,
+         convexity,
+         worldX,
+         worldZ,
+         snowLikeTerrain,
+         fallback,
+         mountainOsmQueryMode,
+         Double.NaN
+      );
+   }
+
+   private BlockState resolveLodSnowFillerBlock(
+      Holder<Biome> biome,
+      int surfaceCoverClass,
+      int surface,
+      int slopeDiff,
+      int convexity,
+      int worldX,
+      int worldZ,
+      boolean snowLikeTerrain,
+      BlockState fallback,
+      OsmQueryMode mountainOsmQueryMode,
+      double precomputedSlopeDegrees
+   ) {
       if (!isSoilBlock(fallback)) {
          return fallback;
       }
 
       int heightAboveSea = surface - this.seaLevel;
       BlockState mountainMass = this.resolveMountainMassFillBlock(
-         biome, surfaceCoverClass, surface, slopeDiff, convexity, worldX, worldZ, mountainOsmQueryMode
+         biome,
+         surfaceCoverClass,
+         surface,
+         slopeDiff,
+         convexity,
+         worldX,
+         worldZ,
+         mountainOsmQueryMode,
+         precomputedSlopeDegrees
       );
       if (mountainMass != null && !isSoilBlock(mountainMass) && !mountainMass.is(Blocks.SNOW_BLOCK) && !mountainMass.is(Blocks.POWDER_SNOW)) {
          return mountainMass;
@@ -6939,7 +7196,16 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          || biome.is(Biomes.SNOWY_SLOPES)
          || biome.is(Biomes.GROVE)) {
          MountainSurfaceRules.ApproximateSurface rockSurface = this.classifyMountainSurface(
-            surfaceCoverClass, heightAboveSea, slopeDiff, convexity, snowLikeTerrain, 0.0F, worldX, worldZ, mountainOsmQueryMode
+            surfaceCoverClass,
+            heightAboveSea,
+            slopeDiff,
+            convexity,
+            snowLikeTerrain,
+            0.0F,
+            worldX,
+            worldZ,
+            mountainOsmQueryMode,
+            precomputedSlopeDegrees
          );
          if (rockSurface.palette() == MountainSurfaceRules.ApproximatePalette.SNOW
             || rockSurface.palette() == MountainSurfaceRules.ApproximatePalette.SNOW_STREAK) {
@@ -11238,7 +11504,15 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private EarthChunkGenerator.SurfacePalette applyOvertureSandPaletteOverride(
       EarthChunkGenerator.SurfacePalette palette, int worldX, int worldZ, boolean underwater, OsmQueryMode queryMode
    ) {
-      if (palette == null || underwater || !this.hasOvertureSandAt(worldX, worldZ, queryMode)) {
+      return palette == null || underwater
+         ? palette
+         : this.applyOvertureSandPaletteOverride(palette, false, this.hasOvertureSandAt(worldX, worldZ, queryMode));
+   }
+
+   private EarthChunkGenerator.SurfacePalette applyOvertureSandPaletteOverride(
+      EarthChunkGenerator.SurfacePalette palette, boolean underwater, boolean hasOvertureSand
+   ) {
+      if (palette == null || underwater || !hasOvertureSand) {
          return palette;
       } else {
          return EarthChunkGenerator.SurfacePalette.beach();
@@ -11272,8 +11546,41 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int worldZ,
       OsmQueryMode mountainOsmQueryMode
    ) {
+      return this.resolveMountainMassFillBlock(
+         biome,
+         surfaceCoverClass,
+         surface,
+         slopeDiff,
+         convexity,
+         worldX,
+         worldZ,
+         mountainOsmQueryMode,
+         Double.NaN
+      );
+   }
+
+   private BlockState resolveMountainMassFillBlock(
+      Holder<Biome> biome,
+      int surfaceCoverClass,
+      int surface,
+      int slopeDiff,
+      int convexity,
+      int worldX,
+      int worldZ,
+      OsmQueryMode mountainOsmQueryMode,
+      double precomputedSlopeDegrees
+   ) {
       MountainSurfaceRules.ApproximateSurface approximate = this.classifyMountainSurface(
-         surfaceCoverClass, surface - this.seaLevel, slopeDiff, convexity, this.isRemaSnowTerrain(worldZ), 0.0F, worldX, worldZ, mountainOsmQueryMode
+         surfaceCoverClass,
+         surface - this.seaLevel,
+         slopeDiff,
+         convexity,
+         this.isRemaSnowTerrain(worldZ),
+         0.0F,
+         worldX,
+         worldZ,
+         mountainOsmQueryMode,
+         precomputedSlopeDegrees
       );
       if (approximate.palette() == MountainSurfaceRules.ApproximatePalette.SNOW
          || approximate.palette() == MountainSurfaceRules.ApproximatePalette.SNOW_STREAK) {

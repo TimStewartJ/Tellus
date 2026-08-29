@@ -1316,6 +1316,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          && detailLevel <= 5
          && settings.distantHorizonsRenderMode() != EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST;
       boolean allowWaterVegetation = detail <= LOD_WATER_VEGETATION_MAX_DETAIL;
+      boolean allowOsmSand = detail <= LOD_OSM_SURFACE_MAX_DETAIL;
       boolean preferNonBlockingOsm = settings.distantHorizonsOsmNonBlockingFetch();
       OsmQueryMode osmQueryMode = preferNonBlockingOsm ? OsmQueryMode.NON_BLOCKING : OsmQueryMode.BLOCKING;
       boolean mainRoadsOnly = roadsActive && detail == settings.distantHorizonsOsmRoadMaxDetail();
@@ -1326,6 +1327,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       trace.note("buildings", buildingsActive);
       trace.note("coarseSampleStride", sampleStride);
       trace.note("coarseSampleGrid", lodSizePoints + "x" + lodSizePoints);
+      trace.note("surfaceSlopeSource", LOD_SLOPE_AT_LOD_RESOLUTION ? "tile_grid" : "scalar");
       trace.note("detailedWater", false);
       trace.note("osm", roadsActive || buildingsActive || settings.enableWater() ? osmQueryMode : "DISABLED");
       trace.addPhase("sample", 0L);
@@ -1339,6 +1341,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       trace.addPhase("buildingMask", 0L);
       trace.addPhase("roadMask", 0L);
       trace.addPhase("terrainMetrics", 0L);
+      trace.addPhase("surfaceInputs.slope", 0L);
+      trace.addPhase("surfaceInputs.sand", 0L);
       trace.addPhase("emit", 0L);
       trace.addPhase("emit.classify", 0L);
       trace.addPhase("emit.baseLayers", 0L);
@@ -1418,6 +1422,24 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       trace.addPhase("sample.visualCover", sampleVisualCoverNanos);
       trace.addPhase("sample.terrain", sampleTerrainNanos);
       trace.addPhase("sample.repair", sampleRepairNanos);
+      phaseStart = beginTimingPhase(trace);
+      double[] demSlopeDegrees;
+      if (LOD_SLOPE_AT_LOD_RESOLUTION) {
+         demSlopeDegrees = LodSurfaceSlopeGrid.compute(
+            worldXs,
+            worldZs,
+            baseTerrainSurface,
+            settings.worldScale(),
+            this.generator::lodTerrainHeightToElevationMeters,
+            (worldX, worldZ) -> this.generator.sampleLodTerrainElevationMetersLocalOnly(
+               worldX, worldZ, previewResolutionMeters
+            )
+         );
+      } else {
+         demSlopeDegrees = new double[area];
+         Arrays.fill(demSlopeDegrees, Double.NaN);
+      }
+      endTimingPhase(trace, "surfaceInputs.slope", phaseStart);
       trace.note("detailedWater", baseDetailedWater);
       phaseStart = beginTimingPhase(trace);
       DhLodWaterResolver.AreaResult waterArea = this.dhWaterResolver.resolveArea(
@@ -1567,6 +1589,15 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          }
          endTimingPhase(trace, "surfaceShapeRefine", phaseStart);
       }
+      phaseStart = beginTimingPhase(trace);
+      boolean[] osmSandQueryMask = new boolean[area];
+      for (int index = 0; index < area; index++) {
+         osmSandQueryMask[index] = allowOsmSand && !underwaterFlags[index];
+      }
+      boolean[] osmSandMask = allowOsmSand
+         ? this.generator.sampleLodSandMask(worldXs, worldZs, osmSandQueryMask, osmQueryMode)
+         : new boolean[area];
+      endTimingPhase(trace, "surfaceInputs.sand", phaseStart);
       byte[] roadClassMask = roadMaskResult.mask();
       byte[] roadStyleMask = roadMaskResult.styleMask();
       boolean[] roadMarkingMask = roadMaskResult.markingMask();
@@ -1641,7 +1672,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                lodConvexities[index],
                remaSnowTerrainFlags[index],
                osmQueryMode,
-               detail <= LOD_OSM_SURFACE_MAX_DETAIL
+               allowOsmSand,
+               demSlopeDegrees[index],
+               osmSandMask[index]
             );
             BlockState topState = lodSurface.top();
             BlockState fillerState = lodSurface.filler();
@@ -1679,7 +1712,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                && !underwater
                && snowActive
                && TellusRealtimeState.shouldApplySnow(worldX, worldZ)
-               && this.generator.shouldPlaceSnowAt(worldX, worldZ)) {
+               && this.generator.shouldPlaceSnowAt(worldX, worldZ, demSlopeDegrees[index])) {
                topBlock = snowTopBlock;
             }
 
