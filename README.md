@@ -14,23 +14,6 @@ Server support note: Tellus must be installed on the server, but is not required
 
 *Note: generative AI was used during the creation of this mod.*
 
-## Building
-
-Build every supported Minecraft/loader target with:
-
-```bash
-./gradlew build
-```
-
-Individual targets remain available through `build1201`, `build1201Forge`, `build1211`,
-`build1211NeoForge`, `build262`, and `build262NeoForge`. Production jars are written
-to each target's `build/libs` directory.
-
-Version projects are thin compatibility overlays. Universal implementations live in
-`src`, while reusable Minecraft-version and loader-family implementations live in
-`shared`; see [`shared/README.md`](shared/README.md) for the layer rules. The build's
-`checkVersionSourceDuplication` task rejects byte-identical Java copies across layers.
-
 ## Features
 
 - Earth-scale terrain generated from geographic elevation data
@@ -60,16 +43,6 @@ Tellus integrates with the Distant Horizons (DH) mod to render planet-scale terr
 - **Detailed mode**: Tellus delegates to DH's chunk-based generator for far terrain, which is more accurate but significantly heavier on performance.
 
 Because Tellus worlds are Earth-scale, DH is strongly recommended and is almost essential for comfortable exploration and long-distance views.
-
-### Offline Fast LOD profiling
-
-The Minecraft 26.2 target includes a headless source-loading simulation for Fast LOD development. It uses experimental 1:1 true-height settings, prefetches the real elevation, land-cover, land-mask, Overture water/road/building inputs, and reports cold/warm sampling timings without starting Minecraft or creating a world:
-
-```bash
-./gradlew :mc262:simulateFastLodDataLoading
-```
-
-The default 64×64 detail-11 pass spans 8192 chunks, matching a 4096-chunk render radius. Use `-PsimDetails=0,6,11`, `-PsimGrid=64`, `-PsimLatitude=...`, and `-PsimLongitude=...` to select a smaller profile. The task stores its isolated cache under `mc262/build/lod-simulation-game`; `-PsimGameDir=...` selects another cache for cold-run comparisons.
 
 ## Commands
 
