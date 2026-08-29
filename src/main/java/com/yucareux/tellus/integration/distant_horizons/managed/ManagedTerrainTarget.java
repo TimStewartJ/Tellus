@@ -78,6 +78,18 @@ public record ManagedTerrainTarget(
       return cell.maxChunkX() >= minX && cell.minChunkX() <= maxX && cell.maxChunkZ() >= minZ && cell.minChunkZ() <= maxZ;
    }
 
+   boolean intersectsCells(int minCellX, int minCellZ, int maxCellX, int maxCellZ) {
+      ManagedTerrainCell min = ManagedTerrainCell.containingChunk(
+         saturatedSubtract(this.centerChunkX, this.targetRadiusChunks),
+         saturatedSubtract(this.centerChunkZ, this.targetRadiusChunks)
+      );
+      ManagedTerrainCell max = ManagedTerrainCell.containingChunk(
+         saturatedAdd(this.centerChunkX, this.targetRadiusChunks),
+         saturatedAdd(this.centerChunkZ, this.targetRadiusChunks)
+      );
+      return max.x() >= minCellX && min.x() <= maxCellX && max.z() >= minCellZ && min.z() <= maxCellZ;
+   }
+
    private static long chebyshev(ManagedTerrainCell a, ManagedTerrainCell b) {
       return Math.max(Math.abs((long)a.x() - b.x()), Math.abs((long)a.z() - b.z()));
    }

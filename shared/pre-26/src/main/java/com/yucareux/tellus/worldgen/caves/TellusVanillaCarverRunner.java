@@ -44,10 +44,12 @@ public final class TellusVanillaCarverRunner {
    private final TellusConfiguredCarvers configuredCarvers;
    private final int chunkMinY;
    private final TellusVanillaNoiseCaveSampler noiseCaveSampler;
+   private final RandomState vanillaRandomState;
 
    public TellusVanillaCarverRunner(
        BiomeSource biomeSource, Registry<Block> blockRegistry, Holder<NoiseGeneratorSettings> vanillaNoiseSettings,
-      Holder<NoiseGeneratorSettings> noiseSettings, int tellusMinY, int tellusHeight, int undergroundDepth
+      Holder<NoiseGeneratorSettings> noiseSettings, int tellusMinY, int tellusHeight, int undergroundDepth,
+      RegistryAccess registryAccess, long worldSeed
    ) {
       this.biomeSource = Objects.requireNonNull(biomeSource, "biomeSource");
       Objects.requireNonNull(blockRegistry, "blockRegistry");
@@ -58,6 +60,37 @@ public final class TellusVanillaCarverRunner {
       this.configuredCarvers = TellusConfiguredCarvers.create(blockRegistry, tellusMinY, tellusHeight, undergroundDepth);
       this.noiseCaveSampler = new TellusVanillaNoiseCaveSampler(
          Objects.requireNonNull(vanillaNoiseSettings, "vanillaNoiseSettings").value()
+      );
+      this.vanillaRandomState = this.noiseCaveSampler.randomStateFor(
+         Objects.requireNonNull(registryAccess, "registryAccess"), worldSeed
+      );
+   }
+
+   public TellusVanillaNoiseCaveSampler.PreparedVanillaCavePlan prepareVanillaNoise(
+      ChunkPos chunkPos,
+      int tellusSeaLevel,
+      boolean applyCaves,
+      boolean cavesReachSurface,
+      boolean applyOreVeins,
+      boolean applyGeologicalStonePatches,
+      int[] surfaceYByColumn,
+      IntBinaryOperator surfaceHeightSampler,
+      int[] floodGuardYByColumn,
+      int[] generationFloorYByColumn
+   ) {
+      return this.noiseCaveSampler.prepare(
+         this.vanillaRandomState,
+         chunkPos,
+         this.chunkMinY,
+         tellusSeaLevel,
+         applyCaves,
+         cavesReachSurface,
+         applyOreVeins,
+         applyGeologicalStonePatches,
+         surfaceYByColumn,
+         surfaceHeightSampler,
+         floodGuardYByColumn,
+         generationFloorYByColumn
       );
    }
 
@@ -76,28 +109,32 @@ public final class TellusVanillaCarverRunner {
       IntBinaryOperator surfaceHeightSampler,
       int[] floodGuardYByColumn,
       int[] generationFloorYByColumn,
-      List<UndergroundStructureExclusion.Box> structureExclusions
+      List<UndergroundStructureExclusion.Box> structureExclusions,
+      TellusVanillaNoiseCaveSampler.PreparedVanillaCavePlan preparedVanillaNoise
    ) {
       StructureManager safeStructures = Objects.requireNonNull(structures, "structures");
       IntBinaryOperator safeSurfaceHeightSampler = Objects.requireNonNull(surfaceHeightSampler, "surfaceHeightSampler");
       NoiseGeneratorSettings safeNoiseSettings = Objects.requireNonNull(this.contextNoiseSettings, "contextNoiseSettings");
       NoiseBasedChunkGenerator safeCarvingContextGenerator = Objects.requireNonNull(this.carvingContextGenerator, "carvingContextGenerator");
       RegistryAccess registryAccess = level.registryAccess();
-      RandomState safeRandomState = this.noiseCaveSampler.randomStateFor(registryAccess, worldSeed);
-      this.noiseCaveSampler.apply(
-         registryAccess,
-         worldSeed,
+      RandomState safeRandomState = this.vanillaRandomState;
+      TellusVanillaNoiseCaveSampler.PreparedVanillaCavePlan noisePlan = preparedVanillaNoise != null
+         ? preparedVanillaNoise
+         : this.prepareVanillaNoise(
+            chunk.getPos(),
+            tellusSeaLevel,
+            applyCaves,
+            cavesReachSurface,
+            applyOreVeins,
+            applyGeologicalStonePatches,
+            surfaceYByColumn,
+            safeSurfaceHeightSampler,
+            floodGuardYByColumn,
+            generationFloorYByColumn
+         );
+      this.noiseCaveSampler.applyPrepared(
+         noisePlan,
          chunk,
-         this.chunkMinY,
-         tellusSeaLevel,
-         applyCaves,
-         cavesReachSurface,
-         applyOreVeins,
-         applyGeologicalStonePatches,
-         surfaceYByColumn,
-         safeSurfaceHeightSampler,
-         floodGuardYByColumn,
-         generationFloorYByColumn,
          structureExclusions,
          (target, pos, state, fluid) -> {
             target.setBlockState(pos, state, false);

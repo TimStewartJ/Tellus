@@ -103,23 +103,41 @@ class TerrainHeightTransformTest {
    void blockAndLatitudeHeightPathsRemainEquivalent() {
       double[] latitudes = {-80.0, -63.0695, -27.9881, 0.0, 27.9881, 63.0695, 80.0};
       double[] elevations = {-11_034.0, -100.0, 0.0, 4_478.0, 8_848.0};
+      WorldProjection projection = WorldProjection.global(ONE_TO_ONE);
       for (boolean automaticHeightScaling : new boolean[]{false, true}) {
          for (boolean experimental : new boolean[]{false, true}) {
             for (double latitude : latitudes) {
-               double blockZ = EarthProjection.latToBlockZ(latitude, ONE_TO_ONE);
+               double blockZ = projection.latToBlockZ(latitude);
                for (double elevation : elevations) {
                   assertEquals(
                      TerrainHeightTransform.scaledElevationBlocksAtLatitude(
                         elevation, latitude, ONE_TO_ONE, 1.0, 1.0, experimental, automaticHeightScaling
                      ),
                      TerrainHeightTransform.scaledElevationBlocks(
-                        elevation, blockZ, ONE_TO_ONE, 1.0, 1.0, experimental, automaticHeightScaling
+                        elevation, blockZ, projection, 1.0, 1.0, experimental, automaticHeightScaling
                      ),
                      2.0E-9
                   );
                }
             }
+
          }
       }
+   }
+
+   @Test
+   void generatedHeightInversePreservesHighLatitudeReliefMeters() {
+      double latitude = 63.0695;
+      WorldProjection projection = WorldProjection.global(ONE_TO_ONE);
+      double blockZ = projection.latToBlockZ(latitude);
+      int blockOffset = TerrainHeightTransform.blockOffset(
+         150.0, blockZ, projection, 1.0, 1.0, true, true
+      );
+
+      double restored = TerrainHeightTransform.elevationMetersFromBlockOffset(
+         blockOffset, blockZ, projection, 1.0, 1.0, true, true
+      );
+
+      assertEquals(150.0, restored, 1.0);
    }
 }

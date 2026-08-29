@@ -2,12 +2,13 @@ package com.yucareux.tellus.world.data.koppen;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import com.yucareux.tellus.cache.LastValueMemo;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.Tellus;
-import com.yucareux.tellus.worldgen.EarthProjection;
+import com.yucareux.tellus.worldgen.WorldProjection;
 import java.io.ByteArrayInputStream;
 import java.io.EOFException;
 import java.io.IOException;
@@ -52,9 +53,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       TellusCacheRegistry.register(this);
    }
 
-   public String sampleDitheredCode(double blockX, double blockZ, double worldScale) {
+   public String sampleDitheredCode(double blockX, double blockZ, WorldProjection projection) {
       TellusKoppenSource.GeoTiffRaster raster = this.raster();
-      TellusKoppenSource.PixelSample center = this.toPixelSample(blockX, blockZ, worldScale);
+      TellusKoppenSource.PixelSample center = this.toPixelSample(blockX, blockZ, projection);
       if (center == null) {
          return null;
       } else {
@@ -62,9 +63,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
    }
 
-   public String sampleRawCode(double blockX, double blockZ, double worldScale) {
+   public String sampleRawCode(double blockX, double blockZ, WorldProjection projection) {
       TellusKoppenSource.GeoTiffRaster raster = this.raster();
-      TellusKoppenSource.Pixel center = this.toPixel(blockX, blockZ, worldScale);
+      TellusKoppenSource.Pixel center = this.toPixel(blockX, blockZ, projection);
       if (center == null) {
          return null;
       } else {
@@ -72,9 +73,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
    }
 
-   public String sampleSmoothedCode(double blockX, double blockZ, double worldScale) {
+   public String sampleSmoothedCode(double blockX, double blockZ, WorldProjection projection) {
       TellusKoppenSource.GeoTiffRaster raster = this.raster();
-      TellusKoppenSource.Pixel center = this.toPixel(blockX, blockZ, worldScale);
+      TellusKoppenSource.Pixel center = this.toPixel(blockX, blockZ, projection);
       if (center == null) {
          return null;
       } else {
@@ -82,9 +83,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
    }
 
-   public String findNearestCode(double blockX, double blockZ, double worldScale) {
+   public String findNearestCode(double blockX, double blockZ, WorldProjection projection) {
       TellusKoppenSource.GeoTiffRaster raster = this.raster();
-      TellusKoppenSource.Pixel center = this.toPixel(blockX, blockZ, worldScale);
+      TellusKoppenSource.Pixel center = this.toPixel(blockX, blockZ, projection);
       if (center == null) {
          return null;
       } else if (raster == TellusKoppenSource.GeoTiffRaster.MISSING) {
@@ -95,12 +96,13 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
    }
 
-   private TellusKoppenSource.Pixel toPixel(double blockX, double blockZ, double worldScale) {
-      TellusKoppenSource.PixelSample sample = this.toPixelSample(blockX, blockZ, worldScale);
+   private TellusKoppenSource.Pixel toPixel(double blockX, double blockZ, WorldProjection projection) {
+      TellusKoppenSource.PixelSample sample = this.toPixelSample(blockX, blockZ, projection);
       return sample == null ? null : new TellusKoppenSource.Pixel(sample.x(), sample.y());
    }
 
-   private TellusKoppenSource.PixelSample toPixelSample(double blockX, double blockZ, double worldScale) {
+   private TellusKoppenSource.PixelSample toPixelSample(double blockX, double blockZ, WorldProjection projection) {
+      double worldScale = projection.worldScale();
       if (worldScale <= 0.0) {
          return null;
       } else {
@@ -114,9 +116,8 @@ public final class TellusKoppenSource implements TellusCacheHandle {
             blockZ = downsampleBlock(blockZ, step);
          }
 
-         double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-         double lon = blockX / blocksPerDegree;
-         double lat = EarthProjection.blockZToLat(blockZ, worldScale);
+         double lon = projection.blockXToLon(blockX);
+         double lat = projection.blockZToLat(blockZ);
          return !(lat < MIN_LAT) && !(lat > MAX_LAT) && !(lon < MIN_LON) && !(lon > MAX_LON) ? raster.toPixelSample(lon, lat) : null;
       }
    }
@@ -328,6 +329,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       private final double tieLat;
       private final double pixelSizeMeters;
       private final Cache<Integer, byte[]> tileCache;
+      private final LastValueMemo<Integer, byte[]> tileMemo = new LastValueMemo<>();
 
       private GeoTiffRaster() {
          this.path = null;
@@ -397,6 +399,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
       void close() {
          if (this.channel != null) {
+            this.tileMemo.invalidateAll();
             this.tileCache.invalidateAll();
             this.tileCache.cleanUp();
 
@@ -565,8 +568,13 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
 
       private byte[] getTile(int tileIndex) throws IOException {
+         Integer key = tileIndex;
+         byte[] memoized = this.tileMemo.get(key);
+         if (memoized != null) {
+            return memoized;
+         }
          try {
-            return this.tileCache.get(tileIndex, () -> this.readTile(tileIndex));
+            return this.tileMemo.put(key, this.tileCache.get(key, () -> this.readTile(tileIndex)));
          } catch (ExecutionException error) {
             Throwable cause = error.getCause();
             if (cause instanceof IOException io) {

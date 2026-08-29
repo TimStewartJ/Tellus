@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Map.Entry;
+import java.util.function.Consumer;
 import java.util.function.DoubleFunction;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -197,7 +198,7 @@ public class EarthCustomizeScreen extends Screen {
          info.maxElevationMeters(), current.spawnLatitude(), targetWorldScale, current.terrestrialHeightScale(), current.oceanicHeightScale(),
          targetHeightOffset, current.automaticHeightScaling()
       );
-      this.setSliderValue("world_scale", targetWorldScale);
+      this.setSliderValue("world_scale", this.displayedWorldScale(targetWorldScale, this.isWorldScaleAtSpawnEnabled()));
       this.setSliderValue("height_offset", targetHeightOffset);
       this.setSliderValue("min_altitude", targetMinSurface - current.undergroundDepth());
       this.setSliderValue("max_altitude", targetMaxSurface + 50);
@@ -404,7 +405,9 @@ public class EarthCustomizeScreen extends Screen {
       Objects.requireNonNull(settings, "settings");
       this.spawnLatitude = settings.spawnLatitude();
       this.spawnLongitude = settings.spawnLongitude();
-      this.setSliderValue("world_scale", settings.worldScale());
+      this.setToggleValue("world_scale_at_spawn", settings.worldScaleAtSpawn());
+      this.setToggleValue("center_world_on_spawn", settings.centerWorldOnSpawn());
+      this.setSliderValue("world_scale", this.displayedWorldScale(settings.worldScale(), settings.worldScaleAtSpawn()));
       this.setSliderValue("underground_depth", settings.undergroundDepth());
       this.setToggleValue("cave_generation", settings.caveGeneration());
       this.setToggleValue("caves_reach_surface", settings.cavesReachSurface());
@@ -452,7 +455,21 @@ public class EarthCustomizeScreen extends Screen {
 
    
    private EarthGeneratorSettings buildSettings() {
-      double worldScale = this.findSliderValue("world_scale", EarthGeneratorSettings.DEFAULT.worldScale());
+      boolean worldScaleAtSpawn = this.findToggleValue("world_scale_at_spawn", EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn());
+      boolean centerWorldOnSpawn = this.findToggleValue(
+         "center_world_on_spawn", EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn()
+      );
+      double requestedWorldScale = this.findSliderValue("world_scale", EarthGeneratorSettings.DEFAULT.worldScale());
+      double worldScale = Math.min(
+         EarthGeneratorSettings.MAX_WORLD_SCALE,
+         EarthGeneratorSettings.equatorialWorldScale(requestedWorldScale, this.spawnLatitude, worldScaleAtSpawn)
+      );
+      double effectiveDisplayedScale = EarthGeneratorSettings.displayedWorldScale(
+         worldScale, this.spawnLatitude, worldScaleAtSpawn
+      );
+      if (Math.abs(effectiveDisplayedScale - requestedWorldScale) > 1.0E-6) {
+         this.setSliderValue("world_scale", effectiveDisplayedScale);
+      }
       EarthGeneratorSettings.DemSelection demSelection = this.buildDemSelection();
       boolean experimentalIncreaseHeight = this.findToggleValue(
          "experimental_increase_height", EarthGeneratorSettings.DEFAULT.experimentalIncreaseHeight()
@@ -519,8 +536,8 @@ public class EarthCustomizeScreen extends Screen {
       int distantHorizonsOsmRoadMaxDetail = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmRoadMaxDetail();
       int distantHorizonsOsmBuildingMaxDetail = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmBuildingMaxDetail();
       boolean distantHorizonsOsmNonBlockingFetch = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmNonBlockingFetch();
-      boolean tellusManagedTerrainDownloads = this.findToggleValue(
-         "tellus_managed_terrain_downloads", EarthGeneratorSettings.DEFAULT.tellusManagedTerrainDownloads()
+      EarthGeneratorSettings.TerrainStreamingStrategy terrainStreamingStrategy = this.findTerrainStreamingStrategy(
+         "terrain_streaming_strategy", EarthGeneratorSettings.DEFAULT.terrainStreamingStrategy()
       );
       boolean showTerrainDownloadOverlay = this.findToggleValue(
          "show_terrain_download_overlay", EarthGeneratorSettings.DEFAULT.showTerrainDownloadOverlay()
@@ -605,13 +622,15 @@ public class EarthCustomizeScreen extends Screen {
          this.randomBiomeSeed,
          randomBiomeIds,
          experimentalIncreaseHeight,
-         tellusManagedTerrainDownloads,
+         terrainStreamingStrategy,
          showTerrainDownloadOverlay,
          cavesReachSurface,
          undergroundDepth,
          customTrees,
          automaticHeightScaling,
-         hugeRedMushrooms
+         hugeRedMushrooms,
+         worldScaleAtSpawn,
+         centerWorldOnSpawn
       );
    }
 
@@ -642,7 +661,9 @@ public class EarthCustomizeScreen extends Screen {
          this.spawnLongitude = initialSettings.spawnLongitude();
       }
 
-      this.setSliderValue("world_scale", initialSettings.worldScale());
+      this.setToggleValue("world_scale_at_spawn", initialSettings.worldScaleAtSpawn());
+      this.setToggleValue("center_world_on_spawn", initialSettings.centerWorldOnSpawn());
+      this.setSliderValue("world_scale", this.displayedWorldScale(initialSettings.worldScale(), initialSettings.worldScaleAtSpawn()));
       this.setSliderValue("underground_depth", initialSettings.undergroundDepth());
       this.setDemSelectionValue(initialSettings.demSelection());
       this.setSliderValue("terrestrial_height_scale", initialSettings.terrestrialHeightScale());
@@ -687,7 +708,7 @@ public class EarthCustomizeScreen extends Screen {
       this.setToggleValue("add_trial_chambers", initialSettings.addTrialChambers());
       this.setToggleValue("add_trail_ruins", initialSettings.addTrailRuins());
       this.setToggleValue("distant_horizons_water_resolver", initialSettings.distantHorizonsWaterResolver());
-      this.setToggleValue("tellus_managed_terrain_downloads", initialSettings.tellusManagedTerrainDownloads());
+      this.setTerrainStreamingStrategyValue("terrain_streaming_strategy", initialSettings.terrainStreamingStrategy());
       this.setToggleValue("show_terrain_download_overlay", initialSettings.showTerrainDownloadOverlay());
       this.setToggleValue("realtime_time", initialSettings.realtimeTime());
       this.setToggleValue("realtime_weather", initialSettings.realtimeWeather());
@@ -725,6 +746,17 @@ public class EarthCustomizeScreen extends Screen {
          for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
             if (setting instanceof EarthCustomizeScreen.ModeDefinition mode && mode.key.equals(key)) {
                mode.value = value;
+               return;
+            }
+         }
+      }
+   }
+
+   private void setTerrainStreamingStrategyValue(String key, EarthGeneratorSettings.TerrainStreamingStrategy value) {
+      for (EarthCustomizeScreen.CategoryDefinition category : this.categories) {
+         for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
+            if (setting instanceof EarthCustomizeScreen.StreamingStrategyDefinition strategy && strategy.key.equals(key)) {
+               strategy.value = value;
                return;
             }
          }
@@ -770,6 +802,19 @@ public class EarthCustomizeScreen extends Screen {
       return fallback;
    }
 
+   private EarthGeneratorSettings.TerrainStreamingStrategy findTerrainStreamingStrategy(
+      String key, EarthGeneratorSettings.TerrainStreamingStrategy fallback
+   ) {
+      for (EarthCustomizeScreen.CategoryDefinition category : this.categories) {
+         for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
+            if (setting instanceof EarthCustomizeScreen.StreamingStrategyDefinition strategy && strategy.key.equals(key)) {
+               return strategy.value;
+            }
+         }
+      }
+      return fallback;
+   }
+
    private EarthGeneratorSettings.DemSelection buildDemSelection() {
       return EarthGeneratorSettings.DemSelection.mapterhornSelection();
    }
@@ -792,6 +837,8 @@ public class EarthCustomizeScreen extends Screen {
             slider("world_scale", 30.0, 1.0, EarthGeneratorSettings.MAX_WORLD_SCALE, 5.0)
                .withDisplay(EarthCustomizeScreen::formatWorldScale)
                .withScale(EarthCustomizeScreen.SliderScale.power(3.0)),
+            toggle("world_scale_at_spawn", EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn()).onToggled(this::onWorldScaleAtSpawnToggled),
+            toggle("center_world_on_spawn", EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn()),
             new AutoAdjustDefinition(),
             toggle("automatic_height_scaling", EarthGeneratorSettings.DEFAULT.automaticHeightScaling()),
             toggle("experimental_increase_height", EarthGeneratorSettings.DEFAULT.experimentalIncreaseHeight())
@@ -903,7 +950,7 @@ public class EarthCustomizeScreen extends Screen {
          new EarthCustomizeScreen.CategoryDefinition(
             "network",
             List.of(
-               toggle("tellus_managed_terrain_downloads", EarthGeneratorSettings.DEFAULT.tellusManagedTerrainDownloads()),
+               streamingStrategy("terrain_streaming_strategy", EarthGeneratorSettings.DEFAULT.terrainStreamingStrategy()),
                toggle("show_terrain_download_overlay", EarthGeneratorSettings.DEFAULT.showTerrainDownloadOverlay())
             )
          ).hideFromRoot()
@@ -1030,6 +1077,12 @@ public class EarthCustomizeScreen extends Screen {
 
    private static EarthCustomizeScreen.ModeDefinition mode(String key, EarthGeneratorSettings.DistantHorizonsRenderMode defaultValue) {
       return new EarthCustomizeScreen.ModeDefinition(key, defaultValue);
+   }
+
+   private static EarthCustomizeScreen.StreamingStrategyDefinition streamingStrategy(
+      String key, EarthGeneratorSettings.TerrainStreamingStrategy defaultValue
+   ) {
+      return new EarthCustomizeScreen.StreamingStrategyDefinition(key, defaultValue);
    }
 
    private EarthCustomizeScreen.CategoryLinkDefinition categoryLink( EarthCustomizeScreen.CategoryDefinition targetCategory) {
@@ -1198,6 +1251,12 @@ public class EarthCustomizeScreen extends Screen {
    
    private static Component formatRenderMode(EarthGeneratorSettings.DistantHorizonsRenderMode mode) {
       return Objects.requireNonNull(Component.translatable("property.tellus.distant_horizons_render_mode.value." + mode.id()), "renderModeLabel");
+   }
+
+   private static Component formatTerrainStreamingStrategy(EarthGeneratorSettings.TerrainStreamingStrategy strategy) {
+      return Objects.requireNonNull(
+         Component.translatable("property.tellus.terrain_streaming_strategy.value." + strategy.id()), "terrainStreamingStrategyLabel"
+      );
    }
 
    
@@ -1599,17 +1658,18 @@ public class EarthCustomizeScreen extends Screen {
             cavesReachSurface.forceDisabled(caveGeneration == null || !caveGeneration.value);
          }
       } else if ("network".equals(category.getId())) {
-         EarthCustomizeScreen.ToggleDefinition managedDownloads = null;
+         EarthCustomizeScreen.StreamingStrategyDefinition strategy = null;
          EarthCustomizeScreen.ToggleDefinition overlay = null;
          for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
-            if (setting instanceof EarthCustomizeScreen.ToggleDefinition toggle && toggle.key.equals("tellus_managed_terrain_downloads")) {
-               managedDownloads = toggle;
+            if (setting instanceof EarthCustomizeScreen.StreamingStrategyDefinition streaming
+               && streaming.key.equals("terrain_streaming_strategy")) {
+               strategy = streaming;
             } else if (setting instanceof EarthCustomizeScreen.ToggleDefinition toggle && toggle.key.equals("show_terrain_download_overlay")) {
                overlay = toggle;
             }
          }
-         if (managedDownloads != null && overlay != null) {
-            overlay.forceDisabled(!managedDownloads.value);
+         if (strategy != null && overlay != null) {
+            overlay.forceDisabled(!strategy.value.isAutomatic());
          }
       } else if ("openstreetmaps_features".equals(category.getId())) {
          EarthCustomizeScreen.ToggleDefinition roads = null;
@@ -1702,7 +1762,32 @@ public class EarthCustomizeScreen extends Screen {
    }
 
    private boolean roadsAndBuildingsSupportedForSelectedScale() {
-      return roadsAndBuildingsSupportedForWorldScale(this.findSliderValue("world_scale", EarthGeneratorSettings.DEFAULT.worldScale()));
+      return roadsAndBuildingsSupportedForWorldScale(this.selectedEquatorialWorldScale());
+   }
+
+   private boolean isWorldScaleAtSpawnEnabled() {
+      return this.findToggleValue("world_scale_at_spawn", EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn());
+   }
+
+   /** The stored (equatorial) world scale implied by the current slider value and presentation mode. */
+   private double selectedEquatorialWorldScale() {
+      return EarthGeneratorSettings.equatorialWorldScale(
+         this.findSliderValue("world_scale", EarthGeneratorSettings.DEFAULT.worldScale()), this.spawnLatitude, this.isWorldScaleAtSpawnEnabled()
+      );
+   }
+
+   private double displayedWorldScale(double equatorialWorldScale, boolean worldScaleAtSpawn) {
+      return EarthGeneratorSettings.displayedWorldScale(equatorialWorldScale, this.spawnLatitude, worldScaleAtSpawn);
+   }
+
+   /**
+    * Re-expresses the World Scale slider when its presentation mode changes so the stored equatorial
+    * scale, and therefore the generated world, stays the same.
+    */
+   private void onWorldScaleAtSpawnToggled(boolean worldScaleAtSpawn) {
+      double sliderValue = this.findSliderValue("world_scale", EarthGeneratorSettings.DEFAULT.worldScale());
+      double equatorialWorldScale = EarthGeneratorSettings.equatorialWorldScale(sliderValue, this.spawnLatitude, !worldScaleAtSpawn);
+      this.setSliderValue("world_scale", this.displayedWorldScale(equatorialWorldScale, worldScaleAtSpawn));
    }
 
    private static boolean roadsAndBuildingsSupportedForWorldScale(double worldScale) {
@@ -2336,6 +2421,35 @@ public class EarthCustomizeScreen extends Screen {
       }
    }
 
+   private static final class StreamingStrategyDefinition implements EarthCustomizeScreen.SettingDefinition {
+      private static final List<EarthGeneratorSettings.TerrainStreamingStrategy> STRATEGIES = List.of(
+         EarthGeneratorSettings.TerrainStreamingStrategy.AUTOMATIC,
+         EarthGeneratorSettings.TerrainStreamingStrategy.LEGACY_COMPATIBILITY
+      );
+      private final String key;
+      private EarthGeneratorSettings.TerrainStreamingStrategy value;
+
+      private StreamingStrategyDefinition(String key, EarthGeneratorSettings.TerrainStreamingStrategy defaultValue) {
+         this.key = key;
+         this.value = Objects.requireNonNull(defaultValue, "defaultValue");
+      }
+
+      @Override
+      public AbstractWidget createWidget(Runnable onChange) {
+         Component name = EarthCustomizeScreen.settingName(this.key);
+         Component tooltip = EarthCustomizeScreen.settingTooltip(this.key);
+         Builder<EarthGeneratorSettings.TerrainStreamingStrategy> builder = CycleButton.builder(
+               EarthCustomizeScreen::formatTerrainStreamingStrategy, this.value
+            )
+            .withValues(STRATEGIES)
+            .withTooltip(value -> Tooltip.create(tooltip));
+         return builder.create(0, 0, 0, 20, name, (button, value) -> {
+            this.value = value;
+            onChange.run();
+         });
+      }
+   }
+
    private record RegistryUpdate(LayeredRegistryAccess<RegistryLayer> registries, Holder<DimensionType> holder) {
    }
 
@@ -2552,10 +2666,16 @@ public class EarthCustomizeScreen extends Screen {
       
       private Component forceDisabledTooltip;
       private Component tooltipOverride;
+      private Consumer<Boolean> onToggled;
 
       private ToggleDefinition(String key, boolean defaultValue) {
          this.key = key;
          this.value = defaultValue;
+      }
+
+      private EarthCustomizeScreen.ToggleDefinition onToggled(Consumer<Boolean> onToggled) {
+         this.onToggled = Objects.requireNonNull(onToggled, "onToggled");
+         return this;
       }
 
       private EarthCustomizeScreen.ToggleDefinition locked(boolean locked) {
@@ -2605,6 +2725,9 @@ public class EarthCustomizeScreen extends Screen {
             .withTooltip(value -> Tooltip.create(tooltip));
          CycleButton<Boolean> button = builder.create(0, 0, 0, 20, name, (btn, value) -> {
             this.value = value;
+            if (this.onToggled != null) {
+               this.onToggled.accept(value);
+            }
             onChange.run();
          });
          button.active = !this.locked && !this.forceDisabled && !this.unavailable;

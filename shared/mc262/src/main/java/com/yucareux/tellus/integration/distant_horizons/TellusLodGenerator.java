@@ -24,14 +24,15 @@ import com.yucareux.tellus.world.data.canopy.TellusCanopyHeightSource;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.TellusResolveSource;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainAvailability;
-import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainCompatibility;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
+import com.yucareux.tellus.integration.distant_horizons.managed.TerrainStreamingPolicy;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
 import com.yucareux.tellus.worldgen.DhLodWaterResolver;
 import com.yucareux.tellus.worldgen.EarthBiomeSource;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.EarthProjection;
+import com.yucareux.tellus.worldgen.WorldProjection;
 import com.yucareux.tellus.worldgen.ExperimentalHeightSupport;
 import com.yucareux.tellus.worldgen.TellusBlockReferences;
 import com.yucareux.tellus.worldgen.TellusWorldgenSources;
@@ -103,6 +104,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private static final boolean SHARED_TERRAIN_CACHE_ENABLED = Boolean.parseBoolean(
       System.getProperty("tellus.dhSharedTerrainCacheEnabled", "false")
    );
+   /**
+    * Sample the deepslate/snow DEM slope from the zoom the LOD surface itself came from. The
+    * full-resolution stencil made detail 4-6 tiles decode 16-64 elevation tiles each (in-game JFR:
+    * 20% of DH world-gen CPU was WebP decoding under applyDemDeepslateSlopePaletteOverride).
+    */
+   private static final boolean LOD_SLOPE_AT_LOD_RESOLUTION = Boolean.parseBoolean(
+      System.getProperty("tellus.dhLodSlopeAtLodResolution", "true")
+   );
    private static final int LOD_WATER_FULL_VOLUME_MAX_DEPTH = intProperty("tellus.dhWaterFullVolumeMaxDepth", 6, 0, 64);
    private static final int LOD_WATER_SURFACE_LAYER_DEPTH = intProperty("tellus.dhWaterSurfaceLayerDepth", 1, 1, 16);
    private static final int LOD_WATER_VEGETATION_MAX_DETAIL = intProperty("tellus.dhWaterVegetationMaxDetail", 8, 0, 24);
@@ -154,6 +163,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    );
    private static final Map<Holder<Biome>, TellusLodGenerator.CanopyProfile> CANOPY_PROFILES = new ConcurrentHashMap<>();
    private final EarthChunkGenerator generator;
+   private final WorldProjection projection;
    private final EarthBiomeSource biomeSource;
    private final DhLodWaterResolver dhWaterResolver;
    private final ThreadLocal<TellusLodGenerator.WrapperCache> wrapperCache;
@@ -162,6 +172,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
    public TellusLodGenerator(IDhApiLevelWrapper levelWrapper, EarthChunkGenerator generator) {
       this.generator = generator;
+      this.projection = generator.settings().projection();
       this.biomeSource = (EarthBiomeSource)generator.getBiomeSource();
       this.dhWaterResolver = new DhLodWaterResolver(generator);
       this.wrapperCache = ThreadLocal.withInitial(() -> new TellusLodGenerator.WrapperCache(levelWrapper));
@@ -186,13 +197,13 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       if (!DistantHorizonsIntegration.isDistantGenerationReady()) {
          return ManagedTerrainAvailability.WAIT;
       }
-      return this.managedDownloadsActive()
-         ? ManagedTerrainAvailability.availability(this.managedTerrainKey, chunkPosMinX, chunkPosMinZ, widthChunks)
-         : ManagedTerrainAvailability.READY;
+      return TerrainStreamingPolicy.fastLodAvailability(
+         this.generator.settings(), this.managedTerrainKey, chunkPosMinX, chunkPosMinZ, widthChunks, targetDataDetail
+      );
    }
 
    private boolean managedDownloadsActive() {
-      return this.generator.settings().tellusManagedTerrainDownloads() && ManagedTerrainCompatibility.isGenerationGateAvailable();
+      return TerrainStreamingPolicy.managedDownloadsActive(this.generator.settings());
    }
 
    public CompletableFuture<Void> generateLod(
@@ -217,6 +228,12 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          this.generator.settings().distantHorizonsRenderMode()
       );
       boolean managedDownloads = this.managedDownloadsActive();
+      boolean backgroundPrefetch = TerrainStreamingPolicy.startsBackgroundPrefetch(this.generator.settings(), detailLevel);
+      boolean coarseCacheOnly = TerrainStreamingPolicy.isAutomatic(this.generator.settings())
+         && TerrainStreamingPolicy.isCoarseDetail(detailLevel);
+      boolean cacheOnly = TerrainStreamingPolicy.usesCacheOnlyFastLod(this.generator.settings(), detailLevel);
+      timingTrace.note("streamingStrategy", this.generator.settings().terrainStreamingStrategy().id());
+      timingTrace.note("sourcePolicy", coarseCacheOnly ? "coarse_cache_only" : cacheOnly ? "exact_cache_only" : "exact");
       try {
          CompletableFuture<Void> preparation = DistantHorizonsIntegration.distantGenerationReadyFuture().thenCompose(ignored -> {
             if (generationFuture.isCancelled()) {
@@ -235,9 +252,21 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             );
             CompletableFuture<Void> prefetchFuture = prefetchSubmission.future();
             generationFuture.attachCancellation(prefetchFuture);
+            timingTrace.note("prefetchBatchSize", prefetchSubmission.batchSize());
+            if (backgroundPrefetch) {
+               timingTrace.note("downloadOwner", "lod-background");
+               prefetchFuture.whenComplete((prefetchIgnored, prefetchError) -> {
+                  if (prefetchError != null) {
+                     Throwable cause = unwrapCompletionFailure(prefetchError);
+                     if (!isInterruptedLodGeneration(cause)) {
+                        LOGGER.debug("Tellus background coarse LOD prefetch completed with an error.", cause);
+                     }
+                  }
+               });
+               return CompletableFuture.completedFuture(null);
+            }
             return prefetchFuture.handle((prefetchIgnored, prefetchError) -> {
                endTimingPhase(timingTrace, "prefetch", prefetchStart);
-               timingTrace.note("prefetchBatchSize", prefetchSubmission.batchSize());
                if (prefetchError != null) {
                   Throwable cause = unwrapCompletionFailure(prefetchError);
                   if (isInterruptedLodGeneration(cause) || cause instanceof Error) {
@@ -254,7 +283,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          generationFuture.attachCancellation(preparation);
          generationFuture.attach(preparation.thenRunAsync(generationFuture.track(() -> {
             boolean handledCancellation = false;
-            try (ManagedTerrainNetworkPolicy.Scope ignored = managedDownloads ? ManagedTerrainNetworkPolicy.cacheOnly() : null) {
+            try (ManagedTerrainNetworkPolicy.Scope ignored = cacheOnly ? ManagedTerrainNetworkPolicy.cacheOnly() : null) {
                this.buildLod(pooledFullDataSource, chunkPosMinX, chunkPosMinZ, detailLevel, generatorMode, timingTrace);
                timingTrace.logSuccess();
                resultConsumer.accept(pooledFullDataSource);
@@ -392,6 +421,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          trace.addPhase("sample.repair", 0L);
          trace.addPhase("waterProbe", 0L);
          trace.addPhase("detailedWater", 0L);
+         trace.addPhase("biomeRelief", 0L);
          trace.addPhase("biomeResolve", 0L);
          trace.addPhase("buildingMask", 0L);
          trace.addPhase("roadMask", 0L);
@@ -548,14 +578,30 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             worldZs,
             baseTerrainSurface,
             coverClasses,
-            baseDetailedWater
+            baseDetailedWater,
+            this.waterResolutionMode(settings, detailLevel)
          );
          endTimingPhase(trace, "detailedWater", phaseStart);
+         trace.note("waterApproximate", waterArea.approximate());
 
          int[] resolvedTerrainSurface = waterArea.terrainSurface();
          int[] resolvedWaterSurface = waterArea.waterSurface();
          boolean[] resolvedHasWater = waterArea.hasWater();
          boolean[] resolvedOcean = waterArea.ocean();
+
+         this.resolveDryOsmTerrainCoverClasses(
+            worldXs, worldZs, lodSizePoints, coverClasses, visualCoverClasses, resolvedHasWater
+         );
+         double[] regionalReliefMeters = this.buildCoarseRegionalRelief(
+            worldXs,
+            worldZs,
+            baseTerrainSurface,
+            visualCoverClasses,
+            settings,
+            detailLevel,
+            previewResolutionMeters,
+            trace
+         );
 
          phaseStart = beginTimingPhase(trace);
          for (int localZ = 0; localZ < lodSizePoints; localZ++) {
@@ -570,21 +616,24 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                int waterSurface = Mth.clamp(resolvedWaterSurface[index], minY, maxY - 1);
                boolean hasWater = resolvedHasWater[index];
                boolean isOcean = resolvedOcean[index];
-               int terrainCoverClass = this.generator.resolveDryOsmTerrainCoverClass(
-                  worldX, worldZ, coverClasses[index], hasWater
-               );
-               if (terrainCoverClass != coverClasses[index]) {
-                  coverClasses[index] = terrainCoverClass;
-                  visualCoverClasses[index] = terrainCoverClass;
-               }
                int vegetationSurface = surfaceY;
                surfaceYs[index] = surfaceY;
                vegetationSurfaceYs[index] = Mth.clamp(vegetationSurface, minY, maxY - 1);
                waterSurfaces[index] = waterSurface;
                underwaterFlags[index] = hasWater && waterSurface > surfaceY;
-               Holder<Biome> biomeHolder = this.biomeSource
-                  .getLodBiomeAtBlock(
+               Holder<Biome> biomeHolder = regionalReliefMeters == null
+                  ? this.biomeSource.getLodBiomeAtBlock(
                      worldX, worldZ, coverClasses[index], visualCoverClasses[index], hasWater, isOcean, previewResolutionMeters
+                  )
+                  : this.biomeSource.getLodBiomeAtBlock(
+                     worldX,
+                     worldZ,
+                     coverClasses[index],
+                     visualCoverClasses[index],
+                     hasWater,
+                     isOcean,
+                     previewResolutionMeters,
+                     regionalReliefMeters[index]
                   );
                biomeHolders[index] = biomeHolder;
                biomeWrappers[index] = wrappers.getBiome(biomeHolder);
@@ -726,6 +775,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          phaseStart = beginTimingPhase(trace);
          this.generator.setLodMountainTransitionCache(mountainTransitionCache);
          this.generator.setLodShorelineOverrideSuppressed(suppressCoarseShoreline);
+         this.applyLodSlopeSampling(previewResolutionMeters, cellSize);
 
          try {
             for (int localZ = 0; localZ < lodSizePoints; localZ++) {
@@ -1141,6 +1191,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          } finally {
             this.generator.clearLodMountainTransitionCache();
             this.generator.clearLodShorelineOverrideSuppressed();
+            this.generator.clearLodSlopeSampling();
          }
          endTimingPhase(trace, "emit", phaseStart);
          trace.addPhase("emit.surfaceResolve", emitSurfaceResolveNanos);
@@ -1167,6 +1218,70 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          trace.stat("emit.bridgeSupportColumns", emitBridgeSupportColumns);
          trace.stat("emit.badlandsColumns", emitBadlandsColumns);
       }
+   }
+
+   private void resolveDryOsmTerrainCoverClasses(
+      int[] worldXs,
+      int[] worldZs,
+      int lodSizePoints,
+      int[] coverClasses,
+      int[] visualCoverClasses,
+      boolean[] hasWater
+   ) {
+      for (int localZ = 0; localZ < lodSizePoints; localZ++) {
+         int worldZ = worldZs[localZ];
+         int row = localZ * lodSizePoints;
+         for (int localX = 0; localX < lodSizePoints; localX++) {
+            int index = row + localX;
+            int terrainCoverClass = this.generator.resolveDryOsmTerrainCoverClass(
+               worldXs[localX], worldZ, coverClasses[index], hasWater[index]
+            );
+            if (terrainCoverClass != coverClasses[index]) {
+               coverClasses[index] = terrainCoverClass;
+               visualCoverClasses[index] = terrainCoverClass;
+            }
+         }
+      }
+   }
+
+   private double[] buildCoarseRegionalRelief(
+      int[] worldXs,
+      int[] worldZs,
+      int[] baseTerrainSurface,
+      int[] visualCoverClasses,
+      EarthGeneratorSettings settings,
+      byte detailLevel,
+      double previewResolutionMeters,
+      TellusLodGenerator.LodTimingTrace trace
+   ) {
+      if (!TerrainStreamingPolicy.isAutomatic(settings) || !TerrainStreamingPolicy.isCoarseDetail(detailLevel)) {
+         return null;
+      }
+      long phaseStart = beginTimingPhase(trace);
+      double[] relief = LodRegionalReliefGrid.compute(
+         worldXs,
+         worldZs,
+         baseTerrainSurface,
+         visualCoverClasses,
+         settings.worldScale(),
+         this.generator::lodTerrainHeightToElevationMeters,
+         (worldX, worldZ) -> this.generator.sampleLodTerrainElevationMetersLocalOnly(
+            worldX, worldZ, previewResolutionMeters
+         )
+      );
+      endTimingPhase(trace, "biomeRelief", phaseStart);
+      return relief;
+   }
+
+   private DhLodWaterResolver.ResolutionMode waterResolutionMode(
+      EarthGeneratorSettings settings, byte detailLevel
+   ) {
+      if (TerrainStreamingPolicy.isAutomatic(settings) && TerrainStreamingPolicy.isCoarseDetail(detailLevel)) {
+         return DhLodWaterResolver.ResolutionMode.COARSE_CACHE_ONLY;
+      }
+      return TerrainStreamingPolicy.managedDownloadsActive(settings)
+         ? DhLodWaterResolver.ResolutionMode.MANAGED_CACHE_ONLY
+         : DhLodWaterResolver.ResolutionMode.EXACT;
    }
 
    private void buildUltraFastLod(
@@ -1204,6 +1319,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          && detailLevel <= 5
          && settings.distantHorizonsRenderMode() != EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST;
       boolean allowWaterVegetation = detail <= LOD_WATER_VEGETATION_MAX_DETAIL;
+      boolean allowOsmSand = detail <= LOD_OSM_SURFACE_MAX_DETAIL;
       boolean preferNonBlockingOsm = settings.distantHorizonsOsmNonBlockingFetch();
       OsmQueryMode osmQueryMode = preferNonBlockingOsm ? OsmQueryMode.NON_BLOCKING : OsmQueryMode.BLOCKING;
       boolean mainRoadsOnly = roadsActive && detail == settings.distantHorizonsOsmRoadMaxDetail();
@@ -1214,6 +1330,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       trace.note("buildings", buildingsActive);
       trace.note("coarseSampleStride", sampleStride);
       trace.note("coarseSampleGrid", lodSizePoints + "x" + lodSizePoints);
+      trace.note("surfaceSlopeSource", LOD_SLOPE_AT_LOD_RESOLUTION ? "tile_grid" : "scalar");
       trace.note("detailedWater", false);
       trace.note("osm", roadsActive || buildingsActive || settings.enableWater() ? osmQueryMode : "DISABLED");
       trace.addPhase("sample", 0L);
@@ -1227,6 +1344,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       trace.addPhase("buildingMask", 0L);
       trace.addPhase("roadMask", 0L);
       trace.addPhase("terrainMetrics", 0L);
+      trace.addPhase("surfaceInputs.slope", 0L);
+      trace.addPhase("surfaceInputs.sand", 0L);
       trace.addPhase("emit", 0L);
       trace.addPhase("emit.classify", 0L);
       trace.addPhase("emit.baseLayers", 0L);
@@ -1306,6 +1425,24 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       trace.addPhase("sample.visualCover", sampleVisualCoverNanos);
       trace.addPhase("sample.terrain", sampleTerrainNanos);
       trace.addPhase("sample.repair", sampleRepairNanos);
+      phaseStart = beginTimingPhase(trace);
+      double[] demSlopeDegrees;
+      if (LOD_SLOPE_AT_LOD_RESOLUTION) {
+         demSlopeDegrees = LodSurfaceSlopeGrid.compute(
+            worldXs,
+            worldZs,
+            baseTerrainSurface,
+            this.projection,
+            this.generator::lodTerrainHeightToElevationMeters,
+            (worldX, worldZ) -> this.generator.sampleLodTerrainElevationMetersLocalOnly(
+               worldX, worldZ, previewResolutionMeters
+            )
+         );
+      } else {
+         demSlopeDegrees = new double[area];
+         Arrays.fill(demSlopeDegrees, Double.NaN);
+      }
+      endTimingPhase(trace, "surfaceInputs.slope", phaseStart);
       trace.note("detailedWater", baseDetailedWater);
       phaseStart = beginTimingPhase(trace);
       DhLodWaterResolver.AreaResult waterArea = this.dhWaterResolver.resolveArea(
@@ -1317,14 +1454,30 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          worldZs,
          baseTerrainSurface,
          coverClasses,
-         baseDetailedWater
+         baseDetailedWater,
+         this.waterResolutionMode(settings, detailLevel)
       );
       endTimingPhase(trace, "detailedWater", phaseStart);
+      trace.note("waterApproximate", waterArea.approximate());
 
       int[] resolvedTerrainSurface = waterArea.terrainSurface();
       int[] resolvedWaterSurface = waterArea.waterSurface();
       boolean[] resolvedHasWater = waterArea.hasWater();
       boolean[] resolvedOcean = waterArea.ocean();
+
+      this.resolveDryOsmTerrainCoverClasses(
+         worldXs, worldZs, lodSizePoints, coverClasses, visualCoverClasses, resolvedHasWater
+      );
+      double[] regionalReliefMeters = this.buildCoarseRegionalRelief(
+         worldXs,
+         worldZs,
+         baseTerrainSurface,
+         visualCoverClasses,
+         settings,
+         detailLevel,
+         previewResolutionMeters,
+         trace
+      );
 
       phaseStart = beginTimingPhase(trace);
       for (int localZ = 0; localZ < lodSizePoints; localZ++) {
@@ -1338,19 +1491,22 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             int waterSurface = Mth.clamp(resolvedWaterSurface[index], minY, maxY - 1);
             boolean hasWater = resolvedHasWater[index];
             boolean isOcean = resolvedOcean[index];
-            int terrainCoverClass = this.generator.resolveDryOsmTerrainCoverClass(
-               worldX, worldZ, coverClasses[index], hasWater
-            );
-            if (terrainCoverClass != coverClasses[index]) {
-               coverClasses[index] = terrainCoverClass;
-               visualCoverClasses[index] = terrainCoverClass;
-            }
             surfaceYs[index] = surfaceY;
             waterSurfaces[index] = waterSurface;
             underwaterFlags[index] = hasWater && waterSurface > surfaceY;
-            Holder<Biome> biomeHolder = this.biomeSource
-               .getLodBiomeAtBlock(
+            Holder<Biome> biomeHolder = regionalReliefMeters == null
+               ? this.biomeSource.getLodBiomeAtBlock(
                   worldX, worldZ, coverClasses[index], visualCoverClasses[index], hasWater, isOcean, previewResolutionMeters
+               )
+               : this.biomeSource.getLodBiomeAtBlock(
+                  worldX,
+                  worldZ,
+                  coverClasses[index],
+                  visualCoverClasses[index],
+                  hasWater,
+                  isOcean,
+                  previewResolutionMeters,
+                  regionalReliefMeters[index]
                );
             biomeHolders[index] = biomeHolder;
             biomeWrappers[index] = wrappers.getBiome(biomeHolder);
@@ -1436,6 +1592,15 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          }
          endTimingPhase(trace, "surfaceShapeRefine", phaseStart);
       }
+      phaseStart = beginTimingPhase(trace);
+      boolean[] osmSandQueryMask = new boolean[area];
+      for (int index = 0; index < area; index++) {
+         osmSandQueryMask[index] = allowOsmSand && !underwaterFlags[index];
+      }
+      boolean[] osmSandMask = allowOsmSand
+         ? this.generator.sampleLodSandMask(worldXs, worldZs, osmSandQueryMask, osmQueryMode)
+         : new boolean[area];
+      endTimingPhase(trace, "surfaceInputs.sand", phaseStart);
       byte[] roadClassMask = roadMaskResult.mask();
       byte[] roadStyleMask = roadMaskResult.styleMask();
       boolean[] roadMarkingMask = roadMaskResult.markingMask();
@@ -1461,6 +1626,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          worldXs[0], worldXs[lodSizePoints - 1], worldZs[0], worldZs[lodSizePoints - 1], previewResolutionMeters
       );
       this.generator.setLodMountainTransitionCache(mountainTransitionCache);
+      this.applyLodSlopeSampling(previewResolutionMeters, cellSize);
 
       try {
          for (int localZ = 0; localZ < lodSizePoints; localZ++) {
@@ -1509,7 +1675,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                lodConvexities[index],
                remaSnowTerrainFlags[index],
                osmQueryMode,
-               detail <= LOD_OSM_SURFACE_MAX_DETAIL
+               allowOsmSand,
+               demSlopeDegrees[index],
+               osmSandMask[index]
             );
             BlockState topState = lodSurface.top();
             BlockState fillerState = lodSurface.filler();
@@ -1547,7 +1715,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                && !underwater
                && snowActive
                && TellusRealtimeState.shouldApplySnow(worldX, worldZ)
-               && this.generator.shouldPlaceSnowAt(worldX, worldZ)) {
+               && this.generator.shouldPlaceSnowAt(worldX, worldZ, demSlopeDegrees[index])) {
                topBlock = snowTopBlock;
             }
 
@@ -1706,6 +1874,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          }
       } finally {
          this.generator.clearLodMountainTransitionCache();
+         this.generator.clearLodSlopeSampling();
       }
       endTimingPhase(trace, "emit", phaseStart);
       trace.addPhase("emit.classify", emitClassifyNanos);
@@ -1987,6 +2156,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       return worldScale > 0.0 ? Math.max(worldScale, worldScale * (double)cellSize) : Double.NaN;
    }
 
+   private void applyLodSlopeSampling(double previewResolutionMeters, int cellSize) {
+      if (LOD_SLOPE_AT_LOD_RESOLUTION) {
+         this.generator.setLodSlopeSampling(previewResolutionMeters, cellSize);
+      } else {
+         this.generator.clearLodSlopeSampling();
+      }
+   }
+
    private static int intProperty(String key, int defaultValue, int minInclusive, int maxInclusive) {
       String value = System.getProperty(key);
       if (value == null) {
@@ -2046,6 +2223,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
             for (RoadFeature road : roads) {
                throwIfLodCancelled();
+               if (BridgeSupportLayout.crossesWorldSeam(road, this.projection)) {
+                  continue;
+               }
                switch (road.roadClass()) {
                   case MAIN:
                      mainRoads.add(road);
@@ -2062,7 +2242,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                }
             }
 
-            double blocksPerDegree = EarthProjection.blocksPerDegree(settings.worldScale());
+            double blocksPerDegree = this.projection.equatorialBlocksPerDegree();
             int mainRoadWidth = roadWidthForScale(RoadClass.MAIN.baseWidth(), settings.worldScale());
             int normalRoadWidth = roadWidthForScale(RoadClass.NORMAL.baseWidth(), settings.worldScale());
             int dirtRoadWidth = roadWidthForScale(RoadClass.DIRT.baseWidth(), settings.worldScale());
@@ -2134,6 +2314,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
             for (RoadFeature road : roads) {
                throwIfLodCancelled();
+               if (BridgeSupportLayout.crossesWorldSeam(road, this.projection)) {
+                  continue;
+               }
                switch (road.roadClass()) {
                   case MAIN:
                      mainRoads.add(road);
@@ -2159,7 +2342,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                }
             }
 
-            double blocksPerDegree = EarthProjection.blocksPerDegree(settings.worldScale());
+            double blocksPerDegree = this.projection.equatorialBlocksPerDegree();
             int mainRoadWidth = roadWidthForScale(RoadClass.MAIN.baseWidth(), settings.worldScale());
             int normalRoadWidth = roadWidthForScale(RoadClass.NORMAL.baseWidth(), settings.worldScale());
             int dirtRoadWidth = roadWidthForScale(RoadClass.DIRT.baseWidth(), settings.worldScale());
@@ -2549,18 +2732,20 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       }
    }
 
-   private static TellusLodGenerator.LodRasterizedBuildingFeature rasterizeLodBuildingFeature(
+   private TellusLodGenerator.LodRasterizedBuildingFeature rasterizeLodBuildingFeature(
       OsmBuildingFeature feature, String groupId, int[] worldXs, int[] worldZs, int lodSizePoints, int cellSize, double worldScale
    ) {
-      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      if (feature.crossesWorldSeam(this.projection)) {
+         return null;
+      }
       double minWorldX = Math.min(worldXs[0], worldXs[lodSizePoints - 1]);
       double maxWorldX = Math.max(worldXs[0], worldXs[lodSizePoints - 1]);
       double minWorldZ = Math.min(worldZs[0], worldZs[lodSizePoints - 1]);
       double maxWorldZ = Math.max(worldZs[0], worldZs[lodSizePoints - 1]);
-      double featureMinX = feature.minBlockX(blocksPerDegree);
-      double featureMaxX = feature.maxBlockX(blocksPerDegree);
-      double featureMinZ = feature.minBlockZ(worldScale);
-      double featureMaxZ = feature.maxBlockZ(worldScale);
+      double featureMinX = feature.minBlockX(this.projection);
+      double featureMaxX = feature.maxBlockX(this.projection);
+      double featureMinZ = feature.minBlockZ(this.projection);
+      double featureMaxZ = feature.maxBlockZ(this.projection);
       IntArrayList occupiedCells = new IntArrayList();
       if (!(featureMaxX < minWorldX - cellSize)
          && !(featureMinX > maxWorldX + cellSize)
@@ -2580,7 +2765,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
             for (int gx = minGridX; gx <= maxGridX; gx++) {
                int worldX = worldXs[gx];
-               if (feature.containsWorld(worldX + 0.5, worldZ + 0.5, worldScale)) {
+               if (feature.containsWorld(worldX + 0.5, worldZ + 0.5, this.projection)) {
                   occupiedMask[(gx - minGridX) + (gz - minGridZ) * width] = true;
                   occupiedCells.add(row + gx);
                }
@@ -2618,7 +2803,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          );
          int roofBaseY = Math.max(baseY + buildingHeightBlocks(rasterized.feature().heightMeters(), worldScale), floorY + profile.floorCount() * profile.storeyHeightBlocks());
          int topY = roofBaseY + Math.max(profile.parapetHeight(), profile.roofRise());
-         BuildingBlueprint blueprint = TellusBuildingBlueprints.create(rasterized.groupId(), rasterized.feature(), profile, this.generator.worldSeed(), baseY, floorY, roofBaseY, topY, List.of(), worldScale);
+         BuildingBlueprint blueprint = TellusBuildingBlueprints.create(rasterized.groupId(), rasterized.feature(), profile, this.generator.worldSeed(), baseY, floorY, roofBaseY, topY, List.of(), this.projection);
          TellusBuildingMaterials.BuildingMaterialPalette palette = TellusBuildingMaterials.resolvePalette(blueprint);
          int[] boundaryDistance = computeLodBoundaryDistance(rasterized);
          int occupiedCount = rasterized.occupiedCells().length;
@@ -2712,7 +2897,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       }
    }
 
-   private static Holder<Biome> sampleLodBuildingBiome(
+   private Holder<Biome> sampleLodBuildingBiome(
       TellusLodGenerator.LodRasterizedBuildingFeature rasterized,
       int[] worldXs,
       int[] worldZs,
@@ -2723,7 +2908,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          return null;
       }
 
-      double[] centroid = rasterized.feature().centroidWorld(worldScale);
+      double[] centroid = rasterized.feature().centroidWorld(this.projection);
       int bestCell = rasterized.occupiedCells()[0];
       double bestDistance = Double.POSITIVE_INFINITY;
       for (int cell : rasterized.occupiedCells()) {
@@ -3005,7 +3190,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       return sorted[sorted.length >> 1];
    }
 
-   private static void rasterizeLodRoadAreas(
+   private void rasterizeLodRoadAreas(
       List<RoadAreaFeature> roadAreas,
       double worldScale,
       int[] worldXs,
@@ -3018,7 +3203,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          return;
       }
 
-      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double blocksPerDegree = this.projection.equatorialBlocksPerDegree();
       int minWorldX = Math.min(worldXs[0], worldXs[lodSizePoints - 1]);
       int minWorldZ = Math.min(worldZs[0], worldZs[lodSizePoints - 1]);
       int maxWorldX = Math.max(worldXs[0], worldXs[lodSizePoints - 1]);
@@ -3026,13 +3211,13 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       int stepX = lodSizePoints > 1 ? Math.max(1, Math.abs(worldXs[1] - worldXs[0])) : 1;
       int stepZ = lodSizePoints > 1 ? Math.max(1, Math.abs(worldZs[1] - worldZs[0])) : stepX;
       for (RoadAreaFeature area : roadAreas) {
-         int minGridX = Mth.clamp((int)Math.floor((area.minLon() * blocksPerDegree - minWorldX) / stepX), 0, lodSizePoints - 1);
-         int maxGridX = Mth.clamp((int)Math.ceil((area.maxLon() * blocksPerDegree - minWorldX) / stepX), 0, lodSizePoints - 1);
-         int minGridZ = Mth.clamp((int)Math.floor((EarthProjection.latToBlockZ(area.maxLat(), worldScale) - minWorldZ) / stepZ), 0, lodSizePoints - 1);
-         int maxGridZ = Mth.clamp((int)Math.ceil((EarthProjection.latToBlockZ(area.minLat(), worldScale) - minWorldZ) / stepZ), 0, lodSizePoints - 1);
+         int minGridX = Mth.clamp((int)Math.floor((this.projection.lonToBlockX(area.minLon()) - minWorldX) / stepX), 0, lodSizePoints - 1);
+         int maxGridX = Mth.clamp((int)Math.ceil((this.projection.lonToBlockX(area.maxLon()) - minWorldX) / stepX), 0, lodSizePoints - 1);
+         int minGridZ = Mth.clamp((int)Math.floor((this.projection.latToBlockZ(area.maxLat()) - minWorldZ) / stepZ), 0, lodSizePoints - 1);
+         int maxGridZ = Mth.clamp((int)Math.ceil((this.projection.latToBlockZ(area.minLat()) - minWorldZ) / stepZ), 0, lodSizePoints - 1);
          byte classId = (byte)roadClassId(area.roadClass());
          byte style = RoadSurfaceStyle.surfaceStyleId(area.roadClass(), area.highwayTag(), area.roadSurface(), area.subclass(), 0, 0);
-         if (maxGridX < minGridX || maxGridZ < minGridZ || area.maxLon() * blocksPerDegree < minWorldX || area.minLon() * blocksPerDegree > maxWorldX) {
+         if (maxGridX < minGridX || maxGridZ < minGridZ || this.projection.lonToBlockX(area.maxLon()) < minWorldX || this.projection.lonToBlockX(area.minLon()) > maxWorldX) {
             continue;
          }
 
@@ -3049,8 +3234,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                }
 
                double sampleX = worldXs[gx];
-               double lon = sampleX / blocksPerDegree;
-               double lat = EarthProjection.blockZToLat(sampleZ, worldScale);
+               double lon = this.projection.blockXToLon(sampleX);
+               double lat = this.projection.blockZToLat(sampleZ);
                if (area.containsLonLat(lon, lat)) {
                   selectedClass[index] = classId;
                   if (selectedStyle != null) {
@@ -3062,7 +3247,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       }
    }
 
-   private static void rasterizeLodRoadClass(
+   private void rasterizeLodRoadClass(
       List<RoadFeature> roads,
       byte classId,
       int widthBlocks,
@@ -3088,21 +3273,23 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                int featureWidthBlocks = RoadSurfaceStyle.effectiveRoadWidth(road, widthBlocks, worldScale);
                double halfWidth = Math.max(0.5, (featureWidthBlocks - 1) * 0.5) + cellSize * 0.5;
                double radiusSq = halfWidth * halfWidth + 1.0E-6;
-               double roadMinX = road.minLon() * blocksPerDegree;
-               double roadMaxX = road.maxLon() * blocksPerDegree;
-               double roadMinZ = EarthProjection.latToBlockZ(road.maxLat(), worldScale);
-               double roadMaxZ = EarthProjection.latToBlockZ(road.minLat(), worldScale);
+               double roadLonA = this.projection.lonToBlockX(road.minLon());
+               double roadLonB = this.projection.lonToBlockX(road.maxLon());
+               double roadMinX = Math.min(roadLonA, roadLonB);
+               double roadMaxX = Math.max(roadLonA, roadLonB);
+               double roadMinZ = this.projection.latToBlockZ(road.maxLat());
+               double roadMaxZ = this.projection.latToBlockZ(road.minLat());
                if (!(roadMaxX < minWorldX - halfWidth)
                   && !(roadMinX > maxWorldX + halfWidth)
                   && !(roadMaxZ < minWorldZ - halfWidth)
                   && !(roadMinZ > maxWorldZ + halfWidth)) {
-                  double x1 = road.lonAt(0) * blocksPerDegree;
-                  double z1 = EarthProjection.latToBlockZ(road.latAt(0), worldScale);
+                  double x1 = this.projection.lonToBlockX(road.lonAt(0));
+                  double z1 = this.projection.latToBlockZ(road.latAt(0));
                   double segmentStart = 0.0;
 
                   for (int i = 1; i < points; i++) {
-                     double x2 = road.lonAt(i) * blocksPerDegree;
-                     double z2 = EarthProjection.latToBlockZ(road.latAt(i), worldScale);
+                     double x2 = this.projection.lonToBlockX(road.lonAt(i));
+                     double z2 = this.projection.latToBlockZ(road.latAt(i));
                      double dx = x2 - x1;
                      double dz = z2 - z1;
                      double lenSq = dx * dx + dz * dz;
@@ -3192,8 +3379,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       boolean hasRoadLights = false;
 
       for (OsmStreetLightFeature streetLight : streetLights) {
-         double lampX = streetLight.longitude() * blocksPerDegree;
-         double lampZ = EarthProjection.latToBlockZ(streetLight.latitude(), worldScale);
+         double lampX = this.projection.lonToBlockX(streetLight.longitude());
+         double lampZ = this.projection.latToBlockZ(streetLight.latitude());
          int anchorIndex = findLodExactRoadLightAnchor(lampX, lampZ, worldXs, worldZs, lodSizePoints, cellSize, minWorldX, minWorldZ, selectedClass);
          if (anchorIndex < 0 || occupiedLightCells[anchorIndex] || hasNearbyLodRoadLight(anchorIndex, worldXs, worldZs, minLampSpacingBlocks, occupiedLightIndices)) {
             continue;
@@ -3325,7 +3512,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          boolean hasRoadLights = false;
 
          for (RoadFeature road : roads) {
-            if (road.mode() == RoadMode.TUNNEL) {
+            if (road.mode() == RoadMode.TUNNEL || BridgeSupportLayout.crossesWorldSeam(road, this.projection)) {
                continue;
             }
 
@@ -3345,8 +3532,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             double[] segmentLengths = new double[segmentCount];
 
             for (int i = 0; i < road.pointCount(); i++) {
-               roadWorldXs[i] = road.lonAt(i) * blocksPerDegree;
-               roadWorldZs[i] = EarthProjection.latToBlockZ(road.latAt(i), worldScale);
+               roadWorldXs[i] = this.projection.lonToBlockX(road.lonAt(i));
+               roadWorldZs[i] = this.projection.latToBlockZ(road.latAt(i));
             }
 
             double totalLength = 0.0;
@@ -3602,16 +3789,18 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                int featureWidthBlocks = RoadSurfaceStyle.effectiveRoadWidth(road, widthBlocks, worldScale);
                double halfWidth = Math.max(0.5, (featureWidthBlocks - 1) * 0.5) + cellSize * 0.5;
                double radiusSq = halfWidth * halfWidth + 1.0E-6;
-               double roadMinX = road.minLon() * blocksPerDegree;
-               double roadMaxX = road.maxLon() * blocksPerDegree;
-               double roadMinZ = EarthProjection.latToBlockZ(road.maxLat(), worldScale);
-               double roadMaxZ = EarthProjection.latToBlockZ(road.minLat(), worldScale);
+               double roadLonA = this.projection.lonToBlockX(road.minLon());
+               double roadLonB = this.projection.lonToBlockX(road.maxLon());
+               double roadMinX = Math.min(roadLonA, roadLonB);
+               double roadMaxX = Math.max(roadLonA, roadLonB);
+               double roadMinZ = this.projection.latToBlockZ(road.maxLat());
+               double roadMaxZ = this.projection.latToBlockZ(road.minLat());
                if (!(roadMaxX < minWorldX - halfWidth)
                   && !(roadMinX > maxWorldX + halfWidth)
                   && !(roadMaxZ < minWorldZ - halfWidth)
                   && !(roadMinZ > maxWorldZ + halfWidth)) {
-                  double startWorldX = road.lonAt(0) * blocksPerDegree;
-                  double startWorldZ = EarthProjection.latToBlockZ(road.latAt(0), worldScale);
+                  double startWorldX = this.projection.lonToBlockX(road.lonAt(0));
+                  double startWorldZ = this.projection.latToBlockZ(road.latAt(0));
                   double previousX = startWorldX;
                   double previousZ = startWorldZ;
                   double endWorldX = startWorldX;
@@ -3619,8 +3808,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   double totalLength = 0.0;
 
                   for (int i = 1; i < points; i++) {
-                     double currentX = road.lonAt(i) * blocksPerDegree;
-                     double currentZ = EarthProjection.latToBlockZ(road.latAt(i), worldScale);
+                     double currentX = this.projection.lonToBlockX(road.lonAt(i));
+                     double currentZ = this.projection.latToBlockZ(road.latAt(i));
                      double deltaX = currentX - previousX;
                      double deltaZ = currentZ - previousZ;
                      double segmentLength = Math.sqrt(deltaX * deltaX + deltaZ * deltaZ);
@@ -3639,8 +3828,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                      double z1 = startWorldZ;
 
                      for (int i = 1; i < points; i++) {
-                        double x2 = road.lonAt(i) * blocksPerDegree;
-                        double z2 = EarthProjection.latToBlockZ(road.latAt(i), worldScale);
+                        double x2 = this.projection.lonToBlockX(road.lonAt(i));
+                        double z2 = this.projection.latToBlockZ(road.latAt(i));
                         double dx = x2 - x1;
                         double dz = z2 - z1;
                         double lenSq = dx * dx + dz * dz;
@@ -3746,10 +3935,12 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
          BridgeSupportLayout.SupportStyle style = BridgeSupportLayout.styleFor(road.roadClass(), featureRoadWidth);
          double radius = style.maxFootprintRadius() + cellSize * 0.5;
-         double roadMinX = road.minLon() * blocksPerDegree;
-         double roadMaxX = road.maxLon() * blocksPerDegree;
-         double roadMinZ = EarthProjection.latToBlockZ(road.maxLat(), worldScale);
-         double roadMaxZ = EarthProjection.latToBlockZ(road.minLat(), worldScale);
+         double roadLonA = this.projection.lonToBlockX(road.minLon());
+         double roadLonB = this.projection.lonToBlockX(road.maxLon());
+         double roadMinX = Math.min(roadLonA, roadLonB);
+         double roadMaxX = Math.max(roadLonA, roadLonB);
+         double roadMinZ = this.projection.latToBlockZ(road.maxLat());
+         double roadMaxZ = this.projection.latToBlockZ(road.minLat());
          if (roadMaxX < minWorldX - radius
             || roadMinX > maxWorldX + radius
             || roadMaxZ < minWorldZ - radius
@@ -3757,14 +3948,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             continue;
          }
 
-         double startWorldX = road.lonAt(0) * blocksPerDegree;
-         double startWorldZ = EarthProjection.latToBlockZ(road.latAt(0), worldScale);
-         double endWorldX = road.lonAt(points - 1) * blocksPerDegree;
-         double endWorldZ = EarthProjection.latToBlockZ(road.latAt(points - 1), worldScale);
+         double startWorldX = this.projection.lonToBlockX(road.lonAt(0));
+         double startWorldZ = this.projection.latToBlockZ(road.latAt(0));
+         double endWorldX = this.projection.lonToBlockX(road.lonAt(points - 1));
+         double endWorldZ = this.projection.latToBlockZ(road.latAt(points - 1));
          int startSurface = this.sampleRoadSurfaceForLodBridge(Mth.floor(startWorldX), Mth.floor(startWorldZ), roadSurfaceCache);
          int endSurface = this.sampleRoadSurfaceForLodBridge(Mth.floor(endWorldX), Mth.floor(endWorldZ), roadSurfaceCache);
 
-         BridgeSupportLayout.forEachSupport(road, blocksPerDegree, worldScale, featureRoadWidth, placement -> {
+         BridgeSupportLayout.forEachSupport(road, this.projection, featureRoadWidth, placement -> {
             IntArrayList capCells = new IntArrayList();
             IntArrayList[] shaftCells = new IntArrayList[style.shaftCount()];
             int[] minTerrain = new int[style.shaftCount()];
@@ -4374,7 +4565,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                         : selectTrunkBlock(species)
                      : null;
                   int anchorSurfaceY = useFullDetailAnchors
-                     ? requestCache.treeAnchorSurface(bestCenterX, bestCenterZ, worldScale)
+                     ? requestCache.treeAnchorSurface(bestCenterX, bestCenterZ, worldScale, previewResolutionMeters)
                      : LodCanopyVerticalLayout.UNANCHORED_SURFACE_Y;
                   return new TellusLodGenerator.CanopyColumn(
                      rootHeight, trunkHeight, leafLift, crownHeight, leavesBlock, trunkBlock, rootBlock, anchorSurfaceY
@@ -5240,6 +5431,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
    private static final class CanopyRequestCache {
       private final EarthChunkGenerator generator;
+      private final WorldProjection projection;
       private final Map<Long, TellusCanopyHeightSource.CanopySample> canopySamples = new HashMap<>();
       private final Map<Long, ResolveEcoregion> ecoregions = new HashMap<>();
       private final Map<TellusLodGenerator.CanopyPlanKey, TellusProceduralTreeGenerator.TreePlan> treePlans = new HashMap<>();
@@ -5247,6 +5439,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
       private CanopyRequestCache(EarthChunkGenerator generator) {
          this.generator = Objects.requireNonNull(generator, "generator");
+         this.projection = generator.settings().projection();
       }
 
       private TellusCanopyHeightSource.CanopySample canopy(
@@ -5256,7 +5449,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          return this.canopySamples.computeIfAbsent(
             key,
             ignored -> TellusWorldgenSources.canopyHeight()
-               .sampleCanopyLocalOnly(worldX, worldZ, worldScale, previewResolutionMeters)
+               .sampleCanopyLocalOnly(worldX, worldZ, this.projection, previewResolutionMeters)
          );
       }
 
@@ -5275,17 +5468,19 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             long horizontalKey = packHorizontal(worldX, worldZ);
             ResolveEcoregion ecoregion = this.ecoregions.computeIfAbsent(
                horizontalKey,
-               unused -> TellusResolveSource.shared().sampleEcoregion(worldX, worldZ, worldScale)
+               unused -> TellusResolveSource.shared().sampleEcoregion(worldX, worldZ, this.projection)
             );
             return TellusProceduralTreeGenerator.plan(biome, ecoregion, canopy, treeSeed);
          });
       }
 
-      private int treeAnchorSurface(int worldX, int worldZ, double worldScale) {
+      private int treeAnchorSurface(int worldX, int worldZ, double worldScale, double previewResolutionMeters) {
          long key = packHorizontal(worldX, worldZ);
          return this.treeAnchorSurfaces.computeIfAbsent(key, ignored -> {
-            int coverClass = this.generator.sampleCoverClass(worldX, worldZ, worldScale);
-            return this.generator.resolveLodTerrainSurface(worldX, worldZ, coverClass, worldScale);
+            // Same zoom the tile's own surface came from; full resolution here made every coarse
+            // column decode another zoom-16 tile just to seat one tree trunk.
+            int coverClass = this.generator.sampleCoverClass(worldX, worldZ, previewResolutionMeters);
+            return this.generator.resolveLodTerrainSurface(worldX, worldZ, coverClass, previewResolutionMeters);
          });
       }
 

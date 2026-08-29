@@ -32,8 +32,13 @@ class EarthGeneratorSettingsCodecTest {
       assertEquals(256, EarthGeneratorSettings.DEFAULT.undergroundDepth());
       assertTrue(EarthGeneratorSettings.DEFAULT.usesTerrainShell());
       assertFalse(EarthGeneratorSettings.DEFAULT.suppressesUndergroundGenerationForTerrainShell());
-      assertFalse(EarthGeneratorSettings.DEFAULT.tellusManagedTerrainDownloads());
+      assertEquals(
+         EarthGeneratorSettings.TerrainStreamingStrategy.AUTOMATIC,
+         EarthGeneratorSettings.DEFAULT.terrainStreamingStrategy()
+      );
       assertFalse(EarthGeneratorSettings.DEFAULT.showTerrainDownloadOverlay());
+      assertFalse(EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn());
+      assertFalse(EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn());
       assertFalse(EarthGeneratorSettings.DEFAULT.addStrongholds());
       assertFalse(EarthGeneratorSettings.DEFAULT.addVillages());
       assertFalse(EarthGeneratorSettings.DEFAULT.addMineshafts());
@@ -210,8 +215,12 @@ class EarthGeneratorSettingsCodecTest {
       assertEquals(192, decoded.undergroundDepth());
       assertTrue(decoded.climateBasedBuiltUpTerrain());
       assertTrue(decoded.randomBiomes());
-      assertFalse(decoded.tellusManagedTerrainDownloads());
+      assertEquals(
+         EarthGeneratorSettings.TerrainStreamingStrategy.LEGACY_COMPATIBILITY,
+         decoded.terrainStreamingStrategy()
+      );
       assertFalse(decoded.showTerrainDownloadOverlay());
+      assertFalse(decoded.centerWorldOnSpawn());
       assertFalse(decoded.experimentalIncreaseHeight());
       assertFalse(decoded.automaticHeightScaling());
       assertEquals(0.25, decoded.randomBiomeDensity());
@@ -246,7 +255,8 @@ class EarthGeneratorSettingsCodecTest {
       assertEquals(192, encodedObject.get("underground_depth").getAsInt());
       assertTrue(encodedObject.get("climate_based_built_up_terrain").getAsBoolean());
       assertTrue(encodedObject.get("random_biomes").getAsBoolean());
-      assertFalse(encodedObject.get("tellus_managed_terrain_downloads").getAsBoolean());
+      assertEquals("legacy_compatibility", encodedObject.get("terrain_streaming_strategy").getAsString());
+      assertFalse(encodedObject.has("tellus_managed_terrain_downloads"));
       assertFalse(encodedObject.get("show_terrain_download_overlay").getAsBoolean());
       assertFalse(encodedObject.get("automatic_height_scaling").getAsBoolean());
       assertEquals(0.25, encodedObject.get("random_biome_density").getAsDouble());
@@ -281,7 +291,10 @@ class EarthGeneratorSettingsCodecTest {
       assertFalse(decoded.experimentalIncreaseHeight());
       assertFalse(decoded.cavesReachSurface());
       assertFalse(decoded.geologicalStonePatches());
-      assertFalse(decoded.tellusManagedTerrainDownloads());
+      assertEquals(
+         EarthGeneratorSettings.TerrainStreamingStrategy.LEGACY_COMPATIBILITY,
+         decoded.terrainStreamingStrategy()
+      );
       assertFalse(decoded.showTerrainDownloadOverlay());
       assertEquals(EarthGeneratorSettings.DEFAULT_RANDOM_BIOME_DENSITY, decoded.randomBiomeDensity());
       assertEquals(EarthGeneratorSettings.DEFAULT_RANDOM_BIOME_SEED, decoded.randomBiomeSeed());
@@ -289,12 +302,136 @@ class EarthGeneratorSettingsCodecTest {
       assertTrue(decoded.voxyChunkPregenEnabled());
       assertEquals(192, decoded.voxyChunkPregenMaxRadius());
       assertEquals(10, decoded.voxyChunkPregenChunksPerTick());
+      assertFalse(decoded.worldScaleAtSpawn());
 
       JsonObject encodedObject = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, decoded)).getAsJsonObject();
       assertTrue(encodedObject.has("dem_automatic"));
       assertTrue(encodedObject.has("dem_enabled_providers"));
       assertFalse(encodedObject.has("dem_provider"));
       assertEquals(6, encodedObject.get("river_lake_shoreline_blend").getAsInt());
+   }
+
+   @Test
+   void worldScaleAtSpawnIsOffByDefaultAndRoundTrips() {
+      assertFalse(EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn());
+      assertFalse(EarthGeneratorSettings.DEFAULT_WORLD_SCALE_AT_SPAWN);
+
+      JsonObject missingField = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, EarthGeneratorSettings.DEFAULT))
+         .getAsJsonObject();
+      missingField.remove("world_scale_at_spawn");
+      EarthGeneratorSettings legacy = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, missingField));
+      assertFalse(legacy.worldScaleAtSpawn());
+      assertEquals(EarthGeneratorSettings.DEFAULT.worldScale(), legacy.worldScale());
+
+      EarthGeneratorSettings enabled = EarthGeneratorSettings.DEFAULT.withWorldScaleAtSpawn(true);
+      JsonObject encoded = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, enabled)).getAsJsonObject();
+      assertTrue(encoded.get("world_scale_at_spawn").getAsBoolean());
+      // The stored world scale is always the equatorial value regardless of how the UI presents it.
+      assertEquals(EarthGeneratorSettings.DEFAULT.worldScale(), encoded.get("world_scale").getAsDouble());
+
+      EarthGeneratorSettings decoded = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, encoded));
+      assertTrue(decoded.worldScaleAtSpawn());
+      assertEquals(enabled, decoded);
+   }
+
+   @Test
+   void centerWorldOnSpawnIsOffByDefaultAndRoundTripsWithoutChangingLegacyWorlds() {
+      assertFalse(EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn());
+      assertFalse(EarthGeneratorSettings.DEFAULT_CENTER_WORLD_ON_SPAWN);
+
+      JsonObject missingField = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, EarthGeneratorSettings.DEFAULT))
+         .getAsJsonObject();
+      missingField.remove("center_world_on_spawn");
+      EarthGeneratorSettings legacy = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, missingField));
+      assertFalse(legacy.centerWorldOnSpawn());
+      assertFalse(legacy.projection().isCentered());
+      assertEquals(
+         legacy.spawnLongitude() * EarthProjection.METERS_PER_DEGREE / legacy.worldScale(),
+         legacy.projection().lonToBlockX(legacy.spawnLongitude()),
+         1.0E-9
+      );
+
+      EarthGeneratorSettings enabled = EarthGeneratorSettings.DEFAULT
+         .withSpawn(37.7459, -119.5332)
+         .withCenterWorldOnSpawn(true);
+      JsonObject encoded = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, enabled)).getAsJsonObject();
+      assertTrue(encoded.get("center_world_on_spawn").getAsBoolean());
+      EarthGeneratorSettings decoded = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, encoded));
+
+      assertEquals(enabled, decoded);
+      assertTrue(decoded.projection().isCentered());
+      assertEquals(0.0, decoded.projection().lonToBlockX(decoded.spawnLongitude()), 1.0E-9);
+      assertEquals(0.0, decoded.projection().latToBlockZ(decoded.spawnLatitude()), 1.0E-9);
+   }
+
+   @Test
+   void worldScalePresentationConvertsBetweenEquatorAndSpawn() {
+      double equatorial = 30.0;
+
+      assertEquals(equatorial, EarthGeneratorSettings.groundScaleAtLatitude(equatorial, 0.0), 1.0E-12);
+      assertEquals(15.0, EarthGeneratorSettings.groundScaleAtLatitude(equatorial, 60.0), 1.0E-9);
+      assertEquals(15.0, EarthGeneratorSettings.groundScaleAtLatitude(equatorial, -60.0), 1.0E-9);
+
+      assertEquals(equatorial, EarthGeneratorSettings.displayedWorldScale(equatorial, 60.0, false), 1.0E-12);
+      assertEquals(15.0, EarthGeneratorSettings.displayedWorldScale(equatorial, 60.0, true), 1.0E-9);
+      assertEquals(30.0, EarthGeneratorSettings.equatorialWorldScale(15.0, 60.0, true), 1.0E-9);
+      assertEquals(15.0, EarthGeneratorSettings.equatorialWorldScale(15.0, 60.0, false), 1.0E-12);
+
+      double[] latitudes = {-84.0, -63.0695, -27.9881, 0.0, 37.7459, 69.6496, 84.0};
+      double[] displayed = {1.0, 12.5, 30.0, 250.0};
+      for (double latitude : latitudes) {
+         for (double value : displayed) {
+            double stored = EarthGeneratorSettings.equatorialWorldScale(value, latitude, true);
+            assertTrue(stored >= value, "equatorial scale is never finer than the at-spawn scale");
+            assertEquals(value, EarthGeneratorSettings.displayedWorldScale(stored, latitude, true), 1.0E-9);
+         }
+      }
+
+      EarthGeneratorSettings halfDome = EarthGeneratorSettings.DEFAULT.withSpawn(37.7459, -119.5332).withWorldScaleAtSpawn(true);
+      assertEquals(EarthGeneratorSettings.DEFAULT.worldScale(), halfDome.worldScale());
+      assertEquals(halfDome.worldScale() / EarthProjection.heightScaleCorrectionAtLatitude(37.7459), halfDome.groundScaleAtSpawn(), 1.0E-9);
+      assertEquals(halfDome.groundScaleAtSpawn(), halfDome.displayedWorldScale(), 1.0E-12);
+      assertEquals(halfDome.worldScale(), halfDome.withWorldScaleAtSpawn(false).displayedWorldScale(), 1.0E-12);
+   }
+
+   @Test
+   void migratesLegacyManagedDownloadsToAutomaticStreaming() {
+      EarthGeneratorSettings decoded = requireSuccess(
+         EarthGeneratorSettings.CODEC.parse(
+            JsonOps.INSTANCE, JsonParser.parseString("{\"tellus_managed_terrain_downloads\":true}")
+         )
+      );
+      JsonObject encoded = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, decoded)).getAsJsonObject();
+
+      assertEquals(EarthGeneratorSettings.TerrainStreamingStrategy.AUTOMATIC, decoded.terrainStreamingStrategy());
+      assertEquals("automatic", encoded.get("terrain_streaming_strategy").getAsString());
+      assertFalse(encoded.has("tellus_managed_terrain_downloads"));
+   }
+
+   @Test
+   void rejectsUnknownTerrainStreamingStrategy() {
+      DataResult<EarthGeneratorSettings> decoded = EarthGeneratorSettings.CODEC.parse(
+         JsonOps.INSTANCE, JsonParser.parseString("{\"terrain_streaming_strategy\":\"surprise_me\"}")
+      );
+
+      assertTrue(decoded.error().isPresent());
+   }
+
+   @Test
+   void bundledEarthPresetExplicitlyEnablesAutomaticStreaming() throws IOException {
+      JsonObject preset = loadFixture("data/tellus/worldgen/world_preset/earth.json").getAsJsonObject();
+      JsonObject generator = preset.getAsJsonObject("dimensions")
+         .getAsJsonObject("minecraft:overworld")
+         .getAsJsonObject("generator");
+
+      assertEquals("automatic", generator.getAsJsonObject("settings").get("terrain_streaming_strategy").getAsString());
+      assertEquals(
+         "automatic",
+         generator.getAsJsonObject("biome_source")
+            .getAsJsonObject("settings")
+            .get("terrain_streaming_strategy")
+            .getAsString()
+      );
    }
 
    private static JsonElement loadFixture(String path) throws IOException {

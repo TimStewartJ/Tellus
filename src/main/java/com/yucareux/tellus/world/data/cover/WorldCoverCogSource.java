@@ -5,14 +5,16 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.cache.LastValueMemo;
 import com.yucareux.tellus.cache.TellusCacheDomain;
+import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
 import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
 import com.yucareux.tellus.platform.TellusPlatform;
 import com.yucareux.tellus.world.data.source.DownloadProgressReporter;
 import com.yucareux.tellus.world.data.source.InputStreamSafety;
-import com.yucareux.tellus.worldgen.EarthProjection;
+import com.yucareux.tellus.worldgen.WorldProjection;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -84,6 +86,9 @@ final class WorldCoverCogSource {
    private final long maximumDiskCacheBytes;
    private final LoadingCache<SourceTileKey, CogMetadata> metadataCache;
    private final LoadingCache<BlockKey, byte[]> blockCache;
+   // Per-thread last-hit memos: a chunk's columns land in the same COG block almost every time.
+   private final LastValueMemo<SourceTileKey, CogMetadata> metadataMemo = new LastValueMemo<>();
+   private final LastValueMemo<BlockKey, byte[]> blockMemo = new LastValueMemo<>();
    private final Cache<NearestLandKey, Integer> nearestLandCache;
    private final Cache<SourceTileKey, Long> metadataFailureDeadlines;
    private final Cache<BlockKey, Long> blockFailureDeadlines;
@@ -358,7 +363,8 @@ final class WorldCoverCogSource {
       int centerBlockX = center.pixelX() / level.tileWidth();
       int centerBlockY = center.pixelY() / level.tileHeight();
       int clampedRadius = Math.max(0, radius);
-      boolean centerAvailable = false;
+      BlockKey centerKey = new BlockKey(center.tileKey(), level.factor(), centerBlockX, centerBlockY);
+      List<BlockKey> missing = new ArrayList<>();
       for (int blockY = Math.max(0, centerBlockY - clampedRadius);
          blockY <= Math.min(level.tilesPerColumn() - 1, centerBlockY + clampedRadius);
          blockY++) {
@@ -366,13 +372,24 @@ final class WorldCoverCogSource {
             blockX <= Math.min(level.tilesPerRow() - 1, centerBlockX + clampedRadius);
             blockX++) {
             BlockKey key = new BlockKey(center.tileKey(), level.factor(), blockX, blockY);
-            byte[] values = this.getBlock(key, center.metadata(), LookupMode.BLOCKING);
-            if (blockX == centerBlockX && blockY == centerBlockY) {
-               centerAvailable = values != null;
+            if (this.blockCache.getIfPresent(key) == null) {
+               missing.add(key);
             }
          }
       }
-      return centerAvailable;
+      if (missing.size() > 1) {
+         // Fetch a new area's blocks concurrently through the bounded download pool instead of one
+         // range request at a time; the block cache collapses concurrent loads of the same key.
+         ParallelDownloadRunner.run(
+            missing, 0, key -> this.getBlock(key, center.metadata(), LookupMode.BLOCKING), (item, completed, total) -> {
+            }
+         );
+      } else {
+         for (BlockKey key : missing) {
+            this.getBlock(key, center.metadata(), LookupMode.BLOCKING);
+         }
+      }
+      return this.getBlock(centerKey, center.metadata(), LookupMode.BLOCKING) != null;
    }
 
    List<BlockKey> areaBlockKeys(
@@ -380,9 +397,10 @@ final class WorldCoverCogSource {
       double minBlockZ,
       double maxBlockX,
       double maxBlockZ,
-      double worldScale,
+      WorldProjection projection,
       double effectiveResolutionMeters
    ) {
+      double worldScale = projection.worldScale();
       if (!(Double.isFinite(worldScale) && worldScale > 0.0)
          || !Double.isFinite(minBlockX)
          || !Double.isFinite(minBlockZ)
@@ -391,44 +409,55 @@ final class WorldCoverCogSource {
          return List.of();
       }
 
-      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-      double lonA = minBlockX / blocksPerDegree;
-      double lonB = maxBlockX / blocksPerDegree;
-      double latA = EarthProjection.blockZToLat(minBlockZ, worldScale);
-      double latB = EarthProjection.blockZToLat(maxBlockZ, worldScale);
-      double minLon = Math.max(MIN_TILE_LON, Math.min(lonA, lonB));
-      double maxLon = Math.min(MAX_TILE_LON_EXCLUSIVE, Math.max(lonA, lonB));
+      double lonA = projection.blockXToLon(minBlockX);
+      double lonB = projection.blockXToLon(maxBlockX);
+      double latA = projection.blockZToLat(minBlockZ);
+      double latB = projection.blockZToLat(maxBlockZ);
       double minLat = Math.max(MIN_TILE_LAT, Math.min(latA, latB));
       double maxLat = Math.min(MAX_TILE_LAT_EXCLUSIVE, Math.max(latA, latB));
-      if (!(minLon <= maxLon) || !(minLat <= maxLat)) {
+      if (!(minLat <= maxLat)) {
          return List.of();
       }
+      double[][] longitudeRanges = projection.isCentered() && lonB < lonA
+         ? new double[][]{{lonA, MAX_TILE_LON_EXCLUSIVE}, {MIN_TILE_LON, lonB}}
+         : new double[][]{{
+            Math.max(MIN_TILE_LON, Math.min(lonA, lonB)),
+            Math.min(MAX_TILE_LON_EXCLUSIVE, Math.max(lonA, lonB))
+         }};
 
       int factor = selectOverviewFactor(effectiveResolutionMeters);
       int rasterSize = rasterSizeForFactor(factor);
-      int firstLon = tileOrigin(minLon, MIN_TILE_LON, MAX_TILE_LON_EXCLUSIVE);
-      int lastLon = tileOrigin(maxLon == MAX_TILE_LON_EXCLUSIVE ? Math.nextDown(maxLon) : maxLon, MIN_TILE_LON, MAX_TILE_LON_EXCLUSIVE);
       int firstLat = tileOrigin(minLat, MIN_TILE_LAT, MAX_TILE_LAT_EXCLUSIVE);
       int lastLat = tileOrigin(maxLat == MAX_TILE_LAT_EXCLUSIVE ? Math.nextDown(maxLat) : maxLat, MIN_TILE_LAT, MAX_TILE_LAT_EXCLUSIVE);
       Set<BlockKey> keys = new LinkedHashSet<>();
-      for (int tileLat = firstLat; tileLat <= lastLat; tileLat += TILE_DEGREES) {
-         for (int tileLon = firstLon; tileLon <= lastLon; tileLon += TILE_DEGREES) {
-            SourceTileKey tileKey = new SourceTileKey(tileLat, tileLon);
-            double intersectionMinLon = Math.max(minLon, tileLon);
-            double intersectionMaxLon = Math.min(maxLon, tileLon + TILE_DEGREES);
-            double intersectionMinLat = Math.max(minLat, tileLat);
-            double intersectionMaxLat = Math.min(maxLat, tileLat + TILE_DEGREES);
-            int minPixelX = pixelForCoordinate(intersectionMinLon, tileLon, rasterSize);
-            int maxPixelX = pixelForCoordinate(intersectionMaxLon, tileLon, rasterSize);
-            int minPixelY = pixelForCoordinate(tileLat + TILE_DEGREES - intersectionMaxLat, 0.0, rasterSize);
-            int maxPixelY = pixelForCoordinate(tileLat + TILE_DEGREES - intersectionMinLat, 0.0, rasterSize);
-            int minCogBlockX = minPixelX / TIFF_TILE_SIZE;
-            int maxCogBlockX = maxPixelX / TIFF_TILE_SIZE;
-            int minCogBlockY = minPixelY / TIFF_TILE_SIZE;
-            int maxCogBlockY = maxPixelY / TIFF_TILE_SIZE;
-            for (int blockY = minCogBlockY; blockY <= maxCogBlockY; blockY++) {
-               for (int blockX = minCogBlockX; blockX <= maxCogBlockX; blockX++) {
-                  keys.add(new BlockKey(tileKey, factor, blockX, blockY));
+      for (double[] longitudeRange : longitudeRanges) {
+         double minLon = longitudeRange[0];
+         double maxLon = longitudeRange[1];
+         int firstLon = tileOrigin(minLon, MIN_TILE_LON, MAX_TILE_LON_EXCLUSIVE);
+         int lastLon = tileOrigin(
+            maxLon == MAX_TILE_LON_EXCLUSIVE ? Math.nextDown(maxLon) : maxLon,
+            MIN_TILE_LON,
+            MAX_TILE_LON_EXCLUSIVE
+         );
+         for (int tileLat = firstLat; tileLat <= lastLat; tileLat += TILE_DEGREES) {
+            for (int tileLon = firstLon; tileLon <= lastLon; tileLon += TILE_DEGREES) {
+               SourceTileKey tileKey = new SourceTileKey(tileLat, tileLon);
+               double intersectionMinLon = Math.max(minLon, tileLon);
+               double intersectionMaxLon = Math.min(maxLon, tileLon + TILE_DEGREES);
+               double intersectionMinLat = Math.max(minLat, tileLat);
+               double intersectionMaxLat = Math.min(maxLat, tileLat + TILE_DEGREES);
+               int minPixelX = pixelForCoordinate(intersectionMinLon, tileLon, rasterSize);
+               int maxPixelX = pixelForCoordinate(intersectionMaxLon, tileLon, rasterSize);
+               int minPixelY = pixelForCoordinate(tileLat + TILE_DEGREES - intersectionMaxLat, 0.0, rasterSize);
+               int maxPixelY = pixelForCoordinate(tileLat + TILE_DEGREES - intersectionMinLat, 0.0, rasterSize);
+               int minCogBlockX = minPixelX / TIFF_TILE_SIZE;
+               int maxCogBlockX = maxPixelX / TIFF_TILE_SIZE;
+               int minCogBlockY = minPixelY / TIFF_TILE_SIZE;
+               int maxCogBlockY = maxPixelY / TIFF_TILE_SIZE;
+               for (int blockY = minCogBlockY; blockY <= maxCogBlockY; blockY++) {
+                  for (int blockX = minCogBlockX; blockX <= maxCogBlockX; blockX++) {
+                     keys.add(new BlockKey(tileKey, factor, blockX, blockY));
+                  }
                }
             }
          }
@@ -437,8 +466,9 @@ final class WorldCoverCogSource {
    }
 
    boolean fullyCoversArea(
-      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, double worldScale
+      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, WorldProjection projection
    ) {
+      double worldScale = projection.worldScale();
       if (!(Double.isFinite(worldScale) && worldScale > 0.0)
          || !Double.isFinite(minBlockX)
          || !Double.isFinite(minBlockZ)
@@ -446,11 +476,10 @@ final class WorldCoverCogSource {
          || !Double.isFinite(maxBlockZ)) {
          return false;
       }
-      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-      double lonA = minBlockX / blocksPerDegree;
-      double lonB = maxBlockX / blocksPerDegree;
-      double latA = EarthProjection.blockZToLat(minBlockZ, worldScale);
-      double latB = EarthProjection.blockZToLat(maxBlockZ, worldScale);
+      double lonA = projection.blockXToLon(minBlockX);
+      double lonB = projection.blockXToLon(maxBlockX);
+      double latA = projection.blockZToLat(minBlockZ);
+      double latB = projection.blockZToLat(maxBlockZ);
       return Math.min(lonA, lonB) >= MIN_TILE_LON
          && Math.max(lonA, lonB) <= MAX_TILE_LON_EXCLUSIVE
          && Math.min(latA, latB) >= MIN_TILE_LAT
@@ -468,6 +497,8 @@ final class WorldCoverCogSource {
    }
 
    void clearMemoryCache() {
+      this.metadataMemo.invalidateAll();
+      this.blockMemo.invalidateAll();
       this.metadataCache.invalidateAll();
       this.metadataCache.cleanUp();
       this.blockCache.invalidateAll();
@@ -543,9 +574,13 @@ final class WorldCoverCogSource {
    }
 
    private CogMetadata getMetadata(SourceTileKey key, LookupMode lookupMode) {
+      CogMetadata memoized = this.metadataMemo.get(key);
+      if (memoized != null) {
+         return memoized;
+      }
       CogMetadata cached = this.metadataCache.getIfPresent(key);
       if (cached != null) {
-         return cached;
+         return this.metadataMemo.put(key, cached);
       }
       if (lookupMode == LookupMode.MEMORY_ONLY) {
          return null;
@@ -554,7 +589,7 @@ final class WorldCoverCogSource {
       CogMetadata local = this.readLocalMetadata(key);
       if (local != null) {
          CogMetadata raced = this.metadataCache.asMap().putIfAbsent(key, local);
-         return raced == null ? local : raced;
+         return this.metadataMemo.put(key, raced == null ? local : raced);
       }
       if (lookupMode == LookupMode.LOCAL_ONLY || !retryAllowed(this.metadataFailureDeadlines, key)) {
          return null;
@@ -563,7 +598,7 @@ final class WorldCoverCogSource {
       try {
          CogMetadata loaded = this.metadataCache.get(key);
          this.metadataFailureDeadlines.invalidate(key);
-         return loaded;
+         return this.metadataMemo.put(key, loaded);
       } catch (ExecutionException error) {
          Throwable cause = error.getCause();
          if (TellusLandCoverSource.isInterruptedLoad(cause)) {
@@ -602,9 +637,13 @@ final class WorldCoverCogSource {
    }
 
    private byte[] getBlock(BlockKey key, CogMetadata metadata, LookupMode lookupMode) {
+      byte[] memoized = this.blockMemo.get(key);
+      if (memoized != null) {
+         return memoized;
+      }
       byte[] cached = this.blockCache.getIfPresent(key);
       if (cached != null) {
-         return cached;
+         return this.blockMemo.put(key, cached);
       }
       if (lookupMode == LookupMode.MEMORY_ONLY) {
          return null;
@@ -613,7 +652,7 @@ final class WorldCoverCogSource {
       byte[] local = this.readLocalBlock(key, metadata);
       if (local != null) {
          byte[] raced = this.blockCache.asMap().putIfAbsent(key, local);
-         return raced == null ? local : raced;
+         return this.blockMemo.put(key, raced == null ? local : raced);
       }
       if (lookupMode == LookupMode.LOCAL_ONLY || !retryAllowed(this.blockFailureDeadlines, key)) {
          return null;
@@ -622,7 +661,7 @@ final class WorldCoverCogSource {
       try {
          byte[] loaded = this.blockCache.get(key);
          this.blockFailureDeadlines.invalidate(key);
-         return loaded;
+         return this.blockMemo.put(key, loaded);
       } catch (ExecutionException error) {
          Throwable cause = error.getCause();
          if (TellusLandCoverSource.isInterruptedLoad(cause)) {

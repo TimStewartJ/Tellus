@@ -23,12 +23,13 @@ public final class TerrainHeightTransform {
    public static double scaledElevationBlocks(
       double elevationMeters,
       double blockZ,
-      double worldScale,
+      WorldProjection projection,
       double terrestrialHeightScale,
       double oceanicHeightScale,
       boolean experimentalIncreaseHeight,
       boolean automaticHeightScaling
    ) {
+      double worldScale = projection.worldScale();
       if (!Double.isFinite(elevationMeters) || !(worldScale > 0.0)) {
          return Double.NaN;
       }
@@ -40,7 +41,7 @@ public final class TerrainHeightTransform {
          oceanicHeightScale,
          experimentalIncreaseHeight,
          automaticHeightScaling,
-         heightScaleCorrection(blockZ, worldScale, experimentalIncreaseHeight, automaticHeightScaling)
+         heightScaleCorrection(blockZ, projection, experimentalIncreaseHeight, automaticHeightScaling)
       );
    }
 
@@ -89,15 +90,15 @@ public final class TerrainHeightTransform {
    }
 
    public static double heightScaleCorrection(
-      double blockZ, double worldScale, boolean experimentalIncreaseHeight, boolean automaticHeightScaling
+      double blockZ, WorldProjection projection, boolean experimentalIncreaseHeight, boolean automaticHeightScaling
    ) {
       if (!automaticHeightScaling) {
          return 1.0;
       }
 
       return capExperimentalCorrection(
-         EarthProjection.heightScaleCorrection(blockZ, worldScale),
-         worldScale,
+         projection.heightScaleCorrection(blockZ),
+         projection.worldScale(),
          experimentalIncreaseHeight
       );
    }
@@ -105,7 +106,7 @@ public final class TerrainHeightTransform {
    public static int blockOffset(
       double elevationMeters,
       double blockZ,
-      double worldScale,
+      WorldProjection projection,
       double terrestrialHeightScale,
       double oceanicHeightScale,
       boolean experimentalIncreaseHeight,
@@ -114,12 +115,40 @@ public final class TerrainHeightTransform {
       double scaled = scaledElevationBlocks(
          elevationMeters,
          blockZ,
-         worldScale,
+         projection,
          terrestrialHeightScale,
          oceanicHeightScale,
          experimentalIncreaseHeight,
          automaticHeightScaling
       );
+      return roundedAwayFromSeaLevel(elevationMeters, scaled);
+   }
+
+   /**
+    * Same result as {@link #blockOffset(double, double, double, double, double, boolean, boolean)}
+    * with {@code correction} precomputed through {@link #heightScaleCorrection} for the sample's
+    * {@code blockZ}; lets dense row loops hoist the latitude math out of the per-column path.
+    */
+   public static int blockOffsetWithCorrection(
+      double elevationMeters,
+      double worldScale,
+      double terrestrialHeightScale,
+      double oceanicHeightScale,
+      boolean experimentalIncreaseHeight,
+      boolean automaticHeightScaling,
+      double correction
+   ) {
+      double scaled = !Double.isFinite(elevationMeters) || !(worldScale > 0.0)
+         ? Double.NaN
+         : scaleAndCompress(
+            elevationMeters,
+            worldScale,
+            terrestrialHeightScale,
+            oceanicHeightScale,
+            experimentalIncreaseHeight,
+            automaticHeightScaling,
+            correction
+         );
       return roundedAwayFromSeaLevel(elevationMeters, scaled);
    }
 
@@ -142,6 +171,37 @@ public final class TerrainHeightTransform {
          automaticHeightScaling
       );
       return roundedAwayFromSeaLevel(elevationMeters, scaled);
+   }
+
+   public static double elevationMetersFromBlockOffset(
+      int blockOffset,
+      double blockZ,
+      WorldProjection projection,
+      double terrestrialHeightScale,
+      double oceanicHeightScale,
+      boolean experimentalIncreaseHeight,
+      boolean automaticHeightScaling
+   ) {
+      double worldScale = projection.worldScale();
+      if (!(worldScale > 0.0) || !Double.isFinite(worldScale)) {
+         return Double.NaN;
+      }
+      boolean land = blockOffset >= 0;
+      double heightScale = land ? terrestrialHeightScale : oceanicHeightScale;
+      if (!(heightScale > 0.0) || !Double.isFinite(heightScale)) {
+         return Double.NaN;
+      }
+      double scaled = land ? blockOffset : -blockOffset;
+      if (experimentalIncreaseHeight) {
+         scaled = land
+            ? expandExperimentalLandHeight(scaled)
+            : expandExperimentalOceanDepth(scaled, automaticHeightScaling);
+      }
+      double correction = heightScaleCorrection(
+         blockZ, projection, experimentalIncreaseHeight, automaticHeightScaling
+      );
+      double elevation = scaled * worldScale / (heightScale * correction);
+      return land ? elevation : -elevation;
    }
 
    public static double heightScaleCorrectionAtLatitude(
@@ -179,6 +239,15 @@ public final class TerrainHeightTransform {
       return EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS + span * -Math.expm1(-excess / span);
    }
 
+   private static double expandExperimentalLandHeight(double heightBlocks) {
+      if (!(heightBlocks > EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS)) {
+         return heightBlocks;
+      }
+      double span = EXPERIMENTAL_LAND_SOFT_CEILING_BLOCKS - EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS;
+      double ratio = Math.min(Math.nextDown(1.0), (heightBlocks - EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS) / span);
+      return EXPERIMENTAL_LAND_SOFT_CEILING_START_BLOCKS - span * Math.log1p(-ratio);
+   }
+
    static double compressExperimentalOceanDepth(double depthBlocks, boolean automaticHeightScaling) {
       if (!(depthBlocks > 0.0)) {
          return Math.max(0.0, depthBlocks);
@@ -186,6 +255,12 @@ public final class TerrainHeightTransform {
 
       double limit = experimentalOceanDepthLimit(automaticHeightScaling);
       return limit * Math.tanh(depthBlocks / limit);
+   }
+
+   private static double expandExperimentalOceanDepth(double depthBlocks, boolean automaticHeightScaling) {
+      double limit = experimentalOceanDepthLimit(automaticHeightScaling);
+      double ratio = Math.min(Math.nextDown(1.0), Math.max(0.0, depthBlocks / limit));
+      return limit * 0.5 * Math.log((1.0 + ratio) / (1.0 - ratio));
    }
 
    public static double experimentalOceanDepthLimit(boolean automaticHeightScaling) {

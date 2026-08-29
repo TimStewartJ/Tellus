@@ -20,7 +20,8 @@ public record ManagedTerrainDownloadStatus(
       DOWNLOADING,
       COMPLETE,
       DEGRADED,
-      FAILED
+      FAILED,
+      PROCESSING
    }
 
    public double progress() {
@@ -38,6 +39,7 @@ public record ManagedTerrainDownloadStatus(
    public boolean shouldRemainVisible() {
       return this.stage == Stage.DOWNLOADING
          || this.stage == Stage.PLANNING
+         || this.stage == Stage.PROCESSING
          || this.stage == Stage.DEGRADED
          || this.stage == Stage.FAILED
          || this.stage == Stage.COMPATIBILITY_FALLBACK;
