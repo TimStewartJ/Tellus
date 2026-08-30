@@ -483,7 +483,7 @@ public final class TerrainPreview implements AutoCloseable {
       boolean[] mapterhornLandOverride = new boolean[size * size];
       int coverStride = 2;
       int coverSize = (size + coverStride - 1) / coverStride;
-      int climateStride = 4;
+      int climateStride = 1;
       int climateSize = (size + climateStride - 1) / climateStride;
       long downloadDone = 0L;
       boolean roadsPreviewEnabled = settings.enableRoads() && settings.worldScale() > 0.0 && settings.worldScale() <= 15.0;

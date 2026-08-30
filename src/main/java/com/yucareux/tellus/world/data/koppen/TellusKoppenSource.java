@@ -378,6 +378,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       private final double pixelSizeMeters;
       private final Cache<Integer, byte[]> tileCache;
       private final LastValueMemo<Integer, byte[]> tileMemo = new LastValueMemo<>();
+      private final ThreadLocal<TransitionCell> transitionCell = ThreadLocal.withInitial(TransitionCell::new);
 
       private GeoTiffRaster() {
          this.path = null;
@@ -518,22 +519,33 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          if (center == null) {
             return null;
          } else {
-            int centerValue = this.sampleValue(center.x, center.y);
+            double blendX = center.x + center.fracX - 0.5;
+            double blendY = center.y + center.fracY - 0.5;
+            int x0 = Mth.floor(blendX);
+            int y0 = Mth.floor(blendY);
+            int x1 = x0 + 1;
+            int y1 = y0 + 1;
+            TransitionCell cell = this.transitionCell.get();
+            if (!cell.matches(x0, y0)) {
+               cell.update(
+                  x0,
+                  y0,
+                  this.sampleValue(x0, y0),
+                  this.sampleValue(x1, y0),
+                  this.sampleValue(x0, y1),
+                  this.sampleValue(x1, y1)
+               );
+            }
+            int centerValue = cell.value(center.x == x0, center.y == y0);
             if (centerValue > 0 && centerValue < TellusKoppenSource.KOPPEN_CODES.length) {
-               double blendX = center.x + center.fracX - 0.5;
-               double blendY = center.y + center.fracY - 0.5;
-               int x0 = Mth.floor(blendX);
-               int y0 = Mth.floor(blendY);
-               int x1 = x0 + 1;
-               int y1 = y0 + 1;
                double fx = blendX - x0;
                double fy = blendY - y0;
                int selectedValue = selectTransitionValue(
                   centerValue,
-                  this.sampleValue(x0, y0),
-                  this.sampleValue(x1, y0),
-                  this.sampleValue(x0, y1),
-                  this.sampleValue(x1, y1),
+                  cell.value00,
+                  cell.value10,
+                  cell.value01,
+                  cell.value11,
                   fx,
                   fy,
                   blockX,
@@ -1059,6 +1071,36 @@ public final class TellusKoppenSource implements TellusCacheHandle {
                this.bitPos += bits;
                return value;
             }
+         }
+      }
+
+      private static final class TransitionCell {
+         private int x0 = Integer.MIN_VALUE;
+         private int y0 = Integer.MIN_VALUE;
+         private int value00;
+         private int value10;
+         private int value01;
+         private int value11;
+
+         private boolean matches(int x0, int y0) {
+            return this.x0 == x0 && this.y0 == y0;
+         }
+
+         private void update(
+            int x0, int y0, int value00, int value10, int value01, int value11
+         ) {
+            this.x0 = x0;
+            this.y0 = y0;
+            this.value00 = value00;
+            this.value10 = value10;
+            this.value01 = value01;
+            this.value11 = value11;
+         }
+
+         private int value(boolean west, boolean north) {
+            return north
+               ? (west ? this.value00 : this.value10)
+               : (west ? this.value01 : this.value11);
          }
       }
    }
