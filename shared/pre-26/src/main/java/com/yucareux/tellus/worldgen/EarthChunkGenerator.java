@@ -44,6 +44,9 @@ import com.yucareux.tellus.worldgen.caves.TellusNoiseSettingsAdapter;
 import com.yucareux.tellus.worldgen.caves.TellusVanillaCarverRunner;
 import com.yucareux.tellus.worldgen.caves.TellusVanillaNoiseCaveSampler;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
+import com.yucareux.tellus.worldgen.vegetation.TellusVegetationGenerator;
+import com.yucareux.tellus.worldgen.vegetation.TellusVegetationPlanner;
+import com.yucareux.tellus.worldgen.vegetation.VegetationCommunity;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -330,6 +333,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private static final int CHUNK_AREA = 256;
    private static final int TREE_MAX_SURFACE_DROP = 2;
    private static final int TREE_MAX_SURFACE_RISE = 3;
+   private static final int VEGETATION_WATER_DISTANCE = 8;
+   private static final int VEGETATION_EDGE_SAMPLE_DISTANCE = 8;
    private static final int SHORELINE_BANK_RAMP_MAX_SLOPE = 1;
    private static final int SHORELINE_BANK_RAMP_MIN_CLIFF = 3;
    private static final int LOD_INLAND_SIMPLE_WATER_DEPTH = intProperty("tellus.lodInlandWaterDepth", 20, 1, 64);
@@ -885,14 +890,33 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             EarthChunkGenerator.TerrainStreamingPerf.recordDetailDelayedByRefinement();
          }
          phaseStartNs = beginFullChunkProfiling();
+         List<TellusVegetationPlanner.Placement> ecologicalVegetation = List.of();
          if (!delayTellusDecoration && !this.shouldDeferTrees()) {
             this.placeTrees(level, chunk);
+            if (this.settings.customTrees()) {
+               EarthChunkGenerator.ChunkDecorationContext context = this.chunkDecorationContexts.get(chunkKey);
+               EarthChunkGenerator.PreparedChunkBuildings buildings = this.preparedChunkBuildings.get(chunkKey);
+               ecologicalVegetation = this.prepareEcologicalVegetation(
+                  chunk.getPos(), context, buildings, level.getSeed()
+               );
+            }
          }
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_TREES, phaseStartNs);
          if (!delayTellusDecoration && !this.shouldDeferBuildingDetails()) {
             phaseStartNs = beginFullChunkProfiling();
             this.placePreparedBuildings(level, chunk);
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_BUILDINGS, phaseStartNs);
+         }
+
+         phaseStartNs = beginFullChunkProfiling();
+         if (!ecologicalVegetation.isEmpty()) {
+            TellusVegetationGenerator.placeAll(level, ecologicalVegetation);
+         }
+         endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_VEGETATION, phaseStartNs);
+         if (!delayTellusDecoration && this.settings.customTrees() && this.hasDeferredApplyWork()) {
+            phaseStartNs = beginFullChunkProfiling();
+            this.applyReadyDeferredChunkDetail(level, chunk);
+            endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_DEFERRED_APPLY, phaseStartNs);
          }
 
          phaseStartNs = beginFullChunkProfiling();
@@ -905,8 +929,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             this.placePreparedRoadLights(level, chunk);
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_ROAD_LIGHTS, phaseStartNs);
          }
-
-         if (!delayTellusDecoration && this.hasDeferredApplyWork()) {
+         if (!delayTellusDecoration && !this.settings.customTrees() && this.hasDeferredApplyWork()) {
             phaseStartNs = beginFullChunkProfiling();
             this.applyReadyDeferredChunkDetail(level, chunk);
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_DEFERRED_APPLY, phaseStartNs);
@@ -5318,6 +5341,351 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       );
    }
 
+   private List<TellusVegetationPlanner.Placement> prepareEcologicalVegetation(
+      ChunkPos pos,
+      EarthChunkGenerator.ChunkDecorationContext context,
+      EarthChunkGenerator.PreparedChunkBuildings buildings,
+      long worldSeed
+   ) {
+      if (context == null) {
+         Tellus.LOGGER.debug("Skipping ecological vegetation without decoration context for {}", pos);
+         return List.of();
+      }
+      return this.prepareEcologicalVegetation(
+         pos,
+         context.terrainSurfaces(),
+         context.waterFlags(),
+         context.coverClasses(),
+         context.biomeCache(),
+         context.fallbackBiome(),
+         buildings,
+         worldSeed
+      );
+   }
+
+   private List<TellusVegetationPlanner.Placement> prepareEcologicalVegetation(
+      EarthChunkGenerator.ChunkGenerationContext context,
+      EarthChunkGenerator.PreparedChunkBuildings buildings,
+      long worldSeed
+   ) {
+      return this.prepareEcologicalVegetation(
+         context.pos(),
+         context.terrainSurfaces(),
+         context.waterFlags(),
+         context.coverClasses(),
+         context.biomeCache(),
+         context.fallbackBiome(),
+         buildings,
+         worldSeed
+      );
+   }
+
+   private List<TellusVegetationPlanner.Placement> prepareEcologicalVegetation(
+      ChunkPos pos,
+      int[] terrainSurfaces,
+      boolean[] waterFlags,
+      int[] coverClasses,
+      Holder<Biome>[] biomeCache,
+      Holder<Biome> fallbackBiome,
+      EarthChunkGenerator.PreparedChunkBuildings buildings,
+      long worldSeed
+   ) {
+      if (!this.settings.customTrees()) {
+         return List.of();
+      }
+      int chunkMinX = pos.getMinBlockX();
+      int chunkMinZ = pos.getMinBlockZ();
+      Map<Long, Boolean> externalWater = new HashMap<>();
+      Map<Long, Integer> externalCover = new HashMap<>();
+      Map<Long, TellusCanopyHeightSource.CanopySample> canopySamples = new HashMap<>();
+      Map<Long, ResolveEcoregion> ecoregions = new HashMap<>();
+      return TellusVegetationGenerator.planChunk(
+         chunkMinX,
+         chunkMinZ,
+         worldSeed,
+         (stratum, worldX, worldZ, seed) -> {
+            int localX = worldX - chunkMinX;
+            int localZ = worldZ - chunkMinZ;
+            int index = chunkIndex(localX, localZ);
+            int coverClass = coverClasses[index];
+            Holder<Biome> biome = biomeCache[index] != null ? biomeCache[index] : fallbackBiome;
+            if (!MountainSurfaceRules.isVegetatedCoverClass(coverClass)
+               && coverClass != MountainSurfaceRules.ESA_WETLAND
+               && coverClass != MountainSurfaceRules.ESA_MANGROVES) {
+               TellusProceduralTreeGenerator.Profile profile = TellusProceduralTreeGenerator.profile(
+                  biome, ResolveEcoregion.UNKNOWN, seed
+               );
+               return new TellusVegetationPlanner.Environment(
+                  coverClass,
+                  VegetationCommunity.NONE,
+                  profile,
+                  worldSeed,
+                  this.settings.worldScale(),
+                  0.0,
+                  false,
+                  0.0,
+                  0.0,
+                  VEGETATION_WATER_DISTANCE + 1,
+                  0,
+                  coverClass == MountainSurfaceRules.ESA_SNOW_ICE,
+                  false
+               );
+            }
+            long coarseKey = packVegetationGrid(Math.floorDiv(worldX, 8), Math.floorDiv(worldZ, 8));
+            TellusCanopyHeightSource.CanopySample canopy = coverClass == MountainSurfaceRules.ESA_TREE_COVER
+               ? canopySamples.computeIfAbsent(
+                  coarseKey,
+                  ignored -> CANOPY_HEIGHT_SOURCE.sampleCanopy(
+                     worldX, worldZ, this.settings.worldScale()
+                  )
+               )
+               : null;
+            ResolveEcoregion ecoregion = ecoregions.computeIfAbsent(
+               coarseKey,
+               ignored -> RESOLVE_SOURCE.sampleEcoregion(
+                  worldX, worldZ, this.settings.worldScale()
+               )
+            );
+            TellusProceduralTreeGenerator.Profile profile = TellusProceduralTreeGenerator.profile(
+               biome, ecoregion, seed
+            );
+            VegetationCommunity community = VegetationCommunity.resolve(coverClass, profile);
+            double edgeStrength = this.vegetationEdgeStrength(
+               worldX,
+               worldZ,
+               coverClass,
+               chunkMinX,
+               chunkMinZ,
+               coverClasses,
+               externalCover,
+               externalWater
+            );
+            int distanceToWater = stratum == TellusVegetationPlanner.Stratum.SHRUB
+                  || stratum == TellusVegetationPlanner.Stratum.HERB
+               ? this.vegetationDistanceToWater(
+                  worldX,
+                  worldZ,
+                  chunkMinX,
+                  chunkMinZ,
+                  waterFlags,
+                  externalWater,
+                  externalCover
+               )
+               : VEGETATION_WATER_DISTANCE + 1;
+            int slope = vegetationSlope(terrainSurfaces, localX, localZ);
+            double canopyHeight = canopy != null && canopy.available()
+               ? canopy.centerHeightMeters() * 0.30
+                  + canopy.percentile75Meters() * 0.42
+                  + canopy.percentile90Meters() * 0.28
+               : 0.0;
+            double shade = coverClass == MountainSurfaceRules.ESA_TREE_COVER
+               ? Mth.clamp(0.30 + Math.min(0.46, canopyHeight / 90.0) + (1.0 - edgeStrength) * 0.18, 0.0, 0.92)
+               : coverClass == MountainSurfaceRules.ESA_SHRUBLAND ? 0.16 : 0.04;
+            boolean snowCovered = coverClass == MountainSurfaceRules.ESA_SNOW_ICE
+               || biome.is(Biomes.SNOWY_PLAINS)
+               || biome.is(Biomes.SNOWY_TAIGA)
+               || biome.is(Biomes.SNOWY_SLOPES)
+               || biome.is(Biomes.FROZEN_PEAKS);
+            boolean placeable = !waterFlags[index]
+               && terrainSurfaces[index] >= this.seaLevel
+               && (buildings == null || !buildings.suppressesTrees(localX, localZ));
+            return new TellusVegetationPlanner.Environment(
+               coverClass,
+               community,
+               profile,
+               worldSeed,
+               this.settings.worldScale(),
+               canopyHeight,
+               canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
+               shade,
+               edgeStrength,
+               distanceToWater,
+               slope,
+               snowCovered,
+               placeable
+            );
+         }
+      );
+   }
+
+   private double vegetationEdgeStrength(
+      int worldX,
+      int worldZ,
+      int centerCover,
+      int chunkMinX,
+      int chunkMinZ,
+      int[] coverClasses,
+      Map<Long, Integer> externalCover,
+      Map<Long, Boolean> externalWater
+   ) {
+      int differences = 0;
+      for (int dz = -1; dz <= 1; dz++) {
+         for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dz == 0) {
+               continue;
+            }
+            int sampled = this.vegetationCoverClass(
+               worldX + dx * VEGETATION_EDGE_SAMPLE_DISTANCE,
+               worldZ + dz * VEGETATION_EDGE_SAMPLE_DISTANCE,
+               chunkMinX,
+               chunkMinZ,
+               coverClasses,
+               externalCover,
+               externalWater
+            );
+            if (sampled != centerCover) {
+               differences++;
+            }
+         }
+      }
+      return differences / 8.0;
+   }
+
+   private int vegetationDistanceToWater(
+      int worldX,
+      int worldZ,
+      int chunkMinX,
+      int chunkMinZ,
+      boolean[] waterFlags,
+      Map<Long, Boolean> externalWater,
+      Map<Long, Integer> externalCover
+   ) {
+      if (this.isVegetationWater(
+         worldX, worldZ, chunkMinX, chunkMinZ, waterFlags, externalWater, externalCover
+      )) {
+         return 0;
+      }
+      for (int radius = 1; radius <= VEGETATION_WATER_DISTANCE; radius++) {
+         for (int offset = -radius; offset <= radius; offset++) {
+            if (this.isVegetationWater(
+                  worldX + offset,
+                  worldZ - radius,
+                  chunkMinX,
+                  chunkMinZ,
+                  waterFlags,
+                  externalWater,
+                  externalCover
+               )
+               || this.isVegetationWater(
+                  worldX + offset,
+                  worldZ + radius,
+                  chunkMinX,
+                  chunkMinZ,
+                  waterFlags,
+                  externalWater,
+                  externalCover
+               )
+               || this.isVegetationWater(
+                  worldX - radius,
+                  worldZ + offset,
+                  chunkMinX,
+                  chunkMinZ,
+                  waterFlags,
+                  externalWater,
+                  externalCover
+               )
+               || this.isVegetationWater(
+                  worldX + radius,
+                  worldZ + offset,
+                  chunkMinX,
+                  chunkMinZ,
+                  waterFlags,
+                  externalWater,
+                  externalCover
+               )) {
+               return radius;
+            }
+         }
+      }
+      return VEGETATION_WATER_DISTANCE + 1;
+   }
+
+   private boolean isVegetationWater(
+      int worldX,
+      int worldZ,
+      int chunkMinX,
+      int chunkMinZ,
+      boolean[] waterFlags,
+      Map<Long, Boolean> externalWater,
+      Map<Long, Integer> externalCover
+   ) {
+      int localX = worldX - chunkMinX;
+      int localZ = worldZ - chunkMinZ;
+      if (localX >= 0 && localX <= CHUNK_MASK && localZ >= 0 && localZ <= CHUNK_MASK) {
+         return waterFlags[chunkIndex(localX, localZ)];
+      }
+      long key = packVegetationGrid(worldX, worldZ);
+      externalCover.computeIfAbsent(
+         key,
+         ignored -> this.resolveExternalVegetationCover(
+            worldX, worldZ, key, externalWater
+         )
+      );
+      return Boolean.TRUE.equals(externalWater.get(key));
+   }
+
+   private int vegetationCoverClass(
+      int worldX,
+      int worldZ,
+      int chunkMinX,
+      int chunkMinZ,
+      int[] coverClasses,
+      Map<Long, Integer> externalCover,
+      Map<Long, Boolean> externalWater
+   ) {
+      int localX = worldX - chunkMinX;
+      int localZ = worldZ - chunkMinZ;
+      if (coverClasses.length == CHUNK_AREA
+         && localX >= 0 && localX <= CHUNK_MASK
+         && localZ >= 0 && localZ <= CHUNK_MASK) {
+         return coverClasses[chunkIndex(localX, localZ)];
+      }
+      long key = packVegetationGrid(worldX, worldZ);
+      return externalCover.computeIfAbsent(
+         key,
+         ignored -> this.resolveExternalVegetationCover(
+            worldX, worldZ, key, externalWater
+         )
+      );
+   }
+
+   private int resolveExternalVegetationCover(
+      int worldX, int worldZ, long key, Map<Long, Boolean> externalWater
+   ) {
+      int coverClass = this.resolveEffectiveCoverClassForTerrain(
+         this.sampleCoverClass(worldX, worldZ)
+      );
+      WaterSurfaceResolver.WaterInfo water = this.waterResolver.resolveFastWaterInfo(
+         worldX, worldZ, coverClass
+      );
+      externalWater.put(key, water.isWater());
+      return this.resolveDryOsmTerrainCoverClass(
+         worldX, worldZ, coverClass, water.isWater()
+      );
+   }
+
+   private static int vegetationSlope(int[] terrainSurfaces, int localX, int localZ) {
+      int center = terrainSurfaces[chunkIndex(localX, localZ)];
+      int slope = 0;
+      if (localX > 0) {
+         slope = Math.max(slope, Math.abs(center - terrainSurfaces[chunkIndex(localX - 1, localZ)]));
+      }
+      if (localX < CHUNK_MASK) {
+         slope = Math.max(slope, Math.abs(center - terrainSurfaces[chunkIndex(localX + 1, localZ)]));
+      }
+      if (localZ > 0) {
+         slope = Math.max(slope, Math.abs(center - terrainSurfaces[chunkIndex(localX, localZ - 1)]));
+      }
+      if (localZ < CHUNK_MASK) {
+         slope = Math.max(slope, Math.abs(center - terrainSurfaces[chunkIndex(localX, localZ + 1)]));
+      }
+      return slope;
+   }
+
+   private static long packVegetationGrid(int x, int z) {
+      return (long)x << 32 ^ (long)z & 0xFFFFFFFFL;
+   }
+
    private boolean shouldPlaceTreesForCover(int coverClass, Holder<Biome> biome, int worldX, int worldZ, long seed) {
       if (coverClass == MountainSurfaceRules.ESA_TREE_COVER) {
          return true;
@@ -7416,13 +7784,31 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       boolean shouldPlaceBuildings = placeBuildings && preparedBuildings != null && !preparedBuildings.isEmpty();
       EarthChunkGenerator.OsmRoadQueryResult roadQuery = prepareRoads ? this.fetchDeferredRoadQuery(context.pos(), queryMode) : null;
       List<EarthChunkGenerator.PreparedTreePlacement> treePlacements = List.of();
+      List<TellusVegetationPlanner.Placement> ecologicalVegetation = List.of();
       if (prepareTrees) {
          long treePrepStartNs = beginFullChunkProfiling();
          treePlacements = this.prepareDeferredTreePlacements(context, preparedBuildings);
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_TREE_PREP, treePrepStartNs);
+         if (this.settings.customTrees()) {
+            long vegetationPrepStartNs = beginFullChunkProfiling();
+            ecologicalVegetation = this.prepareEcologicalVegetation(
+               context, preparedBuildings, this.worldSeed
+            );
+            endFullChunkProfiling(
+               EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_VEGETATION_PREP,
+               vegetationPrepStartNs
+            );
+         }
       }
 
-      return new EarthChunkGenerator.PreparedChunkDetail(context, preparedBuildings, shouldPlaceBuildings, roadQuery, treePlacements);
+      return new EarthChunkGenerator.PreparedChunkDetail(
+         context,
+         preparedBuildings,
+         shouldPlaceBuildings,
+         roadQuery,
+         treePlacements,
+         ecologicalVegetation
+      );
    }
 
    private EarthChunkGenerator.OsmRoadQueryResult fetchDeferredRoadQuery(ChunkPos pos, OsmQueryMode queryMode) {
@@ -8012,6 +8398,16 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          long treeApplyStartNs = beginFullChunkProfiling();
          this.applyPreparedTreePlacements(level, chunk, treePlacements);
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_TREES_DEFER_APPLY, treeApplyStartNs);
+      }
+
+      List<TellusVegetationPlanner.Placement> ecologicalVegetation = detail.ecologicalVegetation();
+      if (!ecologicalVegetation.isEmpty()) {
+         long vegetationApplyStartNs = beginFullChunkProfiling();
+         TellusVegetationGenerator.placeAll(level, ecologicalVegetation);
+         endFullChunkProfiling(
+            EarthChunkGenerator.FullChunkPhase.DECORATION_VEGETATION_DEFER_APPLY,
+            vegetationApplyStartNs
+         );
       }
 
       EarthChunkGenerator.ChunkDetailPerf.recordDetailApply(EarthChunkGenerator.ChunkDetailPerf.elapsedSince(applyStartNs));
@@ -13805,7 +14201,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       EarthChunkGenerator.PreparedChunkBuildings preparedBuildings,
       boolean placeBuildings,
       EarthChunkGenerator.OsmRoadQueryResult roadQuery,
-      List<EarthChunkGenerator.PreparedTreePlacement> treePlacements
+      List<EarthChunkGenerator.PreparedTreePlacement> treePlacements,
+      List<TellusVegetationPlanner.Placement> ecologicalVegetation
    ) {
    }
 
@@ -14537,6 +14934,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
             try {
                generator.applyPreparedChunkDetail(level, chunk, detail);
+               if (generator.settings.customTrees()) {
+                  generator.applyRealtimeSnowCover(level, chunk);
+               }
                applied++;
             } catch (RuntimeException error) {
                EarthChunkGenerator.ChunkDetailPerf.recordFailure();
@@ -14844,6 +15244,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       FILL_CARVER_PREP_MUTATIONS("carverMutations"),
       FILL_DETAIL_SCHEDULE("detailSchedule"),
       FILL_DETAIL_TREE_PREP("treePrep"),
+      FILL_DETAIL_VEGETATION_PREP("vegetationPrep"),
       FILL_BLOCKS("blockFill"),
       FILL_BLOCKS_SOLID_SECTIONS("solidSections"),
       FILL_BLOCKS_SOLID_SECTIONS_MAX_INDEX("maxIndex"),
@@ -14872,11 +15273,13 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       DECORATION_SUPER("super"),
       DECORATION_AXOLOTLS("axolotls"),
       DECORATION_TREES("trees"),
+      DECORATION_VEGETATION("vegetation"),
       DECORATION_BUILDINGS("buildings"),
       DECORATION_REALTIME_SNOW("realtimeSnow"),
       DECORATION_ROAD_LIGHTS("roadLights"),
       DECORATION_DEFERRED_APPLY("deferredApply"),
-      DECORATION_TREES_DEFER_APPLY("deferredTreeApply");
+      DECORATION_TREES_DEFER_APPLY("deferredTreeApply"),
+      DECORATION_VEGETATION_DEFER_APPLY("deferredVegetationApply");
 
       private final String logId;
 

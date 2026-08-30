@@ -120,4 +120,5 @@ public final class MinecraftVersionCompat {
    public static Block paleOakLeavesOr(Block fallback) {
       return Blocks.PALE_OAK_LEAVES;
    }
+
 }
