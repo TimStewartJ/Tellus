@@ -1852,12 +1852,13 @@ public final class TerrainPreview implements AutoCloseable {
          TellusVegetationPlanner.Stratum.SUBCANOPY,
          TellusVegetationPlanner.Stratum.SHRUB
       }) {
-         TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
-            stratum,
-            Math.floorDiv(blockX, stratum.cellSize()),
-            Math.floorDiv(blockZ, stratum.cellSize()),
-            0L
-         );
+         int centerCellX = Math.floorDiv(blockX, stratum.cellSize());
+         int centerCellZ = Math.floorDiv(blockZ, stratum.cellSize());
+         for (int cellZ = centerCellZ - 1; cellZ <= centerCellZ + 1; cellZ++) {
+            for (int cellX = centerCellX - 1; cellX <= centerCellX + 1; cellX++) {
+               TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
+                  stratum, cellX, cellZ, 0L
+               );
          int ownerGridX = Mth.clamp(
             (int)Math.round((anchor.worldX() - minWorldX) / step),
             1,
@@ -1868,64 +1869,65 @@ public final class TerrainPreview implements AutoCloseable {
             1,
             PREVIEW_GRID_SIZE - 2
          );
-         if (ownerGridX != gridX || ownerGridZ != gridZ) {
-            continue;
-         }
-         if (hashToUnitDouble(
-               anchor.worldX(),
-               anchor.worldZ(),
-               0x6D3A91E5L + stratum.ordinal() * 0x1F123BB5L
-            ) >= PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE) {
-            continue;
-         }
-         ResourceKey<Biome> biomeKey = resolvePreviewTreeBiome(
-            coverClass, koppen, anchor.worldX(), anchor.worldZ(), settings.worldScale()
-         );
-         ResolveEcoregion ecoregion = this.resolveSource.sampleEcoregion(
-            anchor.worldX(), anchor.worldZ(), settings.worldScale()
-         );
-         TellusCanopyHeightSource.CanopySample canopy = coverClass == MountainSurfaceRules.ESA_TREE_COVER
-            ? this.canopyHeightSource.sampleCanopyLocalOnly(
-               anchor.worldX(),
-               anchor.worldZ(),
-               settings.worldScale(),
-               canopyPreviewResolutionMeters
-            )
-            : null;
-         TellusProceduralTreeGenerator.Profile profile = TellusProceduralTreeGenerator.profile(
-            biomeKey, ecoregion, anchor.seed()
-         );
-         VegetationCommunity community = VegetationCommunity.resolve(coverClass, profile);
-         double canopyHeight = canopy != null && canopy.available()
-            ? canopy.centerHeightMeters() * 0.30
-               + canopy.percentile75Meters() * 0.42
-               + canopy.percentile90Meters() * 0.28
-            : 0.0;
-         TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
-            stratum,
-            anchor,
-            new TellusVegetationPlanner.Environment(
-               coverClass,
-               community,
-               profile,
-               0L,
-               settings.worldScale(),
-               canopyHeight,
-               canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
-               coverClass == MountainSurfaceRules.ESA_TREE_COVER ? 0.62 : 0.12,
-               0.35,
-               9,
-               0,
-               false,
-               true
-            )
-         );
-         if (placement == null) {
-            continue;
-         }
-         if (bestPlacement == null || placement.size() > bestPlacement.size()) {
-            bestPlacement = placement;
-            bestProfile = profile;
+               if (ownerGridX != gridX || ownerGridZ != gridZ) {
+                  continue;
+               }
+               if (hashToUnitDouble(
+                     anchor.worldX(),
+                     anchor.worldZ(),
+                     0x6D3A91E5L + stratum.ordinal() * 0x1F123BB5L
+                  ) >= PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE) {
+                  continue;
+               }
+               ResourceKey<Biome> biomeKey = resolvePreviewTreeBiome(
+                  coverClass, koppen, anchor.worldX(), anchor.worldZ(), settings.worldScale()
+               );
+               ResolveEcoregion ecoregion = this.resolveSource.sampleEcoregion(
+                  anchor.worldX(), anchor.worldZ(), settings.worldScale()
+               );
+               TellusCanopyHeightSource.CanopySample canopy = coverClass == MountainSurfaceRules.ESA_TREE_COVER
+                  ? this.canopyHeightSource.sampleCanopyLocalOnly(
+                     anchor.worldX(),
+                     anchor.worldZ(),
+                     settings.worldScale(),
+                     canopyPreviewResolutionMeters
+                  )
+                  : null;
+               TellusProceduralTreeGenerator.Profile profile = TellusProceduralTreeGenerator.profile(
+                  biomeKey, ecoregion, anchor.seed()
+               );
+               VegetationCommunity community = VegetationCommunity.resolve(coverClass, profile);
+               double canopyHeight = canopy != null && canopy.available()
+                  ? canopy.centerHeightMeters() * 0.30
+                     + canopy.percentile75Meters() * 0.42
+                     + canopy.percentile90Meters() * 0.28
+                  : 0.0;
+               TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
+                  stratum,
+                  anchor,
+                  new TellusVegetationPlanner.Environment(
+                     coverClass,
+                     community,
+                     profile,
+                     0L,
+                     settings.worldScale(),
+                     Integer.MIN_VALUE,
+                     canopyHeight,
+                     canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
+                     coverClass == MountainSurfaceRules.ESA_TREE_COVER ? 0.62 : 0.12,
+                     0.35,
+                     9,
+                     0,
+                     false,
+                     true
+                  )
+               );
+               if (placement != null
+                  && (bestPlacement == null || placement.size() > bestPlacement.size())) {
+                  bestPlacement = placement;
+                  bestProfile = profile;
+               }
+            }
          }
       }
       if (bestPlacement != null && bestProfile != null) {

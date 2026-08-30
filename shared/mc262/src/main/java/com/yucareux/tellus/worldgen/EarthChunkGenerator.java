@@ -608,7 +608,11 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    }
 
    private boolean usesDeferredChunkDetails() {
-      return this.shouldDeferRoadDetails() || this.shouldDeferBuildingDetails() || this.shouldDeferDetailedWater() || this.shouldDeferTrees();
+      return this.shouldDeferRoadDetails()
+         || this.shouldDeferBuildingDetails()
+         || this.shouldDeferDetailedWater()
+         || this.shouldDeferTrees()
+         || this.shouldDeferEcologicalVegetation();
    }
 
    private boolean usesDeferredTerrainRefinement() {
@@ -621,7 +625,10 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    }
 
    private boolean hasDeferredApplyWork() {
-      return this.shouldDeferRoadDetails() || this.shouldDeferBuildingDetails() || this.shouldDeferTrees();
+      return this.shouldDeferRoadDetails()
+         || this.shouldDeferBuildingDetails()
+         || this.shouldDeferTrees()
+         || this.shouldDeferEcologicalVegetation();
    }
 
    private boolean hasPendingTerrainRefinement(ChunkPos pos) {
@@ -695,6 +702,14 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
    private boolean shouldDeferTrees() {
       return !CHUNK_DETAIL_LEGACY_BLOCKING && CHUNK_DETAIL_DEFER_TREES;
+   }
+
+   private boolean shouldDeferEcologicalVegetation() {
+      return this.settings.customTrees()
+         && (this.shouldDeferTrees()
+            || this.shouldDeferRoadDetails()
+            || this.shouldDeferBuildingDetails()
+            || this.shouldDeferDetailedWater());
    }
 
    private boolean shouldUseStructureOsmSyncFallback() {
@@ -876,13 +891,13 @@ public final class EarthChunkGenerator extends ChunkGenerator {
          List<TellusVegetationPlanner.Placement> ecologicalVegetation = List.of();
          if (!delayTellusDecoration && !this.shouldDeferTrees()) {
             this.placeTrees(level, chunk);
-            if (this.settings.customTrees()) {
-               EarthChunkGenerator.ChunkDecorationContext context = this.chunkDecorationContexts.get(chunkKey);
-               EarthChunkGenerator.PreparedChunkBuildings buildings = this.preparedChunkBuildings.get(chunkKey);
-               ecologicalVegetation = this.prepareEcologicalVegetation(
-                  chunk.getPos(), context, buildings, level.getSeed()
-               );
-            }
+         }
+         if (!delayTellusDecoration && !this.shouldDeferEcologicalVegetation() && this.settings.customTrees()) {
+            EarthChunkGenerator.ChunkDecorationContext context = this.chunkDecorationContexts.get(chunkKey);
+            EarthChunkGenerator.PreparedChunkBuildings buildings = this.preparedChunkBuildings.get(chunkKey);
+            ecologicalVegetation = this.prepareEcologicalVegetation(
+               chunk.getPos(), context, buildings, level.getSeed()
+            );
          }
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_TREES, phaseStartNs);
          if (!delayTellusDecoration && !this.shouldDeferBuildingDetails()) {
@@ -5218,6 +5233,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                   profile,
                   worldSeed,
                   this.settings.worldScale(),
+                  terrainSurfaces[index],
                   0.0,
                   false,
                   0.0,
@@ -5292,6 +5308,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                profile,
                worldSeed,
                this.settings.worldScale(),
+               terrainSurfaces[index],
                canopyHeight,
                canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
                shade,
@@ -7275,7 +7292,13 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
    private EarthChunkGenerator.PreparedChunkDetail prepareDeferredChunkDetail(EarthChunkGenerator.ChunkGenerationContext context) {
       EarthChunkGenerator.PreparedChunkDetail detail = this.buildPreparedChunkDetail(
-         context, this.shouldDeferBuildingDetails(), this.shouldDeferBuildingDetails(), this.shouldDeferRoadDetails(), this.shouldDeferTrees(), OsmQueryMode.NON_BLOCKING
+         context,
+         this.shouldDeferBuildingDetails(),
+         this.shouldDeferBuildingDetails(),
+         this.shouldDeferRoadDetails(),
+         this.shouldDeferTrees(),
+         this.shouldDeferEcologicalVegetation(),
+         OsmQueryMode.NON_BLOCKING
       );
       if (this.shouldDeferDetailedWater()) {
          this.waterResolver.prefetchRegionsForChunk(context.pos().x(), context.pos().z(), Math.max(1, CHUNK_DETAIL_PREFETCH_RADIUS));
@@ -7290,6 +7313,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       boolean placeBuildings,
       boolean prepareRoads,
       boolean prepareTrees,
+      boolean prepareVegetation,
       OsmQueryMode queryMode
    ) {
       EarthChunkGenerator.PreparedChunkBuildings preparedBuildings = prepareBuildings
@@ -7310,16 +7334,16 @@ public final class EarthChunkGenerator extends ChunkGenerator {
          long treePrepStartNs = beginFullChunkProfiling();
          treePlacements = this.prepareDeferredTreePlacements(context, preparedBuildings);
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_TREE_PREP, treePrepStartNs);
-         if (this.settings.customTrees()) {
-            long vegetationPrepStartNs = beginFullChunkProfiling();
-            ecologicalVegetation = this.prepareEcologicalVegetation(
-               context, preparedBuildings, this.worldSeed
-            );
-            endFullChunkProfiling(
-               EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_VEGETATION_PREP,
-               vegetationPrepStartNs
-            );
-         }
+      }
+      if (prepareVegetation) {
+         long vegetationPrepStartNs = beginFullChunkProfiling();
+         ecologicalVegetation = this.prepareEcologicalVegetation(
+            context, preparedBuildings, this.worldSeed
+         );
+         endFullChunkProfiling(
+            EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_VEGETATION_PREP,
+            vegetationPrepStartNs
+         );
       }
 
       return new EarthChunkGenerator.PreparedChunkDetail(
@@ -7439,7 +7463,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    }
 
    private EarthChunkGenerator.PreparedChunkDetail preparePostRefinementChunkDetail(EarthChunkGenerator.ChunkGenerationContext context) {
-      return this.buildPreparedChunkDetail(context, true, true, true, true, this.resolveFullChunkOsmQueryMode());
+      return this.buildPreparedChunkDetail(
+         context, true, true, true, true, true, this.resolveFullChunkOsmQueryMode()
+      );
    }
 
    private WaterSurfaceResolver.WaterChunkData buildExactWaterChunkData(ChunkPos pos, int[] terrainSurfaces, int[] rawCoverClasses) {

@@ -4529,7 +4529,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          : new TellusLodGenerator.DataCanopyDimensions(1, 1, 1);
    }
 
-   private static TellusLodGenerator.CanopyColumn resolveEcologicalVegetationColumn(
+   private TellusLodGenerator.CanopyColumn resolveEcologicalVegetationColumn(
       Holder<Biome> biomeHolder,
       int coverClass,
       int worldX,
@@ -4624,12 +4624,19 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                      anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
                   )
                   : null;
+               Holder<Biome> anchorBiome = requestCache.vegetationBiome(
+                  this.biomeSource,
+                  anchor.worldX(),
+                  anchor.worldZ(),
+                  anchorCover,
+                  previewResolutionMeters
+               );
                TellusProceduralTreeGenerator.TreePlan treePlan = requestCache.treePlan(
                   anchor.worldX(),
                   anchor.worldZ(),
                   worldScale,
                   anchor.seed(),
-                  biomeHolder,
+                  anchorBiome,
                   canopy
                );
                VegetationCommunity community = VegetationCommunity.resolve(
@@ -4662,6 +4669,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                      treePlan.profile(),
                      worldSeed,
                      worldScale,
+                     Integer.MIN_VALUE,
                      canopyHeight,
                      canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
                      shade,
@@ -5488,6 +5496,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       private final Map<TellusLodGenerator.CanopyPlanKey, TellusProceduralTreeGenerator.TreePlan> treePlans = new HashMap<>();
       private final Map<Long, Integer> treeAnchorSurfaces = new HashMap<>();
       private final Map<Long, Integer> vegetationCoverClasses = new HashMap<>();
+      private final Map<Long, Holder<Biome>> vegetationBiomes = new HashMap<>();
 
       private CanopyRequestCache(EarthChunkGenerator generator) {
          this.generator = Objects.requireNonNull(generator, "generator");
@@ -5569,6 +5578,30 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             }
          }
          return differences / 8.0;
+      }
+
+      private Holder<Biome> vegetationBiome(
+         EarthBiomeSource biomeSource,
+         int worldX,
+         int worldZ,
+         int coverClass,
+         double previewResolutionMeters
+      ) {
+         long key = packHorizontal(worldX, worldZ);
+         return this.vegetationBiomes.computeIfAbsent(key, ignored -> {
+            int visualCoverClass = this.generator.sampleVisualCoverClass(
+               worldX, worldZ, coverClass, previewResolutionMeters
+            );
+            return biomeSource.getLodBiomeAtBlock(
+               worldX,
+               worldZ,
+               coverClass,
+               visualCoverClass,
+               false,
+               false,
+               previewResolutionMeters
+            );
+         });
       }
 
       private static long packHorizontal(int worldX, int worldZ) {

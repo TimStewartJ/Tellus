@@ -25,6 +25,7 @@ class TellusVegetationGeneratorTest {
             TellusProceduralTreeGenerator.Profile.MEDITERRANEAN,
             781239L,
             1.0,
+            0,
             0.0,
             false,
             0.12,
@@ -67,6 +68,7 @@ class TellusVegetationGeneratorTest {
             TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF,
             17L,
             1.0,
+            0,
             0.0,
             false,
             0.0,
@@ -101,6 +103,17 @@ class TellusVegetationGeneratorTest {
    }
 
    @Test
+   void deferredPlacementsRejectChangedTerrain() {
+      assertTrue(TellusVegetationGenerator.expectedSurfaceMatches(100, 98));
+      assertTrue(TellusVegetationGenerator.expectedSurfaceMatches(100, 103));
+      assertFalse(TellusVegetationGenerator.expectedSurfaceMatches(100, 97));
+      assertFalse(TellusVegetationGenerator.expectedSurfaceMatches(100, 104));
+      assertTrue(
+         TellusVegetationGenerator.expectedSurfaceMatches(Integer.MIN_VALUE, 10_000)
+      );
+   }
+
+   @Test
    void adjacentChunksOwnDisjointCandidateAnchors() {
       TellusVegetationGenerator.EnvironmentSampler sampler = (stratum, worldX, worldZ, seed) ->
          new TellusVegetationPlanner.Environment(
@@ -109,6 +122,7 @@ class TellusVegetationGeneratorTest {
             TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF,
             45123L,
             1.0,
+            0,
             0.0,
             false,
             0.1,
