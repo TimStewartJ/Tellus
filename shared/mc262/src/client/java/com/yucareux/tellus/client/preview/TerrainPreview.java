@@ -1894,16 +1894,16 @@ public final class TerrainPreview implements AutoCloseable {
             continue;
          }
          ResourceKey<Biome> biomeKey = resolvePreviewTreeBiome(
-            coverClass, koppen, anchor.worldX(), anchor.worldZ(), settings.worldScale()
+            coverClass, koppen, anchor.worldX(), anchor.worldZ(), settings.projection()
          );
          ResolveEcoregion ecoregion = this.resolveSource.sampleEcoregion(
-            anchor.worldX(), anchor.worldZ(), settings.worldScale()
+            anchor.worldX(), anchor.worldZ(), settings.projection()
          );
          TellusCanopyHeightSource.CanopySample canopy = coverClass == MountainSurfaceRules.ESA_TREE_COVER
             ? this.canopyHeightSource.sampleCanopyLocalOnly(
                anchor.worldX(),
                anchor.worldZ(),
-               settings.worldScale(),
+               settings.projection(),
                canopyPreviewResolutionMeters
             )
             : null;

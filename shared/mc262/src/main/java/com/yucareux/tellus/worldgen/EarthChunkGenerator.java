@@ -5463,14 +5463,14 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                ? canopySamples.computeIfAbsent(
                   coarseKey,
                   ignored -> CANOPY_HEIGHT_SOURCE.sampleCanopy(
-                     worldX, worldZ, this.settings.worldScale()
+                    worldX, worldZ, this.projection
                   )
                )
                : null;
             ResolveEcoregion ecoregion = ecoregions.computeIfAbsent(
                coarseKey,
                ignored -> RESOLVE_SOURCE.sampleEcoregion(
-                  worldX, worldZ, this.settings.worldScale()
+                  worldX, worldZ, this.projection
                )
             );
             TellusProceduralTreeGenerator.Profile profile = TellusProceduralTreeGenerator.profile(

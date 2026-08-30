@@ -4839,7 +4839,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   TellusProceduralTreeGenerator.leavesState(placement.treeProfile(), placement.seed()),
                   log,
                   null,
-                  requestCache.treeAnchorSurface(anchor.worldX(), anchor.worldZ(), worldScale)
+                  requestCache.treeAnchorSurface(
+                     anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
+                  )
                );
                bestHeight = totalHeight;
                bestDistance = distance;
