@@ -96,6 +96,7 @@ import org.joml.Vector3f;
 public final class TerrainPreview implements AutoCloseable {
    private static final int PREVIEW_GRID_SIZE = 513;
    private static final int PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS = 2048;
+   private static final double PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE = 1.0 / 64.0;
    private static final double PREVIEW_RADIUS_BLOCKS = 512.0;
    private static final float PREVIEW_VERTICAL_BLOCK_SCALE = 0.7F / (float)PREVIEW_RADIUS_BLOCKS;
    private static final float PREVIEW_CAMERA_FOV_DEGREES = 36.0F;
@@ -1891,6 +1892,13 @@ public final class TerrainPreview implements AutoCloseable {
             PREVIEW_GRID_SIZE - 2
          );
          if (ownerGridX != gridX || ownerGridZ != gridZ) {
+            continue;
+         }
+         if (hashToUnitDouble(
+               anchor.worldX(),
+               anchor.worldZ(),
+               0x6D3A91E5L + stratum.ordinal() * 0x1F123BB5L
+            ) >= PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE) {
             continue;
          }
          ResourceKey<Biome> biomeKey = resolvePreviewTreeBiome(

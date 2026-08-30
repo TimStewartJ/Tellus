@@ -80,6 +80,7 @@ import org.lwjgl.opengl.GL11;
 public final class TerrainPreview implements AutoCloseable {
    private static final int PREVIEW_GRID_SIZE = 513;
    private static final int PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS = 2048;
+   private static final double PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE = 1.0 / 64.0;
    private static final double PREVIEW_REFERENCE_RADIUS_BLOCKS = 256.0;
    private static final double PREVIEW_RADIUS_BLOCKS = 512.0;
    private static final float PREVIEW_TREE_HEIGHT_SCALE = (float)(PREVIEW_REFERENCE_RADIUS_BLOCKS / PREVIEW_RADIUS_BLOCKS);
@@ -1746,6 +1747,11 @@ public final class TerrainPreview implements AutoCloseable {
                            PREVIEW_GRID_SIZE - 2
                         );
                         if (ownerGridX == x && ownerGridZ == z) {
+                           if (hashToUnitDouble(
+                                 anchor.worldX(), anchor.worldZ(), 0x6D3A91E5L
+                              ) >= PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE) {
+                              continue;
+                           }
                            TellusProceduralTreeGenerator.Profile profile =
                               TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF;
                            VegetationCommunity community = VegetationCommunity.resolve(
