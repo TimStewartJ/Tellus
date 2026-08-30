@@ -4506,12 +4506,60 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          TellusVegetationPlanner.Stratum.SHRUB
       }) {
          int placementCellSize = stratum.cellSize();
-         int cellX = Math.floorDiv(worldX, placementCellSize);
-         int cellZ = Math.floorDiv(worldZ, placementCellSize);
-         for (int dz = -1; dz <= 1; dz++) {
-            for (int dx = -1; dx <= 1; dx++) {
+         boolean aggregateForLod = cellSize >= placementCellSize;
+         int minCellX;
+         int maxCellX;
+         int minCellZ;
+         int maxCellZ;
+         if (aggregateForLod) {
+            int lodCellX = Math.floorDiv(worldX, cellSize);
+            int lodCellZ = Math.floorDiv(worldZ, cellSize);
+            int lodMinX = lodCellX * cellSize;
+            int lodMinZ = lodCellZ * cellSize;
+            int lodMaxX = lodMinX + cellSize - 1;
+            int lodMaxZ = lodMinZ + cellSize - 1;
+            int firstContainedCellX = ceilDiv(lodMinX, placementCellSize);
+            int firstContainedCellZ = ceilDiv(lodMinZ, placementCellSize);
+            int lastContainedCellX = Math.floorDiv(
+               lodMaxX - placementCellSize + 1, placementCellSize
+            );
+            int lastContainedCellZ = Math.floorDiv(
+               lodMaxZ - placementCellSize + 1, placementCellSize
+            );
+            if (firstContainedCellX > lastContainedCellX
+               || firstContainedCellZ > lastContainedCellZ) {
+               aggregateForLod = false;
+               int cellX = Math.floorDiv(worldX, placementCellSize);
+               int cellZ = Math.floorDiv(worldZ, placementCellSize);
+               minCellX = cellX - 1;
+               maxCellX = cellX + 1;
+               minCellZ = cellZ - 1;
+               maxCellZ = cellZ + 1;
+            } else {
+               int cellsAcrossX = lastContainedCellX - firstContainedCellX + 1;
+               int cellsAcrossZ = lastContainedCellZ - firstContainedCellZ + 1;
+               int selection = mixHash(
+                  lodCellX,
+                  lodCellZ,
+                  0x6D3A91E5 + stratum.ordinal() * 0x1F123BB5
+               );
+               minCellX = firstContainedCellX + Math.floorMod(selection, cellsAcrossX);
+               minCellZ = firstContainedCellZ + Math.floorMod(selection >>> 16, cellsAcrossZ);
+               maxCellX = minCellX;
+               maxCellZ = minCellZ;
+            }
+         } else {
+            int cellX = Math.floorDiv(worldX, placementCellSize);
+            int cellZ = Math.floorDiv(worldZ, placementCellSize);
+            minCellX = cellX - 1;
+            maxCellX = cellX + 1;
+            minCellZ = cellZ - 1;
+            maxCellZ = cellZ + 1;
+         }
+         for (int testCellZ = minCellZ; testCellZ <= maxCellZ; testCellZ++) {
+            for (int testCellX = minCellX; testCellX <= maxCellX; testCellX++) {
                TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
-                  stratum, cellX + dx, cellZ + dz, worldSeed
+                  stratum, testCellX, testCellZ, worldSeed
                );
                int offsetX = worldX - anchor.worldX();
                int offsetZ = worldZ - anchor.worldZ();
@@ -4521,9 +4569,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   (int)Math.round(Math.sqrt((long)offsetX * offsetX + (long)offsetZ * offsetZ))
                      - cellPadding
                );
-               int anchorCover = requestCache.vegetationCoverClass(
-                  anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
-               );
+               if (aggregateForLod) {
+                  distance = 0;
+               }
+               int anchorCover = aggregateForLod
+                  ? coverClass
+                  : requestCache.vegetationCoverClass(
+                     anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
+                  );
                TellusCanopyHeightSource.CanopySample canopy = anchorCover == ESA_TREE_COVER
                   ? requestCache.canopy(
                      anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
@@ -4545,9 +4598,11 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                      + canopy.percentile75Meters() * 0.42
                      + canopy.percentile90Meters() * 0.28
                   : 0.0;
-               double edgeStrength = requestCache.vegetationEdgeStrength(
-                  anchor.worldX(), anchor.worldZ(), anchorCover, worldScale, previewResolutionMeters
-               );
+               double edgeStrength = aggregateForLod
+                  ? 0.35
+                  : requestCache.vegetationEdgeStrength(
+                     anchor.worldX(), anchor.worldZ(), anchorCover, worldScale, previewResolutionMeters
+                  );
                double shade = anchorCover == ESA_TREE_COVER
                   ? Mth.clamp(
                      0.30 + Math.min(0.46, canopyHeight / 90.0) + (1.0 - edgeStrength) * 0.18,
@@ -4606,7 +4661,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   TellusProceduralTreeGenerator.leavesState(placement.treeProfile(), placement.seed()),
                   log,
                   null,
-                  requestCache.treeAnchorSurface(anchor.worldX(), anchor.worldZ(), worldScale)
+                  aggregateForLod
+                     ? LodCanopyVerticalLayout.UNANCHORED_SURFACE_Y
+                     : requestCache.treeAnchorSurface(anchor.worldX(), anchor.worldZ(), worldScale)
                );
                bestHeight = totalHeight;
                bestDistance = distance;
@@ -4614,6 +4671,10 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          }
       }
       return best;
+   }
+
+   private static int ceilDiv(int value, int positiveDivisor) {
+      return -Math.floorDiv(-value, positiveDivisor);
    }
 
    private static TellusLodGenerator.DataCanopyDimensions dataCanopyDimensions(
