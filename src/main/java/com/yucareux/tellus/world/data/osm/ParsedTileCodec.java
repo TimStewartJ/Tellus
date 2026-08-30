@@ -17,7 +17,7 @@ final class ParsedTileCodec {
    private static final int MAGIC_BUILDING = 1112428356;
    private static final int MAGIC_SAND = 1396787524;
    private static final int MAGIC_STREET_LIGHT = 1280461908;
-   private static final int ROAD_VERSION = 6;
+   private static final int ROAD_VERSION = 7;
    private static final int WATER_VERSION = 3;
    private static final int BUILDING_VERSION = 4;
    private static final int SAND_VERSION = 1;
@@ -140,9 +140,36 @@ final class ParsedTileCodec {
             areaFeatures.add(new RoadAreaFeature(featureId, ROAD_CLASSES[classOrdinal], highwayTag, roadSurface, subclass, longitudes, latitudes));
          }
 
-         return features.isEmpty() && areaFeatures.isEmpty()
+         int transportFeatureCount = boundedCount(input.readInt(), MAX_FEATURES, "transport feature");
+         List<TransportFeature> transportFeatures = new ArrayList<>(transportFeatureCount);
+         for (int i = 0; i < transportFeatureCount; i++) {
+            long featureId = input.readLong();
+            int kindOrdinal = Byte.toUnsignedInt(input.readByte());
+            TransportKind kind = TransportKind.fromOrdinal(kindOrdinal);
+            if (kind == null) {
+               throw new IOException("Invalid transport kind ordinal " + kindOrdinal);
+            }
+
+            String transportClass = input.readUTF();
+            String subclass = input.readUTF();
+            int pointCount = boundedCount(input.readInt(), MAX_POINTS_PER_FEATURE, "transport point");
+            if (pointCount < 2) {
+               throw new IOException("Transport feature has too few points");
+            }
+
+            double[] longitudes = new double[pointCount];
+            double[] latitudes = new double[pointCount];
+            for (int point = 0; point < pointCount; point++) {
+               longitudes[point] = input.readDouble();
+               latitudes[point] = input.readDouble();
+            }
+
+            transportFeatures.add(new TransportFeature(featureId, kind, transportClass, subclass, longitudes, latitudes));
+         }
+
+         return features.isEmpty() && areaFeatures.isEmpty() && transportFeatures.isEmpty()
             ? OverpassRoadTile.empty()
-            : new OverpassRoadTile(features, areaFeatures, tileSouth, tileWest, tileNorth, tileEast);
+            : new OverpassRoadTile(features, areaFeatures, transportFeatures, tileSouth, tileWest, tileNorth, tileEast);
       }
    }
 
@@ -197,6 +224,21 @@ final class ParsedTileCodec {
                   output.writeDouble(feature.lonAt(part, point));
                   output.writeDouble(feature.latAt(part, point));
                }
+            }
+         }
+
+         List<TransportFeature> transportFeatures = tile.transportFeatures();
+         output.writeInt(transportFeatures.size());
+         for (TransportFeature feature : transportFeatures) {
+            output.writeLong(feature.featureId());
+            output.writeByte(feature.kind().ordinal());
+            output.writeUTF(feature.transportClass());
+            output.writeUTF(feature.subclass());
+            int points = feature.pointCount();
+            output.writeInt(points);
+            for (int point = 0; point < points; point++) {
+               output.writeDouble(feature.lonAt(point));
+               output.writeDouble(feature.latAt(point));
             }
          }
       }
