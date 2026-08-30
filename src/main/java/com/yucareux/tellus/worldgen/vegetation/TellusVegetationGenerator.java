@@ -1,6 +1,7 @@
 package com.yucareux.tellus.worldgen.vegetation;
 
 import com.yucareux.tellus.compat.MinecraftVersionCompat;
+import com.yucareux.tellus.compat.VegetationVersionCompat;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -56,7 +57,7 @@ public final class TellusVegetationGenerator {
                   continue;
                }
                TellusVegetationPlanner.Environment environment = sampler.sample(
-                  anchor.worldX(), anchor.worldZ(), anchor.seed()
+                  stratum, anchor.worldX(), anchor.worldZ(), anchor.seed()
                );
                TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
                   stratum, anchor, environment
@@ -278,13 +279,13 @@ public final class TellusVegetationGenerator {
             case 0, 1 -> Blocks.FERN;
             case 2 -> Blocks.SWEET_BERRY_BUSH;
             case 3 -> Blocks.BROWN_MUSHROOM;
-            default -> MinecraftVersionCompat.shortGrass();
+            default -> VegetationVersionCompat.shortGrass();
          };
          case TROPICAL_MOIST_FOREST, WETLAND -> switch (variant % 6) {
             case 0, 1, 2 -> Blocks.FERN;
             case 3 -> Blocks.BLUE_ORCHID;
             case 4 -> Blocks.BROWN_MUSHROOM;
-            default -> MinecraftVersionCompat.shortGrass();
+            default -> VegetationVersionCompat.shortGrass();
          };
          case MEDITERRANEAN_SCRUB,
             XERIC_SCRUB,
@@ -293,13 +294,13 @@ public final class TellusVegetationGenerator {
             TROPICAL_DRY_FOREST,
             EUCALYPT_WOODLAND -> variant % 4 == 0
                ? Blocks.DEAD_BUSH
-               : MinecraftVersionCompat.shortGrass();
+               : VegetationVersionCompat.shortGrass();
          default -> switch (variant % 6) {
             case 0 -> Blocks.FERN;
             case 1 -> Blocks.DANDELION;
             case 2 -> Blocks.POPPY;
             case 3 -> Blocks.OXEYE_DAISY;
-            default -> MinecraftVersionCompat.shortGrass();
+            default -> VegetationVersionCompat.shortGrass();
          };
       };
    }
@@ -315,7 +316,7 @@ public final class TellusVegetationGenerator {
          case TEMPERATE_FOREST, PINE_OAK_FOREST ->
             placement.variant() % 4 == 0
                ? Blocks.RED_MUSHROOM
-               : MinecraftVersionCompat.leafLitterOr(Blocks.MOSS_CARPET);
+               : VegetationVersionCompat.leafLitterOr(Blocks.MOSS_CARPET);
          case MEDITERRANEAN_SCRUB,
             XERIC_SCRUB,
             SAVANNA,
@@ -323,7 +324,7 @@ public final class TellusVegetationGenerator {
             TROPICAL_DRY_FOREST,
             EUCALYPT_WOODLAND -> placement.variant() % 3 == 0
                ? Blocks.DEAD_BUSH
-               : MinecraftVersionCompat.shortGrass();
+               : VegetationVersionCompat.shortGrass();
          default -> Blocks.MOSS_CARPET;
       };
       return setPlant(level, ground.above(), block.defaultBlockState());
@@ -416,8 +417,7 @@ public final class TellusVegetationGenerator {
       }
       BlockState current = level.getBlockState(position);
       return current.isAir()
-         || current.is(BlockTags.LEAVES)
-         || current.is(BlockTags.REPLACEABLE_BY_TREES);
+         || !current.is(BlockTags.LEAVES) && current.is(BlockTags.REPLACEABLE_BY_TREES);
    }
 
    private static boolean supportsVegetation(BlockState surface) {
@@ -463,6 +463,8 @@ public final class TellusVegetationGenerator {
 
    @FunctionalInterface
    public interface EnvironmentSampler {
-      TellusVegetationPlanner.Environment sample(int worldX, int worldZ, long seed);
+      TellusVegetationPlanner.Environment sample(
+         TellusVegetationPlanner.Stratum stratum, int worldX, int worldZ, long seed
+      );
    }
 }

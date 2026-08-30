@@ -18,7 +18,6 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.levelgen.Beardifier;
 import net.minecraft.world.level.levelgen.DensityFunctions;
@@ -116,11 +115,4 @@ public final class MinecraftVersionCompat {
       return fallback;
    }
 
-   public static Block shortGrass() {
-      return Blocks.GRASS;
-   }
-
-   public static Block leafLitterOr(Block fallback) {
-      return fallback;
-   }
 }

@@ -50,12 +50,16 @@ public final class TellusVegetationPlanner {
          return null;
       }
 
-      StandState stand = standState(anchor.worldX(), anchor.worldZ(), anchor.seed(), environment.worldScale());
+      StandState stand = standState(
+         anchor.worldX(), anchor.worldZ(), environment.spatialSeed(), environment.worldScale()
+      );
       density *= standFactor(stratum, stand);
       double patch = patchValue(
          anchor.worldX(),
          anchor.worldZ(),
-         anchor.seed() ^ environment.community().ordinal() * 0x9E3779B97F4A7C15L,
+         environment.spatialSeed()
+            ^ stratum.salt()
+            ^ environment.community().ordinal() * 0x9E3779B97F4A7C15L,
          environment.worldScale(),
          stratum.patchScaleMeters()
       );
@@ -233,7 +237,7 @@ public final class TellusVegetationPlanner {
       return density;
    }
 
-   private static double representationFactor(Stratum stratum, double worldScale) {
+   static double representationFactor(Stratum stratum, double worldScale) {
       double scale = Double.isFinite(worldScale) && worldScale > 0.0 ? worldScale : 1.0;
       if (scale <= 2.0) {
          return 1.0;
@@ -242,8 +246,8 @@ public final class TellusVegetationPlanner {
       return switch (stratum) {
          case HERB -> Math.max(0.18, 1.0 / divisor);
          case GROUND -> Math.max(0.24, 1.0 / divisor);
-         case SHRUB -> Math.max(0.32, 1.25 / divisor);
-         case SUBCANOPY, DEADWOOD -> Math.max(0.45, 1.4 / divisor);
+         case SHRUB -> Math.max(0.32, Math.min(1.0, 1.25 / divisor));
+         case SUBCANOPY, DEADWOOD -> Math.max(0.45, Math.min(1.0, 1.4 / divisor));
       };
    }
 
@@ -414,6 +418,7 @@ public final class TellusVegetationPlanner {
       int coverClass,
       VegetationCommunity community,
       TellusProceduralTreeGenerator.Profile treeProfile,
+      long spatialSeed,
       double worldScale,
       double canopyHeightMeters,
       double canopyShade,

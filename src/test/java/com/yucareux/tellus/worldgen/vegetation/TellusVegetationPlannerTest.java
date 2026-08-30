@@ -80,6 +80,24 @@ class TellusVegetationPlannerTest {
    }
 
    @Test
+   void moderateCompressionNeverIncreasesWoodyVegetation() {
+      for (TellusVegetationPlanner.Stratum stratum : new TellusVegetationPlanner.Stratum[]{
+         TellusVegetationPlanner.Stratum.SUBCANOPY,
+         TellusVegetationPlanner.Stratum.SHRUB,
+         TellusVegetationPlanner.Stratum.DEADWOOD
+      }) {
+         double previous = TellusVegetationPlanner.representationFactor(stratum, 2.0);
+         assertEquals(1.0, previous);
+         for (double scale : new double[]{2.01, 3.0, 4.0, 15.0, 30.0}) {
+            double current = TellusVegetationPlanner.representationFactor(stratum, scale);
+            assertTrue(current <= 1.0, stratum + " amplified at 1:" + scale);
+            assertTrue(current <= previous, stratum + " increased at 1:" + scale);
+            previous = current;
+         }
+      }
+   }
+
+   @Test
    void unsuitableSurfacesNeverProducePlacements() {
       TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
          TellusVegetationPlanner.Stratum.SHRUB, 0, 0, 7L
@@ -88,6 +106,7 @@ class TellusVegetationPlannerTest {
          MountainSurfaceRules.ESA_SHRUBLAND,
          VegetationCommunity.MEDITERRANEAN_SCRUB,
          TellusProceduralTreeGenerator.Profile.MEDITERRANEAN,
+         17L,
          1.0,
          3.0,
          0.2,
@@ -119,6 +138,31 @@ class TellusVegetationPlannerTest {
       assertTrue(placement.size() >= 2);
    }
 
+   @Test
+   void standFieldIsSharedAcrossStrataAndSpatiallyCoherent() {
+      long spatialSeed = 998231L;
+      TellusVegetationPlanner.StandState atOrigin = TellusVegetationPlanner.standState(
+         0, 0, spatialSeed, 1.0
+      );
+      assertEquals(
+         atOrigin,
+         TellusVegetationPlanner.standState(0, 0, spatialSeed, 1.0)
+      );
+
+      int transitions = 0;
+      TellusVegetationPlanner.StandState previous = atOrigin;
+      for (int x = 1; x <= 256; x++) {
+         TellusVegetationPlanner.StandState current = TellusVegetationPlanner.standState(
+            x, 0, spatialSeed, 1.0
+         );
+         if (current != previous) {
+            transitions++;
+         }
+         previous = current;
+      }
+      assertTrue(transitions < 20, "stand field changed too often: " + transitions);
+   }
+
    private static int count(
       TellusVegetationPlanner.Stratum stratum, TellusVegetationPlanner.Environment environment
    ) {
@@ -143,6 +187,7 @@ class TellusVegetationPlannerTest {
          coverClass,
          community,
          TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF,
+         7823479L,
          worldScale,
          24.0,
          0.35,

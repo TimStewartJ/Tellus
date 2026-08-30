@@ -7,16 +7,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.yucareux.tellus.worldgen.MountainSurfaceRules;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class TellusVegetationGeneratorTest {
    @Test
    void chunkPlanningIsDeterministicBoundedAndOrdered() {
-      TellusVegetationGenerator.EnvironmentSampler sampler = (worldX, worldZ, seed) ->
+      TellusVegetationGenerator.EnvironmentSampler sampler = (stratum, worldX, worldZ, seed) ->
          new TellusVegetationPlanner.Environment(
             MountainSurfaceRules.ESA_SHRUBLAND,
             VegetationCommunity.MEDITERRANEAN_SCRUB,
             TellusProceduralTreeGenerator.Profile.MEDITERRANEAN,
+            781239L,
             1.0,
             0.0,
             0.12,
@@ -53,10 +56,11 @@ class TellusVegetationGeneratorTest {
          0,
          0,
          17L,
-         (worldX, worldZ, seed) -> new TellusVegetationPlanner.Environment(
+         (stratum, worldX, worldZ, seed) -> new TellusVegetationPlanner.Environment(
             MountainSurfaceRules.ESA_BUILT,
             VegetationCommunity.NONE,
             TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF,
+            17L,
             1.0,
             0.0,
             0.0,
@@ -69,6 +73,42 @@ class TellusVegetationGeneratorTest {
       );
 
       assertTrue(placements.isEmpty());
+   }
+
+   @Test
+   void adjacentChunksOwnDisjointCandidateAnchors() {
+      TellusVegetationGenerator.EnvironmentSampler sampler = (stratum, worldX, worldZ, seed) ->
+         new TellusVegetationPlanner.Environment(
+            MountainSurfaceRules.ESA_SHRUBLAND,
+            VegetationCommunity.TEMPERATE_SCRUB,
+            TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF,
+            45123L,
+            1.0,
+            0.0,
+            0.1,
+            0.3,
+            9,
+            0,
+            false,
+            true
+         );
+      List<TellusVegetationPlanner.Placement> west = TellusVegetationGenerator.planChunk(
+         0, 0, 45123L, sampler
+      );
+      List<TellusVegetationPlanner.Placement> east = TellusVegetationGenerator.planChunk(
+         16, 0, 45123L, sampler
+      );
+      Set<String> anchors = new HashSet<>();
+      for (TellusVegetationPlanner.Placement placement : west) {
+         assertTrue(anchors.add(anchorKey(placement)));
+      }
+      for (TellusVegetationPlanner.Placement placement : east) {
+         assertTrue(anchors.add(anchorKey(placement)), "duplicate anchor " + placement);
+      }
+   }
+
+   private static String anchorKey(TellusVegetationPlanner.Placement placement) {
+      return placement.stratum() + ":" + placement.worldX() + ":" + placement.worldZ();
    }
 
    private static int placementOrder(TellusVegetationPlanner.Stratum stratum) {

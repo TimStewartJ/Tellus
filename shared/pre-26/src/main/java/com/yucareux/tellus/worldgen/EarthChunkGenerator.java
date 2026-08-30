@@ -882,7 +882,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             TellusVegetationGenerator.placeAll(level, ecologicalVegetation);
          }
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_VEGETATION, phaseStartNs);
-         if (!delayTellusDecoration && this.hasDeferredApplyWork()) {
+         if (!delayTellusDecoration && this.settings.customTrees() && this.hasDeferredApplyWork()) {
             phaseStartNs = beginFullChunkProfiling();
             this.applyReadyDeferredChunkDetail(level, chunk);
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_DEFERRED_APPLY, phaseStartNs);
@@ -897,6 +897,11 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             phaseStartNs = beginFullChunkProfiling();
             this.placePreparedRoadLights(level, chunk);
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_ROAD_LIGHTS, phaseStartNs);
+         }
+         if (!delayTellusDecoration && !this.settings.customTrees() && this.hasDeferredApplyWork()) {
+            phaseStartNs = beginFullChunkProfiling();
+            this.applyReadyDeferredChunkDetail(level, chunk);
+            endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_DEFERRED_APPLY, phaseStartNs);
          }
 
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_TOTAL, totalStartNs);
@@ -5173,7 +5178,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          chunkMinX,
          chunkMinZ,
          worldSeed,
-         (worldX, worldZ, seed) -> {
+         (stratum, worldX, worldZ, seed) -> {
             int localX = worldX - chunkMinX;
             int localZ = worldZ - chunkMinZ;
             int index = chunkIndex(localX, localZ);
@@ -5189,6 +5194,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                   coverClass,
                   VegetationCommunity.NONE,
                   profile,
+                  worldSeed,
                   this.settings.worldScale(),
                   0.0,
                   0.0,
@@ -5225,17 +5231,21 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                chunkMinX,
                chunkMinZ,
                coverClasses,
-               externalCover
+               externalCover,
+               externalWater
             );
-            int distanceToWater = this.vegetationDistanceToWater(
-               worldX,
-               worldZ,
-               chunkMinX,
-               chunkMinZ,
-               waterFlags,
-               externalWater,
-               externalCover
-            );
+            int distanceToWater = stratum == TellusVegetationPlanner.Stratum.SHRUB
+                  || stratum == TellusVegetationPlanner.Stratum.HERB
+               ? this.vegetationDistanceToWater(
+                  worldX,
+                  worldZ,
+                  chunkMinX,
+                  chunkMinZ,
+                  waterFlags,
+                  externalWater,
+                  externalCover
+               )
+               : VEGETATION_WATER_DISTANCE + 1;
             int slope = vegetationSlope(terrainSurfaces, localX, localZ);
             double canopyHeight = canopy != null && canopy.available()
                ? canopy.centerHeightMeters() * 0.30
@@ -5257,6 +5267,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                coverClass,
                community,
                profile,
+               worldSeed,
                this.settings.worldScale(),
                canopyHeight,
                shade,
@@ -5277,7 +5288,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int chunkMinX,
       int chunkMinZ,
       int[] coverClasses,
-      Map<Long, Integer> externalCover
+      Map<Long, Integer> externalCover,
+      Map<Long, Boolean> externalWater
    ) {
       int differences = 0;
       for (int dz = -1; dz <= 1; dz++) {
@@ -5291,7 +5303,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                chunkMinX,
                chunkMinZ,
                coverClasses,
-               externalCover
+               externalCover,
+               externalWater
             );
             if (sampled != centerCover) {
                differences++;
@@ -5375,12 +5388,13 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          return waterFlags[chunkIndex(localX, localZ)];
       }
       long key = packVegetationGrid(worldX, worldZ);
-      return externalWater.computeIfAbsent(key, ignored -> {
-         int coverClass = externalCover.computeIfAbsent(
-            key, unused -> this.sampleCoverClass(worldX, worldZ)
-         );
-         return this.waterResolver.resolveFastWaterInfo(worldX, worldZ, coverClass).isWater();
-      });
+      externalCover.computeIfAbsent(
+         key,
+         ignored -> this.resolveExternalVegetationCover(
+            worldX, worldZ, key, externalWater
+         )
+      );
+      return Boolean.TRUE.equals(externalWater.get(key));
    }
 
    private int vegetationCoverClass(
@@ -5389,15 +5403,38 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int chunkMinX,
       int chunkMinZ,
       int[] coverClasses,
-      Map<Long, Integer> externalCover
+      Map<Long, Integer> externalCover,
+      Map<Long, Boolean> externalWater
    ) {
       int localX = worldX - chunkMinX;
       int localZ = worldZ - chunkMinZ;
-      if (localX >= 0 && localX <= CHUNK_MASK && localZ >= 0 && localZ <= CHUNK_MASK) {
+      if (coverClasses.length == CHUNK_AREA
+         && localX >= 0 && localX <= CHUNK_MASK
+         && localZ >= 0 && localZ <= CHUNK_MASK) {
          return coverClasses[chunkIndex(localX, localZ)];
       }
       long key = packVegetationGrid(worldX, worldZ);
-      return externalCover.computeIfAbsent(key, ignored -> this.sampleCoverClass(worldX, worldZ));
+      return externalCover.computeIfAbsent(
+         key,
+         ignored -> this.resolveExternalVegetationCover(
+            worldX, worldZ, key, externalWater
+         )
+      );
+   }
+
+   private int resolveExternalVegetationCover(
+      int worldX, int worldZ, long key, Map<Long, Boolean> externalWater
+   ) {
+      int coverClass = this.resolveEffectiveCoverClassForTerrain(
+         this.sampleCoverClass(worldX, worldZ)
+      );
+      WaterSurfaceResolver.WaterInfo water = this.waterResolver.resolveFastWaterInfo(
+         worldX, worldZ, coverClass
+      );
+      externalWater.put(key, water.isWater());
+      return this.resolveDryOsmTerrainCoverClass(
+         worldX, worldZ, coverClass, water.isWater()
+      );
    }
 
    private static int vegetationSlope(int[] terrainSurfaces, int localX, int localZ) {
@@ -14257,7 +14294,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
             try {
                generator.applyPreparedChunkDetail(level, chunk, detail);
-               generator.applyRealtimeSnowCover(level, chunk);
+               if (generator.settings.customTrees()) {
+                  generator.applyRealtimeSnowCover(level, chunk);
+               }
                applied++;
             } catch (RuntimeException error) {
                EarthChunkGenerator.ChunkDetailPerf.recordFailure();

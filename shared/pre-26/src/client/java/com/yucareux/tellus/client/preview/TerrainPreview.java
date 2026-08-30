@@ -44,6 +44,9 @@ import com.yucareux.tellus.worldgen.TellusWorldgenSources;
 import com.yucareux.tellus.worldgen.WaterSurfaceResolver;
 import com.yucareux.tellus.worldgen.WaterfallNoCarveZone;
 import com.yucareux.tellus.worldgen.arnis.ArnisBuildingRules;
+import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
+import com.yucareux.tellus.worldgen.vegetation.TellusVegetationPlanner;
+import com.yucareux.tellus.worldgen.vegetation.VegetationCommunity;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -1676,6 +1679,7 @@ public final class TerrainPreview implements AutoCloseable {
                for (int x = 1; x < size - 1; x++) {
                   int coverX = Math.min(coverSize - 1, x / coverStride);
                   int coverIdx = coverX + coverZ * coverSize;
+                  boolean primaryTreeAdded = false;
                   if (MountainSurfaceRules.isTreeMarkerCoverClass(coverClasses[coverIdx], visualCoverClasses[coverIdx])) {
                      long blockX = Mth.floor(minWorldX + x * step);
                      long blockZ = Mth.floor(minWorldZ + z * step);
@@ -1686,6 +1690,64 @@ public final class TerrainPreview implements AutoCloseable {
                         float trunkScale = 0.82F + (float)hashToUnitDouble(blockX, blockZ, 182545271L) * 0.3F;
                         int leafColor = blendColor(PREVIEW_TREE_LEAF_COLOR, colors[index], 0.18F);
                         trees.add(new TerrainPreview.PreviewTree(x, z, height, canopyScale, trunkScale, leafColor, colors[index]));
+                       primaryTreeAdded = true;
+                    }
+                  }
+                  if (settings.customTrees() && !primaryTreeAdded) {
+                     int surfaceCoverClass = MountainSurfaceRules.resolveSurfaceCoverClass(
+                        coverClasses[coverIdx], visualCoverClasses[coverIdx]
+                     );
+                     if (MountainSurfaceRules.isVegetatedCoverClass(surfaceCoverClass)
+                        || surfaceCoverClass == MountainSurfaceRules.ESA_WETLAND
+                        || surfaceCoverClass == MountainSurfaceRules.ESA_MANGROVES) {
+                        int blockX = Mth.floor(minWorldX + x * step);
+                        int blockZ = Mth.floor(minWorldZ + z * step);
+                        TellusVegetationPlanner.Stratum stratum = TellusVegetationPlanner.Stratum.SHRUB;
+                        TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
+                           stratum,
+                           Math.floorDiv(blockX, stratum.cellSize()),
+                           Math.floorDiv(blockZ, stratum.cellSize()),
+                           0L
+                        );
+                        double sampleRadius = Math.max(1.0, step * 0.56);
+                        if (Math.abs(anchor.worldX() - blockX) <= sampleRadius
+                           && Math.abs(anchor.worldZ() - blockZ) <= sampleRadius) {
+                           TellusProceduralTreeGenerator.Profile profile =
+                              TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF;
+                           VegetationCommunity community = VegetationCommunity.resolve(
+                              surfaceCoverClass, profile
+                           );
+                           TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
+                              stratum,
+                              anchor,
+                              new TellusVegetationPlanner.Environment(
+                                 surfaceCoverClass,
+                                 community,
+                                 profile,
+                                 0L,
+                                 settings.worldScale(),
+                                 0.0,
+                                 surfaceCoverClass == MountainSurfaceRules.ESA_TREE_COVER ? 0.62 : 0.12,
+                                 0.35,
+                                 9,
+                                 0,
+                                 false,
+                                 true
+                              )
+                           );
+                           if (placement != null) {
+                              int index = x + z * size;
+                              float height = treePreviewHeight(settings.worldScale())
+                                 * Mth.clamp(placement.size() / 6.0F, 0.34F, 0.72F);
+                              float canopyScale = Mth.clamp(placement.size() * 0.58F, 0.58F, 1.65F);
+                              int leafColor = blendColor(PREVIEW_TREE_LEAF_COLOR, colors[index], 0.24F);
+                              trees.add(
+                                 new TerrainPreview.PreviewTree(
+                                    x, z, height, canopyScale, 0.38F, leafColor, colors[index]
+                                 )
+                              );
+                           }
+                        }
                      }
                   }
                }
