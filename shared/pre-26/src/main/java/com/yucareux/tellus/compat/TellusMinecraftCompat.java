@@ -27,7 +27,7 @@ public final class TellusMinecraftCompat {
    }
 
    public static void configureInitialSpawn(ServerLevel level, EarthChunkGenerator generator) {
-      BlockPos spawn = generator.getSpawnPosition(level);
+      BlockPos spawn = generator.getInitialSpawnPosition(level);
       level.setDefaultSpawnPos(spawn, 0.0F);
    }
 
