@@ -3,10 +3,24 @@ package com.yucareux.tellus.worldgen;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TerrainHeightTransformTest {
    private static final double ONE_TO_ONE = 1.0;
+
+   @Test
+   void nativeTerrainRejectsMissingElevationInsteadOfFlatteningItToSeaLevel() {
+      assertEquals(742.5, TerrainHeightTransform.requireFiniteTerrainElevation(742.5, -3884, -1879));
+      assertThrows(
+         IllegalStateException.class,
+         () -> TerrainHeightTransform.requireFiniteTerrainElevation(Double.NaN, -3884, -1879)
+      );
+      assertThrows(
+         IllegalStateException.class,
+         () -> TerrainHeightTransform.requireFiniteTerrainElevation(Double.POSITIVE_INFINITY, -3884, -1879)
+      );
+   }
 
    @Test
    void increaseHeightKeepsMatterhornExactAtItsMercatorScale() {
