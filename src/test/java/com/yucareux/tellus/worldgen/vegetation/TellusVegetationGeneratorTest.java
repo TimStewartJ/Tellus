@@ -3,6 +3,7 @@ package com.yucareux.tellus.worldgen.vegetation;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import com.yucareux.tellus.worldgen.MountainSurfaceRules;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
@@ -80,6 +81,7 @@ class TellusVegetationGeneratorTest {
 
    @Test
    void explicitSoilPredicateCoversModernForestSurfaces() {
+      assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla block registries");
       SharedConstants.tryDetectVersion();
       Bootstrap.bootStrap();
       assertTrue(
@@ -130,6 +132,19 @@ class TellusVegetationGeneratorTest {
 
    private static String anchorKey(TellusVegetationPlanner.Placement placement) {
       return placement.stratum() + ":" + placement.worldX() + ":" + placement.worldZ();
+   }
+
+   private static boolean isMinecraftForge() {
+      try {
+         Class.forName(
+            "net.minecraftforge.fml.ModList",
+            false,
+            TellusVegetationGeneratorTest.class.getClassLoader()
+         );
+         return true;
+      } catch (ClassNotFoundException ignored) {
+         return false;
+      }
    }
 
    private static int placementOrder(TellusVegetationPlanner.Stratum stratum) {
