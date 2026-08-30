@@ -55,6 +55,8 @@ import com.yucareux.tellus.worldgen.WaterSurfaceResolver;
 import com.yucareux.tellus.worldgen.WaterfallNoCarveZone;
 import com.yucareux.tellus.worldgen.arnis.ArnisBuildingRules;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
+import com.yucareux.tellus.worldgen.vegetation.TellusVegetationPlanner;
+import com.yucareux.tellus.worldgen.vegetation.VegetationCommunity;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -93,6 +95,8 @@ import org.joml.Vector3f;
 
 public final class TerrainPreview implements AutoCloseable {
    private static final int PREVIEW_GRID_SIZE = 513;
+   private static final int PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS = 2048;
+   private static final double PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE = 1.0 / 64.0;
    private static final double PREVIEW_RADIUS_BLOCKS = 512.0;
    private static final float PREVIEW_VERTICAL_BLOCK_SCALE = 0.7F / (float)PREVIEW_RADIUS_BLOCKS;
    private static final float PREVIEW_CAMERA_FOV_DEGREES = 36.0F;
@@ -1699,6 +1703,7 @@ public final class TerrainPreview implements AutoCloseable {
          int size = PREVIEW_GRID_SIZE;
          float density = treeMarkerDensity(settings.worldScale());
          if (!(density <= 0.0F)) {
+            int ecologicalMarkers = 0;
             for (int z = 1; z < size - 1; z++) {
                if (this.shouldAbortRequest(requestId)) {
                   return false;
@@ -1710,6 +1715,7 @@ public final class TerrainPreview implements AutoCloseable {
                for (int x = 1; x < size - 1; x++) {
                   int coverX = Math.min(coverSize - 1, x / coverStride);
                   int coverIdx = coverX + coverZ * coverSize;
+                  boolean primaryTreeAdded = false;
                   if (MountainSurfaceRules.isTreeMarkerCoverClass(coverClasses[coverIdx], visualCoverClasses[coverIdx])) {
                      int blockX = Mth.floor(minWorldX + x * step);
                      int blockZ = Mth.floor(minWorldZ + z * step);
@@ -1739,6 +1745,7 @@ public final class TerrainPreview implements AutoCloseable {
                                  colors[index]
                               )
                            );
+                           primaryTreeAdded = true;
                            continue;
                         }
 
@@ -1789,8 +1796,32 @@ public final class TerrainPreview implements AutoCloseable {
                                  colors[index]
                               )
                            );
+                           primaryTreeAdded = true;
                         }
                      }
+                  }
+                  if (settings.customTrees()
+                     && !primaryTreeAdded
+                     && ecologicalMarkers < PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS
+                     && this.addPreviewEcologicalVegetation(
+                        x,
+                        z,
+                        coverIdx,
+                        climateZ,
+                        colors,
+                        coverClasses,
+                        visualCoverClasses,
+                        climateCodes,
+                        climateSize,
+                        climateStride,
+                        settings,
+                        minWorldX,
+                        minWorldZ,
+                        step,
+                        canopyPreviewResolutionMeters,
+                        trees
+                     )) {
+                     ecologicalMarkers++;
                   }
                }
 
@@ -1806,6 +1837,151 @@ public final class TerrainPreview implements AutoCloseable {
       }
 
       return !this.shouldAbortRequest(requestId);
+   }
+
+   private boolean addPreviewEcologicalVegetation(
+      int gridX,
+      int gridZ,
+      int coverIndex,
+      int climateZ,
+      int[] colors,
+      int[] coverClasses,
+      int[] visualCoverClasses,
+      String[] climateCodes,
+      int climateSize,
+      int climateStride,
+      EarthGeneratorSettings settings,
+      double minWorldX,
+      double minWorldZ,
+      double step,
+      double canopyPreviewResolutionMeters,
+      List<TerrainPreview.PreviewTree> trees
+   ) {
+      int coverClass = MountainSurfaceRules.resolveSurfaceCoverClass(
+         coverClasses[coverIndex], visualCoverClasses[coverIndex]
+      );
+      if (!MountainSurfaceRules.isVegetatedCoverClass(coverClass)
+         && coverClass != MountainSurfaceRules.ESA_WETLAND
+         && coverClass != MountainSurfaceRules.ESA_MANGROVES) {
+         return false;
+      }
+      int blockX = Mth.floor(minWorldX + gridX * step);
+      int blockZ = Mth.floor(minWorldZ + gridZ * step);
+      int climateX = Math.min(climateSize - 1, gridX / climateStride);
+      String koppen = climateCodes[climateX + climateZ * climateSize];
+      TellusVegetationPlanner.Placement bestPlacement = null;
+      TellusProceduralTreeGenerator.Profile bestProfile = null;
+      for (TellusVegetationPlanner.Stratum stratum : new TellusVegetationPlanner.Stratum[]{
+         TellusVegetationPlanner.Stratum.SUBCANOPY,
+         TellusVegetationPlanner.Stratum.SHRUB
+      }) {
+         int centerCellX = Math.floorDiv(blockX, stratum.cellSize());
+         int centerCellZ = Math.floorDiv(blockZ, stratum.cellSize());
+         for (int cellZ = centerCellZ - 1; cellZ <= centerCellZ + 1; cellZ++) {
+            for (int cellX = centerCellX - 1; cellX <= centerCellX + 1; cellX++) {
+               TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
+                  stratum, cellX, cellZ, 0L
+               );
+               int ownerGridX = Mth.clamp(
+                  (int)Math.round((anchor.worldX() - minWorldX) / step),
+                  1,
+                  PREVIEW_GRID_SIZE - 2
+               );
+               int ownerGridZ = Mth.clamp(
+                  (int)Math.round((anchor.worldZ() - minWorldZ) / step),
+                  1,
+                  PREVIEW_GRID_SIZE - 2
+               );
+               if (ownerGridX != gridX || ownerGridZ != gridZ) {
+                  continue;
+               }
+               if (hashToUnitDouble(
+                     anchor.worldX(),
+                     anchor.worldZ(),
+                     0x6D3A91E5L + stratum.ordinal() * 0x1F123BB5L
+                  ) >= PREVIEW_ECOLOGICAL_VEGETATION_SAMPLE_RATE) {
+                  continue;
+               }
+               ResourceKey<Biome> biomeKey = resolvePreviewTreeBiome(
+                  coverClass, koppen, anchor.worldX(), anchor.worldZ(), settings.projection()
+               );
+               ResolveEcoregion ecoregion = this.resolveSource.sampleEcoregion(
+                  anchor.worldX(), anchor.worldZ(), settings.projection()
+               );
+               TellusCanopyHeightSource.CanopySample canopy = coverClass == MountainSurfaceRules.ESA_TREE_COVER
+                  ? this.canopyHeightSource.sampleCanopyLocalOnly(
+                     anchor.worldX(),
+                     anchor.worldZ(),
+                     settings.projection(),
+                     canopyPreviewResolutionMeters
+                  )
+                  : null;
+               TellusProceduralTreeGenerator.Profile profile = TellusProceduralTreeGenerator.profile(
+                  biomeKey, ecoregion, anchor.seed()
+               );
+               VegetationCommunity community = VegetationCommunity.resolve(coverClass, profile);
+               double canopyHeight = canopy != null && canopy.available()
+                  ? canopy.centerHeightMeters() * 0.30
+                     + canopy.percentile75Meters() * 0.42
+                     + canopy.percentile90Meters() * 0.28
+                  : 0.0;
+               TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
+                  stratum,
+                  anchor,
+                  new TellusVegetationPlanner.Environment(
+                     coverClass,
+                     community,
+                     profile,
+                     0L,
+                     settings.worldScale(),
+                     Integer.MIN_VALUE,
+                     canopyHeight,
+                     canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
+                     coverClass == MountainSurfaceRules.ESA_TREE_COVER ? 0.62 : 0.12,
+                     0.35,
+                     9,
+                     0,
+                     false,
+                     true
+                  )
+               );
+               if (placement != null
+                  && (bestPlacement == null || placement.size() > bestPlacement.size())) {
+                  bestPlacement = placement;
+                  bestProfile = profile;
+               }
+            }
+         }
+      }
+      if (bestPlacement != null && bestProfile != null) {
+         int index = gridX + gridZ * PREVIEW_GRID_SIZE;
+         boolean shrub = bestPlacement.stratum() == TellusVegetationPlanner.Stratum.SHRUB;
+         float height = Math.max(shrub ? 2.0F : 4.0F, bestPlacement.size()) * PREVIEW_VERTICAL_BLOCK_SCALE;
+         float canopyScale = shrub
+            ? Mth.clamp(bestPlacement.size() * 0.58F, 0.58F, 1.65F)
+            : Mth.clamp(bestPlacement.size() / 5.0F, 0.72F, 1.8F);
+         int leafColor = blendColor(previewTreeLeafColor(bestProfile), colors[index], shrub ? 0.20F : 0.14F);
+         int trunkColor = blendColor(previewTreeTrunkColor(bestProfile), colors[index], 0.10F);
+         trees.add(
+            new TerrainPreview.PreviewTree(
+               gridX,
+               gridZ,
+               height,
+               canopyScale,
+               shrub ? 0.38F : 0.62F,
+               shrub ? 0.28F : 0.48F,
+               0.0F,
+               0.0F,
+               shrub,
+               bestProfile,
+               trunkColor,
+               leafColor,
+               colors[index]
+            )
+         );
+         return true;
+      }
+      return false;
    }
 
    private static ResourceKey<Biome> resolvePreviewTreeBiome(
