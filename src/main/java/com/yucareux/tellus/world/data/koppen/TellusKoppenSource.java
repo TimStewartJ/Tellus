@@ -7,6 +7,7 @@ import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.world.data.CategoricalTransition;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import java.io.ByteArrayInputStream;
 import java.io.EOFException;
@@ -36,13 +37,21 @@ public final class TellusKoppenSource implements TellusCacheHandle {
    private static final int SMOOTH_RADIUS_PIXELS = 2;
    private static final double WARP_AMPLITUDE_METERS = 800.0;
    private static final double WARP_WAVELENGTH_METERS = 12000.0;
-   private static final int DITHER_NOISE_CELL_BLOCKS = 4;
-   private static final long DITHER_SEED = 5883890050026909207L;
    private static final long WARP_SEED_X = 2611923443488327891L;
    private static final long WARP_SEED_Z = 1376283091369227076L;
    private static final String[] KOPPEN_CODES = new String[31];
-   private static final ThreadLocal<TellusKoppenSource.KoppenBlendScratch> DITHER_SCRATCH = ThreadLocal.withInitial(
-      TellusKoppenSource.KoppenBlendScratch::new
+   private static final CategoricalTransition.NoiseProfile TRANSITION_PROFILE = new CategoricalTransition.NoiseProfile(
+      0.1,
+      8.0,
+      128.0,
+      0.47,
+      0.82,
+      0.18,
+      1.25,
+      0.02,
+      5883890050026909207L,
+      -3447218538618069729L,
+      7066193155524758245L
    );
    private final Path cachePath = TellusPlatform.gameDir().resolve("tellus/cache/koppen/koppen_geiger_0p00833333.tif");
    private volatile TellusKoppenSource.GeoTiffRaster raster;
@@ -58,7 +67,10 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       if (center == null) {
          return null;
       } else {
-         return raster == TellusKoppenSource.GeoTiffRaster.MISSING ? null : raster.sampleDithered(center, blockX, blockZ);
+         double sourceCellBlocks = raster.pixelSizeMeters() / Math.max(worldScale, Double.MIN_NORMAL);
+         return raster == TellusKoppenSource.GeoTiffRaster.MISSING
+            ? null
+            : raster.sampleDithered(center, blockX, blockZ, sourceCellBlocks);
       }
    }
 
@@ -188,6 +200,40 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       long z = (value ^ value >>> 33) * -49064778989728563L;
       z = (z ^ z >>> 33) * -4265267296055464877L;
       return z ^ z >>> 33;
+   }
+
+   static int selectTransitionValue(
+      int centerValue,
+      int value00,
+      int value10,
+      int value01,
+      int value11,
+      double fractionX,
+      double fractionY,
+      double blockX,
+      double blockZ,
+      double sourceCellBlocks
+   ) {
+      return CategoricalTransition.selectBilinear(
+         centerValue,
+         value00,
+         value10,
+         value01,
+         value11,
+         fractionX,
+         fractionY,
+         1.0,
+         blockX,
+         blockZ,
+         sourceCellBlocks,
+         1,
+         KOPPEN_CODES.length - 1,
+         TRANSITION_PROFILE
+      );
+   }
+
+   static double transitionPatchBlocks(double sourceCellBlocks) {
+      return TRANSITION_PROFILE.patchBlocks(sourceCellBlocks);
    }
 
    private TellusKoppenSource.GeoTiffRaster loadRaster() {
@@ -461,7 +507,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          }
       }
 
-      String sampleDithered(TellusKoppenSource.PixelSample center, double blockX, double blockZ) {
+      String sampleDithered(
+         TellusKoppenSource.PixelSample center, double blockX, double blockZ, double sourceCellBlocks
+      ) {
          if (center == null) {
             return null;
          } else {
@@ -475,17 +523,18 @@ public final class TellusKoppenSource implements TellusCacheHandle {
                int y1 = y0 + 1;
                double fx = blendX - x0;
                double fy = blendY - y0;
-               double inverseFx = 1.0 - fx;
-               double inverseFy = 1.0 - fy;
-               TellusKoppenSource.KoppenBlendScratch scratch = DITHER_SCRATCH.get();
-               scratch.reset();
-               scratch.add(this.sampleValue(x0, y0), inverseFx * inverseFy);
-               scratch.add(this.sampleValue(x1, y0), fx * inverseFy);
-               scratch.add(this.sampleValue(x0, y1), inverseFx * fy);
-               scratch.add(this.sampleValue(x1, y1), fx * fy);
-               int noiseX = Math.floorDiv(Mth.floor(blockX), DITHER_NOISE_CELL_BLOCKS);
-               int noiseZ = Math.floorDiv(Mth.floor(blockZ), DITHER_NOISE_CELL_BLOCKS);
-               int selectedValue = scratch.pickWeighted(centerValue, TellusKoppenSource.hashToUnit(noiseX, noiseZ, DITHER_SEED));
+               int selectedValue = selectTransitionValue(
+                  centerValue,
+                  this.sampleValue(x0, y0),
+                  this.sampleValue(x1, y0),
+                  this.sampleValue(x0, y1),
+                  this.sampleValue(x1, y1),
+                  fx,
+                  fy,
+                  blockX,
+                  blockZ,
+                  sourceCellBlocks
+               );
                return selectedValue > 0 && selectedValue < TellusKoppenSource.KOPPEN_CODES.length ? TellusKoppenSource.KOPPEN_CODES[selectedValue] : null;
             } else {
                return null;
@@ -999,61 +1048,6 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
                this.bitPos += bits;
                return value;
-            }
-         }
-      }
-   }
-
-   private static final class KoppenBlendScratch {
-      private final double[] weights = new double[TellusKoppenSource.KOPPEN_CODES.length];
-      private final int[] used = new int[TellusKoppenSource.KOPPEN_CODES.length];
-      private int usedCount;
-
-      private void reset() {
-         for (int i = 0; i < this.usedCount; i++) {
-            this.weights[this.used[i]] = 0.0;
-         }
-
-         this.usedCount = 0;
-      }
-
-      private void add(int value, double weight) {
-         if (value > 0 && value < this.weights.length && weight > 0.0) {
-            if (!(this.weights[value] > 0.0)) {
-               this.used[this.usedCount++] = value;
-            }
-
-            this.weights[value] += weight;
-         }
-      }
-
-      private int pickWeighted(int fallbackValue, double threshold) {
-         if (this.usedCount == 0) {
-            return fallbackValue;
-         } else {
-            double total = 0.0;
-
-            for (int i = 0; i < this.usedCount; i++) {
-               total += this.weights[this.used[i]];
-            }
-
-            if (!(total > 0.0)) {
-               return fallbackValue;
-            } else {
-               double target = Mth.clamp(threshold, 0.0, 0.9999999999999999) * total;
-               double cumulative = 0.0;
-               int lastValue = fallbackValue;
-
-               for (int i = 0; i < this.usedCount; i++) {
-                  int value = this.used[i];
-                  lastValue = value;
-                  cumulative += this.weights[value];
-                  if (target < cumulative || i + 1 == this.usedCount) {
-                     return value;
-                  }
-               }
-
-               return lastValue;
             }
          }
       }
