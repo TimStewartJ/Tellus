@@ -1,5 +1,6 @@
 package com.yucareux.tellus.worldgen.vegetation;
 
+import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.compat.MinecraftVersionCompat;
 import com.yucareux.tellus.compat.VegetationVersionCompat;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
@@ -21,6 +22,7 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
  */
 public final class TellusVegetationGenerator {
    private static final int PLACEMENT_FLAGS = 260;
+   private static final boolean DEBUG = Boolean.getBoolean("tellus.debug.vegetation");
    private static final Comparator<TellusVegetationPlanner.Placement> PLACEMENT_ORDER = Comparator
       .comparingInt((TellusVegetationPlanner.Placement placement) -> placementOrder(placement.stratum()))
       .thenComparingInt(TellusVegetationPlanner.Placement::worldZ)
@@ -72,7 +74,16 @@ public final class TellusVegetationGenerator {
          return List.of();
       }
       placements.sort(PLACEMENT_ORDER);
-      return List.copyOf(placements);
+      List<TellusVegetationPlanner.Placement> result = List.copyOf(placements);
+      if (DEBUG) {
+         Tellus.LOGGER.info(
+            "Ecological vegetation plan chunk=[{}, {}]: {}",
+            Math.floorDiv(chunkMinX, 16),
+            Math.floorDiv(chunkMinZ, 16),
+            placementSummary(result)
+         );
+      }
+      return result;
    }
 
    public static int placeAll(
@@ -86,7 +97,37 @@ public final class TellusVegetationGenerator {
             placed++;
          }
       }
+      if (DEBUG && !placements.isEmpty()) {
+         TellusVegetationPlanner.Placement first = placements.get(0);
+         Tellus.LOGGER.info(
+            "Ecological vegetation applied chunk=[{}, {}]: placed={}/{}, {}",
+            Math.floorDiv(first.worldX(), 16),
+            Math.floorDiv(first.worldZ(), 16),
+            placed,
+            placements.size(),
+            placementSummary(placements)
+         );
+      }
       return placed;
+   }
+
+   private static String placementSummary(
+      List<TellusVegetationPlanner.Placement> placements
+   ) {
+      int[] counts = new int[TellusVegetationPlanner.Stratum.values().length];
+      for (TellusVegetationPlanner.Placement placement : placements) {
+         counts[placement.stratum().ordinal()]++;
+      }
+      StringBuilder summary = new StringBuilder();
+      for (TellusVegetationPlanner.Stratum stratum : TellusVegetationPlanner.Stratum.values()) {
+         if (!summary.isEmpty()) {
+            summary.append(", ");
+         }
+         summary.append(stratum.name().toLowerCase(java.util.Locale.ROOT))
+            .append('=')
+            .append(counts[stratum.ordinal()]);
+      }
+      return summary.toString();
    }
 
    private static boolean place(
@@ -420,9 +461,15 @@ public final class TellusVegetationGenerator {
          || !current.is(BlockTags.LEAVES) && current.is(BlockTags.REPLACEABLE_BY_TREES);
    }
 
-   private static boolean supportsVegetation(BlockState surface) {
+   static boolean supportsVegetation(BlockState surface) {
       return surface.is(BlockTags.DIRT)
          || surface.is(BlockTags.SAND)
+         || surface.is(Blocks.GRASS_BLOCK)
+         || surface.is(Blocks.DIRT)
+         || surface.is(Blocks.COARSE_DIRT)
+         || surface.is(Blocks.PODZOL)
+         || surface.is(Blocks.ROOTED_DIRT)
+         || surface.is(Blocks.MYCELIUM)
          || surface.is(Blocks.MOSS_BLOCK)
          || surface.is(Blocks.MUD)
          || surface.is(Blocks.PACKED_MUD);

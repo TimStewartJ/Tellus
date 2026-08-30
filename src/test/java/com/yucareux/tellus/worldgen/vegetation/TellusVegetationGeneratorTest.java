@@ -9,6 +9,9 @@ import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
 import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
+import net.minecraft.SharedConstants;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.world.level.block.Blocks;
 import org.junit.jupiter.api.Test;
 
 class TellusVegetationGeneratorTest {
@@ -73,6 +76,24 @@ class TellusVegetationGeneratorTest {
       );
 
       assertTrue(placements.isEmpty());
+   }
+
+   @Test
+   void explicitSoilPredicateCoversModernForestSurfaces() {
+      SharedConstants.tryDetectVersion();
+      Bootstrap.bootStrap();
+      assertTrue(
+         TellusVegetationGenerator.supportsVegetation(Blocks.GRASS_BLOCK.defaultBlockState())
+      );
+      assertTrue(
+         TellusVegetationGenerator.supportsVegetation(Blocks.PODZOL.defaultBlockState())
+      );
+      assertTrue(
+         TellusVegetationGenerator.supportsVegetation(Blocks.ROOTED_DIRT.defaultBlockState())
+      );
+      assertFalse(
+         TellusVegetationGenerator.supportsVegetation(Blocks.STONE.defaultBlockState())
+      );
    }
 
    @Test
