@@ -20,6 +20,15 @@ public final class TerrainHeightTransform {
    private TerrainHeightTransform() {
    }
 
+   public static double requireFiniteTerrainElevation(double elevationMeters, int blockX, int blockZ) {
+      if (!Double.isFinite(elevationMeters)) {
+         throw new IllegalStateException(
+            "Terrain elevation is unavailable at block " + blockX + "," + blockZ
+         );
+      }
+      return elevationMeters;
+   }
+
    public static double scaledElevationBlocks(
       double elevationMeters,
       double blockZ,

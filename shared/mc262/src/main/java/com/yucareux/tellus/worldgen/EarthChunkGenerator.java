@@ -613,6 +613,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       ExperimentalHeightSupport.validateHorizontalPositionOrThrow(
          this.settings, spawnX, spawnZ, "surface target lat=" + latitude + ", lon=" + longitude
       );
+      if (useDetailedWaterResolver) {
+         this.sampleRequiredSurfaceHeight(spawnX, spawnZ, this.settings.worldScale(), false);
+      }
       int coverClass = this.sampleCoverClass(spawnX, spawnZ);
       int surface;
       if (useDetailedWaterResolver) {
@@ -4044,7 +4047,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
             int index = row + dx;
             if (!reusableLayout || heightGrid[index] == Integer.MIN_VALUE) {
                int worldX = gridMinX + dx;
-               heightGrid[index] = useLocalTerrainInputs ? this.sampleSurfaceHeightLocalOnly(worldX, worldZ) : this.sampleSurfaceHeight(worldX, worldZ);
+               heightGrid[index] = this.sampleRequiredSurfaceHeight(
+                  worldX, worldZ, this.settings.worldScale(), useLocalTerrainInputs
+               );
                cacheMisses++;
             }
          }
@@ -6025,6 +6030,30 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       return this.scaleElevationToHeight(elevation, blockZ);
    }
 
+   private int sampleRequiredSurfaceHeight(
+      int blockX, int blockZ, double previewResolutionMeters, boolean localOnly
+   ) {
+      TerrainPreloadPackage.Sample preloaded = this.samplePreloadedTerrain(
+         blockX, blockZ, previewResolutionMeters
+      );
+      if (preloaded != null) {
+         return preloaded.terrainHeight();
+      }
+
+      boolean oceanZoom = localOnly
+         ? this.useOceanZoomLocalOnly(blockX, blockZ, previewResolutionMeters)
+         : this.useOceanZoom(blockX, blockZ, previewResolutionMeters);
+      double elevation = localOnly
+         ? ELEVATION_SOURCE.samplePreviewElevationMetersLocalOnly(
+            blockX, blockZ, this.projection, oceanZoom, this.settings.demSelection(), previewResolutionMeters
+         )
+         : ELEVATION_SOURCE.samplePreviewElevationMeters(
+            blockX, blockZ, this.projection, oceanZoom, this.settings.demSelection(), previewResolutionMeters
+         );
+      TerrainHeightTransform.requireFiniteTerrainElevation(elevation, blockX, blockZ);
+      return this.scaleElevationToHeight(elevation, blockZ);
+   }
+
    private int sampleSurfaceHeightMemoryOnly(int blockX, int blockZ, double previewResolutionMeters) {
       TerrainPreloadPackage.Sample preloaded = this.samplePreloadedTerrain(blockX, blockZ, previewResolutionMeters);
       if (preloaded != null) {
@@ -6035,7 +6064,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       double elevation = ELEVATION_SOURCE.samplePreviewElevationMetersMemoryOnly(
          blockX, blockZ, this.projection, oceanZoom, this.settings.demSelection(), previewResolutionMeters
       );
-      if (Double.isNaN(elevation)) {
+      if (!Double.isFinite(elevation)) {
          return Integer.MIN_VALUE;
       } else {
          return this.scaleElevationToHeight(elevation, blockZ);
