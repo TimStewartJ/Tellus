@@ -4589,7 +4589,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                best = new TellusLodGenerator.CanopyColumn(
                   0,
                   center ? leafLift : 0,
-                  leafLift,
+                  center ? 0 : leafLift,
                   crownHeight,
                   TellusProceduralTreeGenerator.leavesState(placement.treeProfile(), placement.seed()),
                   log,

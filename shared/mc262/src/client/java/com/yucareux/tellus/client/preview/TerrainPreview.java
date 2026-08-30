@@ -1840,17 +1840,8 @@ public final class TerrainPreview implements AutoCloseable {
       int blockZ = Mth.floor(minWorldZ + gridZ * step);
       int climateX = Math.min(climateSize - 1, gridX / climateStride);
       String koppen = climateCodes[climateX + climateZ * climateSize];
-      ResourceKey<Biome> biomeKey = resolvePreviewTreeBiome(
-         coverClass, koppen, blockX, blockZ, settings.worldScale()
-      );
-      ResolveEcoregion ecoregion = this.resolveSource.sampleEcoregion(
-         blockX, blockZ, settings.worldScale()
-      );
-      TellusCanopyHeightSource.CanopySample canopy = coverClass == MountainSurfaceRules.ESA_TREE_COVER
-         ? this.canopyHeightSource.sampleCanopyLocalOnly(
-            blockX, blockZ, settings.worldScale(), canopyPreviewResolutionMeters
-         )
-         : null;
+      TellusVegetationPlanner.Placement bestPlacement = null;
+      TellusProceduralTreeGenerator.Profile bestProfile = null;
       for (TellusVegetationPlanner.Stratum stratum : new TellusVegetationPlanner.Stratum[]{
          TellusVegetationPlanner.Stratum.SUBCANOPY,
          TellusVegetationPlanner.Stratum.SHRUB
@@ -1861,11 +1852,33 @@ public final class TerrainPreview implements AutoCloseable {
             Math.floorDiv(blockZ, stratum.cellSize()),
             0L
          );
-         double sampleRadius = Math.max(1.0, step * 0.56);
-         if (Math.abs(anchor.worldX() - blockX) > sampleRadius
-            || Math.abs(anchor.worldZ() - blockZ) > sampleRadius) {
+         int ownerGridX = Mth.clamp(
+            (int)Math.round((anchor.worldX() - minWorldX) / step),
+            1,
+            PREVIEW_GRID_SIZE - 2
+         );
+         int ownerGridZ = Mth.clamp(
+            (int)Math.round((anchor.worldZ() - minWorldZ) / step),
+            1,
+            PREVIEW_GRID_SIZE - 2
+         );
+         if (ownerGridX != gridX || ownerGridZ != gridZ) {
             continue;
          }
+         ResourceKey<Biome> biomeKey = resolvePreviewTreeBiome(
+            coverClass, koppen, anchor.worldX(), anchor.worldZ(), settings.worldScale()
+         );
+         ResolveEcoregion ecoregion = this.resolveSource.sampleEcoregion(
+            anchor.worldX(), anchor.worldZ(), settings.worldScale()
+         );
+         TellusCanopyHeightSource.CanopySample canopy = coverClass == MountainSurfaceRules.ESA_TREE_COVER
+            ? this.canopyHeightSource.sampleCanopyLocalOnly(
+               anchor.worldX(),
+               anchor.worldZ(),
+               settings.worldScale(),
+               canopyPreviewResolutionMeters
+            )
+            : null;
          TellusProceduralTreeGenerator.Profile profile = TellusProceduralTreeGenerator.profile(
             biomeKey, ecoregion, anchor.seed()
          );
@@ -1896,14 +1909,20 @@ public final class TerrainPreview implements AutoCloseable {
          if (placement == null) {
             continue;
          }
+         if (bestPlacement == null || placement.size() > bestPlacement.size()) {
+            bestPlacement = placement;
+            bestProfile = profile;
+         }
+      }
+      if (bestPlacement != null && bestProfile != null) {
          int index = gridX + gridZ * PREVIEW_GRID_SIZE;
-         boolean shrub = stratum == TellusVegetationPlanner.Stratum.SHRUB;
-         float height = Math.max(shrub ? 2.0F : 4.0F, placement.size()) * PREVIEW_VERTICAL_BLOCK_SCALE;
+         boolean shrub = bestPlacement.stratum() == TellusVegetationPlanner.Stratum.SHRUB;
+         float height = Math.max(shrub ? 2.0F : 4.0F, bestPlacement.size()) * PREVIEW_VERTICAL_BLOCK_SCALE;
          float canopyScale = shrub
-            ? Mth.clamp(placement.size() * 0.58F, 0.58F, 1.65F)
-            : Mth.clamp(placement.size() / 5.0F, 0.72F, 1.8F);
-         int leafColor = blendColor(previewTreeLeafColor(profile), colors[index], shrub ? 0.20F : 0.14F);
-         int trunkColor = blendColor(previewTreeTrunkColor(profile), colors[index], 0.10F);
+            ? Mth.clamp(bestPlacement.size() * 0.58F, 0.58F, 1.65F)
+            : Mth.clamp(bestPlacement.size() / 5.0F, 0.72F, 1.8F);
+         int leafColor = blendColor(previewTreeLeafColor(bestProfile), colors[index], shrub ? 0.20F : 0.14F);
+         int trunkColor = blendColor(previewTreeTrunkColor(bestProfile), colors[index], 0.10F);
          trees.add(
             new TerrainPreview.PreviewTree(
                gridX,
@@ -1915,7 +1934,7 @@ public final class TerrainPreview implements AutoCloseable {
                0.0F,
                0.0F,
                shrub,
-               profile,
+               bestProfile,
                trunkColor,
                leafColor,
                colors[index]

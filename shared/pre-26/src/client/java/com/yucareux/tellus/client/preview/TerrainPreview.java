@@ -1709,9 +1709,17 @@ public final class TerrainPreview implements AutoCloseable {
                            Math.floorDiv(blockZ, stratum.cellSize()),
                            0L
                         );
-                        double sampleRadius = Math.max(1.0, step * 0.56);
-                        if (Math.abs(anchor.worldX() - blockX) <= sampleRadius
-                           && Math.abs(anchor.worldZ() - blockZ) <= sampleRadius) {
+                        int ownerGridX = Mth.clamp(
+                           (int)Math.round((anchor.worldX() - minWorldX) / step),
+                           1,
+                           PREVIEW_GRID_SIZE - 2
+                        );
+                        int ownerGridZ = Mth.clamp(
+                           (int)Math.round((anchor.worldZ() - minWorldZ) / step),
+                           1,
+                           PREVIEW_GRID_SIZE - 2
+                        );
+                        if (ownerGridX == x && ownerGridZ == z) {
                            TellusProceduralTreeGenerator.Profile profile =
                               TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF;
                            VegetationCommunity community = VegetationCommunity.resolve(
