@@ -12,6 +12,7 @@ public final class OverpassRoadTile {
    private static final OverpassRoadTile EMPTY = new OverpassRoadTile(List.of(), List.of());
    private final List<RoadFeature> features;
    private final List<RoadAreaFeature> areaFeatures;
+   private final List<TransportFeature> transportFeatures;
    private final double tileSouth;
    private final double tileWest;
    private final double tileNorth;
@@ -33,8 +34,25 @@ public final class OverpassRoadTile {
    public OverpassRoadTile(
       List<RoadFeature> features, List<RoadAreaFeature> areaFeatures, double tileSouth, double tileWest, double tileNorth, double tileEast
    ) {
+      this(features, areaFeatures, List.of(), tileSouth, tileWest, tileNorth, tileEast);
+   }
+
+   /**
+    * @param transportFeatures explicit Overture {@code subtype=rail} / {@code subtype=water} segments
+    *     decoded from the same transportation tile as the road features.
+    */
+   public OverpassRoadTile(
+      List<RoadFeature> features,
+      List<RoadAreaFeature> areaFeatures,
+      List<TransportFeature> transportFeatures,
+      double tileSouth,
+      double tileWest,
+      double tileNorth,
+      double tileEast
+   ) {
       this.features = List.copyOf(Objects.requireNonNull(features, "features"));
       this.areaFeatures = List.copyOf(Objects.requireNonNull(areaFeatures, "areaFeatures"));
+      this.transportFeatures = List.copyOf(Objects.requireNonNull(transportFeatures, "transportFeatures"));
       this.tileSouth = tileSouth;
       this.tileWest = tileWest;
       this.tileNorth = tileNorth;
@@ -54,6 +72,11 @@ public final class OverpassRoadTile {
       return this.areaFeatures;
    }
 
+   /** Explicit Overture rail and water-route segments decoded from this tile. */
+   public List<TransportFeature> transportFeatures() {
+      return this.transportFeatures;
+   }
+
    public double tileSouth() {
       return this.tileSouth;
    }
@@ -71,7 +94,7 @@ public final class OverpassRoadTile {
    }
 
    public boolean isEmpty() {
-      return this.features.isEmpty() && this.areaFeatures.isEmpty();
+      return this.features.isEmpty() && this.areaFeatures.isEmpty() && this.transportFeatures.isEmpty();
    }
 
    public List<RoadFeature> featuresInBounds(double south, double west, double north, double east) {
@@ -146,6 +169,29 @@ public final class OverpassRoadTile {
       double maxEast = Math.max(west, east);
       List<RoadAreaFeature> matches = new ArrayList<>(this.areaFeatures.size());
       for (RoadAreaFeature feature : this.areaFeatures) {
+         if (feature.intersects(minSouth, minWest, maxNorth, maxEast)) {
+            matches.add(feature);
+         }
+      }
+
+      return matches.isEmpty() ? List.of() : matches;
+   }
+
+   /**
+    * Returns the explicit Overture rail / water-route segments whose bounds intersect the query box.
+    * Uses a linear scan because transport segments are sparse compared with road segments.
+    */
+   public List<TransportFeature> transportFeaturesInBounds(double south, double west, double north, double east) {
+      if (this.transportFeatures.isEmpty()) {
+         return List.of();
+      }
+
+      double minSouth = Math.min(south, north);
+      double maxNorth = Math.max(south, north);
+      double minWest = Math.min(west, east);
+      double maxEast = Math.max(west, east);
+      List<TransportFeature> matches = new ArrayList<>(this.transportFeatures.size());
+      for (TransportFeature feature : this.transportFeatures) {
          if (feature.intersects(minSouth, minWest, maxNorth, maxEast)) {
             matches.add(feature);
          }

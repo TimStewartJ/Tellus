@@ -101,6 +101,18 @@ public final class TellusWorldgenSources {
       return OSM_ROADS;
    }
 
+   /**
+    * Shared accessor for explicit Overture rail and water-route segments.
+    *
+    * <p>Returns the very same source instance as {@link #osmRoads()} because rail and water routes
+    * live in the same Overture {@code transportation} PMTiles archive and reuse its cache, prefetch
+    * and non-blocking tile machinery. Query it through
+    * {@link TellusOsmRoadSource#transportForAreaWithStatus}.
+    */
+   public static TellusOsmRoadSource osmTransport() {
+      return OSM_ROADS;
+   }
+
    public static TellusOsmInfrastructureSource osmInfrastructure() {
       return OSM_INFRASTRUCTURE;
    }

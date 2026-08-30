@@ -30,6 +30,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -185,6 +186,91 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
          }
       } else {
          return new TellusOsmRoadSource.RoadAreaQueryResult(List.of(), false);
+      }
+   }
+
+   /**
+    * Read-only query for explicit Overture non-road transportation segments, using the blocking
+    * tile mode.
+    *
+    * @see #transportForAreaWithStatus(int, int, int, int, WorldProjection, int, OsmQueryMode)
+    */
+   public List<TransportFeature> transportForArea(
+      int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ, WorldProjection projection, int marginBlocks
+   ) {
+      return this.transportForArea(minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, marginBlocks, OsmQueryMode.BLOCKING);
+   }
+
+   /**
+    * Read-only query for explicit Overture non-road transportation segments.
+    *
+    * @see #transportForAreaWithStatus(int, int, int, int, WorldProjection, int, OsmQueryMode)
+    */
+   public List<TransportFeature> transportForArea(
+      int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ, WorldProjection projection, int marginBlocks, OsmQueryMode mode
+   ) {
+      return this.transportForAreaWithStatus(minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, marginBlocks, mode).features();
+   }
+
+   /**
+    * Returns the explicit Overture {@code subtype=rail} and {@code subtype=water} segments that
+    * intersect the given block area, together with the cache status of the underlying tiles.
+    *
+    * <p>This reuses the same transportation PMTiles reader, disk cache, in-memory tile cache and
+    * prefetch machinery as {@link #roadsForAreaWithStatus}; no second fetcher exists and no road
+    * behavior changes. Passing {@link OsmQueryMode#NON_BLOCKING} never blocks on IO: missing tiles
+    * are queued for asynchronous loading and reported through
+    * {@link TransportQueryResult#hadCacheMiss()} so callers can retry later. Tiles are also warmed
+    * by the shared {@link #prefetchTiles(double, double, WorldProjection, int)} path.
+    *
+    * <p>Features are deduplicated only on exact identity (same feature id, kind and geometry), which
+    * removes the double visit an antimeridian-wrapping query performs on a single tile while keeping
+    * every distinct tile-clipped piece of a long rail or water line.
+    */
+   public TellusOsmRoadSource.TransportQueryResult transportForAreaWithStatus(
+      int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ, WorldProjection projection, int marginBlocks, OsmQueryMode mode
+   ) {
+      this.ensureInitialized();
+      if (!this.available || projection.worldScale() <= 0.0) {
+         return new TellusOsmRoadSource.TransportQueryResult(List.of(), false);
+      }
+
+      TellusOsmRoadSource.GeoBounds bounds = geoBoundsForBlockArea(minBlockX, minBlockZ, maxBlockX, maxBlockZ, marginBlocks, projection);
+      if (bounds == null) {
+         return new TellusOsmRoadSource.TransportQueryResult(List.of(), false);
+      }
+
+      List<TellusOsmRoadSource.TileKey> keys = tileKeysForBounds(bounds, this.queryZoom);
+      if (keys.isEmpty()) {
+         return new TellusOsmRoadSource.TransportQueryResult(List.of(), false);
+      }
+
+      List<TransportFeature> transport = new ArrayList<>();
+      Set<String> seen = new HashSet<>();
+      boolean hadCacheMiss = false;
+
+      for (TellusOsmRoadSource.TileKey key : keys) {
+         TellusOsmRoadSource.TileLookup lookup = this.getTileLookup(key, mode);
+         hadCacheMiss |= lookup.cacheMiss();
+         OverpassRoadTile tile = lookup.tile();
+         if (!tile.isEmpty()) {
+            if (bounds.wrapsLongitude()) {
+               appendTransport(transport, seen, tile.transportFeaturesInBounds(bounds.south(), bounds.west(), bounds.north(), 180.0));
+               appendTransport(transport, seen, tile.transportFeaturesInBounds(bounds.south(), -180.0, bounds.north(), bounds.east()));
+            } else {
+               appendTransport(transport, seen, tile.transportFeaturesInBounds(bounds.south(), bounds.west(), bounds.north(), bounds.east()));
+            }
+         }
+      }
+
+      return new TellusOsmRoadSource.TransportQueryResult(transport, hadCacheMiss);
+   }
+
+   static void appendTransport(List<TransportFeature> target, Set<String> seen, List<TransportFeature> candidates) {
+      for (TransportFeature candidate : candidates) {
+         if (seen.add(candidate.dedupeKey())) {
+            target.add(candidate);
+         }
       }
    }
 
@@ -374,7 +460,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
          if (Files.exists(cachePath)) {
             try {
                byte[] payload = this.readCompressed(cachePath);
-               OverpassRoadTile parsed = this.parseVectorTile(payload, bounds, key);
+               OverpassRoadTile parsed = parseVectorTile(payload, bounds, key);
                this.cacheParsedTile(parsedCachePath, parsed);
                this.tileLoadFailures.remove(key);
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_ROADS, OsmPerf.TileLoadPath.RAW_DISK);
@@ -404,7 +490,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
 
          OverpassRoadTile parsed;
          try {
-            parsed = this.parseVectorTile(payload, bounds, key);
+            parsed = parseVectorTile(payload, bounds, key);
          } catch (RuntimeException var8) {
             Tellus.LOGGER.warn("Overture road parse failed for tile {}", key, var8);
             this.tileLoadFailures.add(key);
@@ -526,7 +612,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
       return var3;
    }
 
-   private OverpassRoadTile parseVectorTile(byte[] payload, TellusOsmRoadSource.TileGeoBounds bounds, TellusOsmRoadSource.TileKey key) {
+   static OverpassRoadTile parseVectorTile(byte[] payload, TellusOsmRoadSource.TileGeoBounds bounds, TellusOsmRoadSource.TileKey key) {
       if (payload.length == 0) {
          return OverpassRoadTile.empty();
       } else {
@@ -542,6 +628,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
          } else {
             List<RoadFeature> features = new ArrayList<>();
             List<RoadAreaFeature> areaFeatures = new ArrayList<>();
+            List<TransportFeature> transportFeatures = new ArrayList<>();
 
             for (Layer layer : tile.getLayersList()) {
                if (SEGMENT_LAYER_NAME.equals(layer.getName())) {
@@ -549,9 +636,15 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
 
                   for (Feature feature : layer.getFeaturesList()) {
                      if (feature.getType() == GeomType.LINESTRING) {
-                        features.addAll(this.parseFeature(feature, layer, key, extent));
+                        Map<String, Object> tags = decodeTags(feature, layer);
+                        String subtype = asString(tags.get("subtype"));
+                        if (subtype != null && "road".equalsIgnoreCase(subtype)) {
+                           features.addAll(parseRoadLineFeature(feature, tags, key, extent));
+                        } else {
+                           transportFeatures.addAll(parseTransportLineFeature(feature, tags, key, extent));
+                        }
                      } else if (feature.getType() == GeomType.POLYGON) {
-                        RoadAreaFeature areaFeature = this.parseAreaFeature(feature, layer, key, extent);
+                        RoadAreaFeature areaFeature = parseAreaFeature(feature, layer, key, extent);
                         if (areaFeature != null) {
                            areaFeatures.add(areaFeature);
                         }
@@ -560,15 +653,18 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
                }
             }
 
-            return features.isEmpty() && areaFeatures.isEmpty()
+            return features.isEmpty() && areaFeatures.isEmpty() && transportFeatures.isEmpty()
                ? OverpassRoadTile.empty()
-               : new OverpassRoadTile(features, areaFeatures, bounds.south(), bounds.west(), bounds.north(), bounds.east());
+               : new OverpassRoadTile(
+                  features, areaFeatures, transportFeatures, bounds.south(), bounds.west(), bounds.north(), bounds.east()
+               );
          }
       }
    }
 
-   private List<RoadFeature> parseFeature(Feature feature, Layer layer, TellusOsmRoadSource.TileKey key, int extent) {
-      Map<String, Object> tags = decodeTags(feature, layer);
+   private static List<RoadFeature> parseRoadLineFeature(
+      Feature feature, Map<String, Object> tags, TellusOsmRoadSource.TileKey key, int extent
+   ) {
       String subtype = asString(tags.get("subtype"));
       if (subtype != null && "road".equalsIgnoreCase(subtype)) {
          String classTag = resolveClassTag(tags);
@@ -593,7 +689,69 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
       }
    }
 
-   private RoadAreaFeature parseAreaFeature(Feature feature, Layer layer, TellusOsmRoadSource.TileKey key, int extent) {
+   /**
+    * Parses the explicit Overture non-road transportation segments of one MVT line feature.
+    *
+    * <p>Only segments Overture itself tagged {@code subtype=rail} or {@code subtype=water} are
+    * accepted; road segments are handled exclusively by {@link #parseRoadLineFeature} and are never
+    * reinterpreted as rail or water routes. Every decoded line part is emitted so multi-part tile
+    * geometry is not silently dropped.
+    */
+   private static List<TransportFeature> parseTransportLineFeature(
+      Feature feature, Map<String, Object> tags, TellusOsmRoadSource.TileKey key, int extent
+   ) {
+      if (TransportKind.fromSubtype(asString(tags.get("subtype"))) == null) {
+         return List.of();
+      }
+
+      List<TellusOsmRoadSource.LineString> lines = decodeLineStrings(feature.getGeometryList());
+      if (lines.isEmpty()) {
+         return List.of();
+      }
+
+      long featureId = resolveFeatureId(feature, tags);
+      List<TransportFeature> parsed = new ArrayList<>(lines.size());
+
+      for (TellusOsmRoadSource.LineString line : lines) {
+         TellusOsmRoadSource.GeoLine geoLine = toGeoLine(line.points(), key.zoom(), key.x(), key.y(), extent);
+         if (geoLine != null) {
+            TransportFeature transportFeature = buildTransportFeature(featureId, tags, geoLine.longitudes(), geoLine.latitudes());
+            if (transportFeature != null) {
+               parsed.add(transportFeature);
+            }
+         }
+      }
+
+      return parsed;
+   }
+
+   /**
+    * Builds one immutable {@link TransportFeature} from decoded Overture tags and line geometry.
+    *
+    * @return {@code null} when the tags do not carry an explicit {@code rail} or {@code water}
+    *     subtype, or when the geometry has fewer than two matching lon/lat points.
+    */
+   static TransportFeature buildTransportFeature(long featureId, Map<String, Object> tags, double[] longitudes, double[] latitudes) {
+      Map<String, Object> safeTags = tags == null ? Map.of() : tags;
+      TransportKind kind = TransportKind.fromSubtype(asString(safeTags.get("subtype")));
+      if (kind == null
+         || longitudes == null
+         || latitudes == null
+         || longitudes.length != latitudes.length
+         || longitudes.length < 2) {
+         return null;
+      }
+
+      String transportClass = resolveClassTag(safeTags);
+      String subclass = resolveStringAt(safeTags, "subclass_rules", 0.5);
+      if (subclass == null) {
+         subclass = asString(safeTags.get("subclass"));
+      }
+
+      return new TransportFeature(featureId, kind, transportClass, subclass, longitudes, latitudes);
+   }
+
+   private static RoadAreaFeature parseAreaFeature(Feature feature, Layer layer, TellusOsmRoadSource.TileKey key, int extent) {
       Map<String, Object> tags = decodeTags(feature, layer);
       String subtype = asString(tags.get("subtype"));
       if (subtype == null || !"road".equalsIgnoreCase(subtype)) {
@@ -681,7 +839,20 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
       int tileY,
       int extent
    ) {
-      List<TellusOsmRoadSource.TilePoint> points = line.points();
+      TellusOsmRoadSource.GeoLine geoLine = toGeoLine(line.points(), zoom, tileX, tileY, extent);
+      return geoLine == null
+         ? List.of()
+         : buildFeatures(wayId, roadClass, highwayTag, tags, geoLine.longitudes(), geoLine.latitudes());
+   }
+
+   /**
+    * Converts decoded MVT tile points into deduplicated WGS84 line geometry.
+    *
+    * @return the geographic line, or {@code null} when fewer than two usable points remain.
+    */
+   private static TellusOsmRoadSource.GeoLine toGeoLine(
+      List<TellusOsmRoadSource.TilePoint> points, int zoom, int tileX, int tileY, int extent
+   ) {
       int maxPoints = points.size();
       double[] longitudes = new double[maxPoints];
       double[] latitudes = new double[maxPoints];
@@ -710,12 +881,12 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
       }
 
       if (count < 2) {
-         return List.of();
-      } else {
-         double[] trimmedLon = count == longitudes.length ? longitudes : Arrays.copyOf(longitudes, count);
-         double[] trimmedLat = count == latitudes.length ? latitudes : Arrays.copyOf(latitudes, count);
-         return buildFeatures(wayId, roadClass, highwayTag, tags, trimmedLon, trimmedLat);
+         return null;
       }
+
+      double[] trimmedLon = count == longitudes.length ? longitudes : Arrays.copyOf(longitudes, count);
+      double[] trimmedLat = count == latitudes.length ? latitudes : Arrays.copyOf(latitudes, count);
+      return new TellusOsmRoadSource.GeoLine(trimmedLon, trimmedLat);
    }
 
    static List<RoadFeature> buildFeatures(
@@ -1717,7 +1888,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
       }
    }
 
-   private static TellusOsmRoadSource.TileGeoBounds tileBounds(TellusOsmRoadSource.TileKey key) {
+   static TellusOsmRoadSource.TileGeoBounds tileBounds(TellusOsmRoadSource.TileKey key) {
       double n = tilesPerAxis(key.zoom());
       double west = key.x() / n * 360.0 - 180.0;
       double east = (key.x() + 1.0) / n * 360.0 - 180.0;
@@ -1797,6 +1968,9 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
    private record GeoPoint(double lon, double lat) {
    }
 
+   private record GeoLine(double[] longitudes, double[] latitudes) {
+   }
+
    private record ScopeRange(double start, double end) {
    }
 
@@ -1862,6 +2036,22 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
       }
    }
 
+   /**
+    * Result of a {@link #transportForAreaWithStatus} query.
+    *
+    * @param features immutable, order-preserving list of explicit Overture rail and water-route
+    *     segments intersecting the queried area.
+    * @param hadCacheMiss {@code true} when at least one covering tile was not resolved from cache,
+    *     so the returned list may be incomplete and the query should be repeated later.
+    */
+   public record TransportQueryResult(List<TransportFeature> features, boolean hadCacheMiss) {
+      public TransportQueryResult(List<TransportFeature> features, boolean hadCacheMiss) {
+         features = features == null ? List.of() : List.copyOf(features);
+         this.features = features;
+         this.hadCacheMiss = hadCacheMiss;
+      }
+   }
+
    public record RoadAreaQueryResult(List<RoadAreaFeature> features, boolean hadCacheMiss) {
       public RoadAreaQueryResult(List<RoadAreaFeature> features, boolean hadCacheMiss) {
          features = features == null ? List.of() : List.copyOf(features);
@@ -1870,10 +2060,10 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
       }
    }
 
-   private record TileGeoBounds(double south, double west, double north, double east) {
+   record TileGeoBounds(double south, double west, double north, double east) {
    }
 
-   private record TileKey(int zoom, int x, int y) {
+   record TileKey(int zoom, int x, int y) {
    }
 
    private record TileLookup(OverpassRoadTile tile, boolean cacheMiss) {
