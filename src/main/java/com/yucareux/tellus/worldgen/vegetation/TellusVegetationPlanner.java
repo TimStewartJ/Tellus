@@ -81,6 +81,7 @@ public final class TellusVegetationPlanner {
          stand,
          anchor.worldX(),
          anchor.worldZ(),
+         environment.expectedSurface(),
          size,
          variant,
          variantSeed
@@ -422,6 +423,7 @@ public final class TellusVegetationPlanner {
       TellusProceduralTreeGenerator.Profile treeProfile,
       long spatialSeed,
       double worldScale,
+      int expectedSurface,
       double canopyHeightMeters,
       boolean lowCanopy,
       double canopyShade,
@@ -444,6 +446,7 @@ public final class TellusVegetationPlanner {
       StandState standState,
       int worldX,
       int worldZ,
+      int expectedSurface,
       int size,
       int variant,
       long seed

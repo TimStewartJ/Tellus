@@ -22,6 +22,8 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
  */
 public final class TellusVegetationGenerator {
    private static final int PLACEMENT_FLAGS = 260;
+   private static final int MAX_SURFACE_DROP = 2;
+   private static final int MAX_SURFACE_RISE = 3;
    private static final boolean DEBUG = Boolean.getBoolean("tellus.debug.vegetation");
    private static final Comparator<TellusVegetationPlanner.Placement> PLACEMENT_ORDER = Comparator
       .comparingInt((TellusVegetationPlanner.Placement placement) -> placementOrder(placement.stratum()))
@@ -141,6 +143,7 @@ public final class TellusVegetationGenerator {
       BlockPos ground = new BlockPos(placement.worldX(), topY, placement.worldZ());
       if (!MinecraftVersionCompat.isInsideBuildHeight(level, ground)
          || !level.ensureCanWrite(ground)
+         || !expectedSurfaceMatches(placement.expectedSurface(), topY)
          || !level.getFluidState(ground.above()).isEmpty()) {
          return false;
       }
@@ -156,6 +159,12 @@ public final class TellusVegetationGenerator {
          case GROUND -> placeGroundCover(level, ground, placement);
          case DEADWOOD -> placeDeadwood(level, ground, placement);
       };
+   }
+
+   static boolean expectedSurfaceMatches(int expectedSurface, int currentSurface) {
+      return expectedSurface == Integer.MIN_VALUE
+         || expectedSurface - currentSurface <= MAX_SURFACE_DROP
+            && currentSurface - expectedSurface <= MAX_SURFACE_RISE;
    }
 
    private static boolean placeSubcanopy(
