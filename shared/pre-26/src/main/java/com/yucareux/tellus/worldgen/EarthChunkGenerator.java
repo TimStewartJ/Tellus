@@ -13319,8 +13319,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    static final class ChunkBiomeClimateCache {
-      private static final int CELL_SIZE = 4;
-      private static final int GRID_SIZE = CHUNK_SIDE / CELL_SIZE;
+      private static final int GRID_SIZE = CHUNK_SIDE;
       private final int chunkMinX;
       private final int chunkMinZ;
       private final double worldScale;
@@ -13344,10 +13343,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             return this.codes[index];
          }
 
-         int cellX = localX >> 2;
-         int cellZ = localZ >> 2;
-         int sampleX = this.chunkMinX + (cellX << 2) + 2;
-         int sampleZ = this.chunkMinZ + (cellZ << 2) + 2;
+         int sampleX = this.chunkMinX + localX;
+         int sampleZ = this.chunkMinZ + localZ;
          this.codes[index] = sampler.sample(sampleX, sampleZ, this.worldScale);
          this.resolved[index] = true;
          this.misses++;
@@ -13355,7 +13352,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       }
 
       static int cellIndex(int localX, int localZ) {
-         return (localZ >> 2) * GRID_SIZE + (localX >> 2);
+         return localZ * GRID_SIZE + localX;
       }
 
       int hitCount() {
