@@ -77,6 +77,7 @@ import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 public final class TerrainPreview implements AutoCloseable {
    private static final int PREVIEW_GRID_SIZE = 513;
+   private static final int PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS = 2048;
    private static final double PREVIEW_REFERENCE_RADIUS_BLOCKS = 256.0;
    private static final double PREVIEW_RADIUS_BLOCKS = 512.0;
    private static final float PREVIEW_TREE_HEIGHT_SCALE = (float)(PREVIEW_REFERENCE_RADIUS_BLOCKS / PREVIEW_RADIUS_BLOCKS);
@@ -1668,6 +1669,7 @@ public final class TerrainPreview implements AutoCloseable {
          float density = treeMarkerDensity(settings.worldScale());
          if (!(density <= 0.0F)) {
             float treeHeight = treePreviewHeight(settings.worldScale());
+            int ecologicalMarkers = 0;
 
             for (int z = 1; z < size - 1; z++) {
                if (this.shouldAbortRequest(requestId)) {
@@ -1693,7 +1695,9 @@ public final class TerrainPreview implements AutoCloseable {
                        primaryTreeAdded = true;
                     }
                   }
-                  if (settings.customTrees() && !primaryTreeAdded) {
+                  if (settings.customTrees()
+                     && !primaryTreeAdded
+                     && ecologicalMarkers < PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS) {
                      int surfaceCoverClass = MountainSurfaceRules.resolveSurfaceCoverClass(
                         coverClasses[coverIdx], visualCoverClasses[coverIdx]
                      );
@@ -1735,6 +1739,7 @@ public final class TerrainPreview implements AutoCloseable {
                                  0L,
                                  settings.worldScale(),
                                  0.0,
+                                 false,
                                  surfaceCoverClass == MountainSurfaceRules.ESA_TREE_COVER ? 0.62 : 0.12,
                                  0.35,
                                  9,
@@ -1754,6 +1759,7 @@ public final class TerrainPreview implements AutoCloseable {
                                     x, z, height, canopyScale, 0.38F, leafColor, colors[index]
                                  )
                               );
+                              ecologicalMarkers++;
                            }
                         }
                      }

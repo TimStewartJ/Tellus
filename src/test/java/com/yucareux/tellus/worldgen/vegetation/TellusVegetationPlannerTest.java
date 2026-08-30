@@ -109,6 +109,7 @@ class TellusVegetationPlannerTest {
          17L,
          1.0,
          3.0,
+         false,
          0.2,
          0.5,
          8,
@@ -118,6 +119,35 @@ class TellusVegetationPlannerTest {
       );
 
       assertNull(TellusVegetationPlanner.plan(TellusVegetationPlanner.Stratum.SHRUB, anchor, blocked));
+   }
+
+   @Test
+   void lowMeasuredCanopySuppressesJuvenileTrees() {
+      TellusVegetationPlanner.Environment lowCanopy = new TellusVegetationPlanner.Environment(
+         MountainSurfaceRules.ESA_TREE_COVER,
+         VegetationCommunity.TEMPERATE_FOREST,
+         TellusProceduralTreeGenerator.Profile.TEMPERATE_BROADLEAF,
+         71L,
+         1.0,
+         1.4,
+         true,
+         0.2,
+         0.3,
+         9,
+         0,
+         false,
+         true
+      );
+      for (int cell = 0; cell < 128; cell++) {
+         TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
+            TellusVegetationPlanner.Stratum.SUBCANOPY, cell, -cell, 71L
+         );
+         assertNull(
+            TellusVegetationPlanner.plan(
+               TellusVegetationPlanner.Stratum.SUBCANOPY, anchor, lowCanopy
+            )
+         );
+      }
    }
 
    @Test
@@ -190,6 +220,7 @@ class TellusVegetationPlannerTest {
          7823479L,
          worldScale,
          24.0,
+         false,
          0.35,
          0.4,
          8,

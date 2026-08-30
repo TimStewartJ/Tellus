@@ -93,6 +93,7 @@ import org.joml.Vector3f;
 
 public final class TerrainPreview implements AutoCloseable {
    private static final int PREVIEW_GRID_SIZE = 513;
+   private static final int PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS = 2048;
    private static final double PREVIEW_RADIUS_BLOCKS = 512.0;
    private static final float PREVIEW_VERTICAL_BLOCK_SCALE = 0.7F / (float)PREVIEW_RADIUS_BLOCKS;
    private static final float PREVIEW_CAMERA_FOV_DEGREES = 36.0F;
@@ -1678,6 +1679,7 @@ public final class TerrainPreview implements AutoCloseable {
          int size = PREVIEW_GRID_SIZE;
          float density = treeMarkerDensity(settings.worldScale());
          if (!(density <= 0.0F)) {
+            int ecologicalMarkers = 0;
             for (int z = 1; z < size - 1; z++) {
                if (this.shouldAbortRequest(requestId)) {
                   return false;
@@ -1774,8 +1776,10 @@ public final class TerrainPreview implements AutoCloseable {
                         }
                      }
                   }
-                  if (settings.customTrees() && !primaryTreeAdded) {
-                     this.addPreviewEcologicalVegetation(
+                  if (settings.customTrees()
+                     && !primaryTreeAdded
+                     && ecologicalMarkers < PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS
+                     && this.addPreviewEcologicalVegetation(
                         x,
                         z,
                         coverIdx,
@@ -1792,7 +1796,8 @@ public final class TerrainPreview implements AutoCloseable {
                         step,
                         canopyPreviewResolutionMeters,
                         trees
-                     );
+                     )) {
+                     ecologicalMarkers++;
                   }
                }
 
@@ -1810,7 +1815,7 @@ public final class TerrainPreview implements AutoCloseable {
       return !this.shouldAbortRequest(requestId);
    }
 
-   private void addPreviewEcologicalVegetation(
+   private boolean addPreviewEcologicalVegetation(
       int gridX,
       int gridZ,
       int coverIndex,
@@ -1834,7 +1839,7 @@ public final class TerrainPreview implements AutoCloseable {
       if (!MountainSurfaceRules.isVegetatedCoverClass(coverClass)
          && coverClass != MountainSurfaceRules.ESA_WETLAND
          && coverClass != MountainSurfaceRules.ESA_MANGROVES) {
-         return;
+         return false;
       }
       int blockX = Mth.floor(minWorldX + gridX * step);
       int blockZ = Mth.floor(minWorldZ + gridZ * step);
@@ -1898,6 +1903,7 @@ public final class TerrainPreview implements AutoCloseable {
                0L,
                settings.worldScale(),
                canopyHeight,
+               canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
                coverClass == MountainSurfaceRules.ESA_TREE_COVER ? 0.62 : 0.12,
                0.35,
                9,
@@ -1940,7 +1946,9 @@ public final class TerrainPreview implements AutoCloseable {
                colors[index]
             )
          );
+         return true;
       }
+      return false;
    }
 
    private static ResourceKey<Biome> resolvePreviewTreeBiome(

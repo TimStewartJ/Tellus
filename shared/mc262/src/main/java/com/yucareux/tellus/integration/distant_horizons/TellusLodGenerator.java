@@ -991,7 +991,13 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                         canopyRequestCache
                      )
                      : null;
-                   if (canopyColumn == null && allowCanopy && settings.customTrees()) {
+                   if (canopyColumn == null
+                      && !hasRoad
+                      && !hasBuilding
+                      && !hasBridgeSupport
+                      && !underwater
+                      && settings.customTrees()
+                      && isEcologicalVegetationCover(coverClass)) {
                      canopyColumn = resolveEcologicalVegetationColumn(
                         biomeHolder,
                         coverClass,
@@ -1648,7 +1654,12 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   canopyRequestCache
                )
                : null;
-             if (canopyColumn == null && allowCanopy && this.generator.settings().customTrees()) {
+             if (canopyColumn == null
+                && !hasRoad
+                && !hasBuilding
+                && !underwater
+                && this.generator.settings().customTrees()
+                && isEcologicalVegetationCover(coverClass)) {
                canopyColumn = resolveEcologicalVegetationColumn(
                   biomeHolder,
                   coverClass,
@@ -4597,6 +4608,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                      worldSeed,
                      worldScale,
                      canopyHeight,
+                     canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
                      shade,
                      edgeStrength,
                      distanceToWater,
@@ -4936,8 +4948,6 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          return true;
       } else if (underwater) {
          return false;
-      } else if (settings.customTrees() && isEcologicalVegetationCover(coverClass)) {
-         return true;
       } else if (!profile.hasCanopy()) {
          return false;
       } else if (coverClass == ESA_TREE_COVER) {

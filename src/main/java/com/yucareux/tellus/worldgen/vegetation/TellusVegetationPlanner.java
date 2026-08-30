@@ -39,7 +39,9 @@ public final class TellusVegetationPlanner {
       Objects.requireNonNull(stratum, "stratum");
       Objects.requireNonNull(anchor, "anchor");
       Objects.requireNonNull(environment, "environment");
-      if (!environment.placeable() || !supports(stratum, environment.coverClass(), environment.community())) {
+      if (!environment.placeable()
+         || stratum == Stratum.SUBCANOPY && environment.lowCanopy()
+         || !supports(stratum, environment.coverClass(), environment.community())) {
          return null;
       }
 
@@ -421,6 +423,7 @@ public final class TellusVegetationPlanner {
       long spatialSeed,
       double worldScale,
       double canopyHeightMeters,
+      boolean lowCanopy,
       double canopyShade,
       double edgeStrength,
       int distanceToWater,
