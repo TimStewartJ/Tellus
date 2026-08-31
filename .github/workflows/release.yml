@@ -1,0 +1,104 @@
+name: Release
+
+# Builds every Tellus target from a version tag and publishes the jars as a GitHub Release.
+# Trigger: push a tag named v<mod_version> (e.g. v0.8.4-fork.1), or dispatch manually for an
+# existing tag. The tag must match mod_version in gradle.properties.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release (e.g. v0.8.4-fork.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Verify the tag matches mod_version
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^mod_version=//p' gradle.properties | tr -d '\r')
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match gradle.properties mod_version=$VERSION"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Set up Java 25
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+
+      - name: Build and test every target
+        run: ./gradlew build --stacktrace
+
+      - name: Collect jars and checksums
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp mc*/build/libs/Tellus-*-"$VERSION".jar dist/
+          cd dist
+          sha256sum *.jar | tee SHA256SUMS.txt
+          test "$(ls *.jar | wc -l)" -eq 6 || { echo "::error::expected 6 jars"; exit 1; }
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          API_VERSION=$(sed -n 's/.*int API_VERSION = \([0-9]*\);.*/\1/p' src/main/java/com/yucareux/tellus/api/TellusApi.java)
+          {
+            echo "Tellus **$VERSION** — downstream build from the TimStewartJ/Tellus fork (\`main\`)."
+            echo
+            echo "Based on upstream Yucareux/Tellus 0.8.3 with the fork's changes: chunk-generation performance,"
+            echo "coarse-first Distant Horizons streaming, spawn-centered projection, coherent climate and land-cover"
+            echo "transitions, ecological vegetation, and the companion API (\`TellusApi\`, API v$API_VERSION) used by Tellus Expeditions."
+            echo
+            echo "Distant Horizons: works with stock DH; true-height (Increase Height) worlds need the Tellus DH fork"
+            echo "(TimStewartJ/distant-horizons)."
+            echo
+            echo "| MC | Loader | Java |"
+            echo "| --- | --- | --- |"
+            echo "| 1.20.1 | Fabric, Forge | 17 |"
+            echo "| 1.21.1 | Fabric, NeoForge | 21 |"
+            echo "| 26.2 | Fabric, NeoForge | 25 |"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+          } > notes.md
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "Tellus $VERSION" --notes-file notes.md
+          fi

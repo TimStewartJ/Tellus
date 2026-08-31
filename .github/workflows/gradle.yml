@@ -3,6 +3,7 @@ name: Gradle build
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,3 +32,18 @@ jobs:
 
       - name: Build and test every target
         run: ./gradlew build --stacktrace
+
+      - name: Collect release-shaped jars
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^mod_version=//p' gradle.properties | tr -d '\r')
+          mkdir -p dist
+          cp mc*/build/libs/Tellus-*-"$VERSION".jar dist/
+          ls -l dist
+
+      - name: Upload jars
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: tellus-jars-${{ github.sha }}
+          path: dist/*.jar
+          retention-days: 14
