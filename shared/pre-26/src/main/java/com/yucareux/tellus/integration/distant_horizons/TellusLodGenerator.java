@@ -21,6 +21,7 @@ import com.yucareux.tellus.world.data.osm.RoadFeature;
 import com.yucareux.tellus.world.data.osm.RoadMode;
 import com.yucareux.tellus.world.data.osm.RoadSurfaceStyle;
 import com.yucareux.tellus.world.data.canopy.TellusCanopyHeightSource;
+import com.yucareux.tellus.world.data.cover.LandCoverTransition;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.TellusResolveSource;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainAvailability;
@@ -529,7 +530,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   sampleCoverNanos += System.nanoTime() - samplePartStart;
                   samplePartStart = System.nanoTime();
                }
-               int visualCoverClass = sampleVisualCover && !isHardRawCoverClass(coverClass)
+               int visualCoverClass = sampleVisualCover && !LandCoverTransition.isProtectedClass(coverClass)
                   ? reuseSharedPreviewCoverSamples
                      ? sharedTerrainCache.sampleVisualCoverClass(sampleWorldX, sampleWorldZ)
                      : this.generator.sampleVisualCoverClass(sampleWorldX, sampleWorldZ, coverClass, previewResolutionMeters)
@@ -1404,7 +1405,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                sampleCoverNanos += System.nanoTime() - samplePartStart;
                samplePartStart = System.nanoTime();
             }
-            int visualCoverClass = sampleVisualCover && !isHardRawCoverClass(coverClass)
+            int visualCoverClass = sampleVisualCover && !LandCoverTransition.isProtectedClass(coverClass)
                ? this.generator.sampleVisualCoverClass(worldX, worldZ, coverClass, previewResolutionMeters)
                : coverClass;
             if (sampleTimingEnabled) {
@@ -2136,10 +2137,6 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       return Double.isFinite(previewResolutionMeters) && previewResolutionMeters > 0.0
          ? Math.max(worldScale, previewResolutionMeters)
          : worldScale;
-   }
-
-   private static boolean isHardRawCoverClass(int coverClass) {
-      return coverClass == ESA_NO_DATA || coverClass == ESA_WATER || coverClass == ESA_MANGROVES || coverClass == ESA_BUILT_UP;
    }
 
    private static int detailedWaterStride(int detailLevel, int lodSizePoints) {

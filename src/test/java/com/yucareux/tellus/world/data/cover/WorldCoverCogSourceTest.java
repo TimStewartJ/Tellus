@@ -15,6 +15,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.zip.DeflaterOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -170,6 +172,54 @@ class WorldCoverCogSourceTest {
    }
 
    @Test
+   void transitionsBuiltUpVisualsWithoutMovingProtectedWater() throws Exception {
+      byte[] cog = syntheticCog();
+      WorldCoverCogSource source = new WorldCoverCogSource(
+         URI.create("https://example.test/worldcover/"),
+         this.temporaryDirectory,
+         uri -> (offset, length) -> range(cog, offset, length)
+      );
+      double worldScale = 1.0;
+      double lat = 38.625;
+      double blockZ = blockZForLatitude(lat, worldScale);
+      Set<Integer> builtUpVisuals = new HashSet<>();
+      for (int sample = 0; sample < 64; sample++) {
+         double lon = -118.5 + sample / 128.0;
+         WorldCoverCogSource.Sample raw = source.sample(
+            lon, lat, 1.0, WorldCoverCogSource.LookupMode.BLOCKING
+         );
+         WorldCoverCogSource.Sample visual = source.sampleVisual(
+            lon,
+            lat,
+            1.0,
+            blockXForLongitude(lon, worldScale),
+            blockZ,
+            worldScale,
+            WorldCoverCogSource.LookupMode.BLOCKING
+         );
+         assertEquals(50, raw.coverClass());
+         assertTrue(visual.available());
+         builtUpVisuals.add(visual.coverClass());
+      }
+      assertTrue(builtUpVisuals.contains(50));
+      assertTrue(builtUpVisuals.stream().anyMatch(coverClass -> coverClass != 50));
+
+      double waterLon = -117.375;
+      double waterLat = 37.875;
+      WorldCoverCogSource.Sample waterVisual = source.sampleVisual(
+         waterLon,
+         waterLat,
+         1.0,
+         blockXForLongitude(waterLon, worldScale),
+         blockZForLatitude(waterLat, worldScale),
+         worldScale,
+         WorldCoverCogSource.LookupMode.BLOCKING
+      );
+      assertTrue(waterVisual.available());
+      assertEquals(80, waterVisual.coverClass());
+   }
+
+   @Test
    @EnabledIfEnvironmentVariable(named = "TELLUS_LIVE_WORLDCOVER_TEST", matches = "true")
    void readsTheOfficialNativeHalfDomePixelThroughHttpRanges() {
       WorldCoverCogSource source = new WorldCoverCogSource(
@@ -261,6 +311,16 @@ class WorldCoverCogSourceTest {
       output.position(overviewOffset);
       output.put(overviewBlock);
       return output.array();
+   }
+
+   private static double blockXForLongitude(double longitude, double worldScale) {
+      return longitude * EarthProjection.METERS_PER_DEGREE / worldScale;
+   }
+
+   private static double blockZForLatitude(double latitude, double worldScale) {
+      double earthRadiusMeters = EarthProjection.METERS_PER_DEGREE * 180.0 / Math.PI;
+      double latitudeRadians = Math.toRadians(latitude);
+      return -earthRadiusMeters * Math.log(Math.tan(Math.PI * 0.25 + latitudeRadians * 0.5)) / worldScale;
    }
 
    private static void writeIfd(

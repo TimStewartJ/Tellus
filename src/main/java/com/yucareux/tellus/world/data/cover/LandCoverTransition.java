@@ -14,7 +14,6 @@ import com.yucareux.tellus.world.data.CategoricalTransition;
  */
 public final class LandCoverTransition {
    private static final int NO_DATA_CLASS = 0;
-   private static final int BUILT_UP_CLASS = 50;
    private static final int WATER_CLASS = 80;
    private static final int MANGROVES_CLASS = 95;
    private static final CategoricalTransition.NoiseProfile TRANSITION_PROFILE = new CategoricalTransition.NoiseProfile(
@@ -73,17 +72,13 @@ public final class LandCoverTransition {
    ) {
       if (!(transitionStrength > 0.0)
          || !isBlendableClass(centerClass)
-         || isHardClass(centerClass)
-         || !isBlendableClass(class00)
-         || !isBlendableClass(class10)
-         || !isBlendableClass(class01)
-         || !isBlendableClass(class11)
-         || isHardClass(class00)
-         || isHardClass(class10)
-         || isHardClass(class01)
-         || isHardClass(class11)) {
+         || isProtectedClass(centerClass)) {
          return centerClass;
       }
+      class00 = visualCandidateOrCenter(centerClass, class00);
+      class10 = visualCandidateOrCenter(centerClass, class10);
+      class01 = visualCandidateOrCenter(centerClass, class01);
+      class11 = visualCandidateOrCenter(centerClass, class11);
       if (centerClass == class00
          && centerClass == class10
          && centerClass == class01
@@ -109,11 +104,16 @@ public final class LandCoverTransition {
       );
    }
 
-   public static boolean isHardClass(int coverClass) {
+   public static boolean isProtectedClass(int coverClass) {
       return coverClass == NO_DATA_CLASS
-         || coverClass == BUILT_UP_CLASS
          || coverClass == WATER_CLASS
          || coverClass == MANGROVES_CLASS;
+   }
+
+   private static int visualCandidateOrCenter(int centerClass, int candidateClass) {
+      return isBlendableClass(candidateClass) && !isProtectedClass(candidateClass)
+         ? candidateClass
+         : centerClass;
    }
 
    private static boolean isBlendableClass(int coverClass) {
