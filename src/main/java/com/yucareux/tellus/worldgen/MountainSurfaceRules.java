@@ -20,13 +20,9 @@ public final class MountainSurfaceRules {
    }
 
    public static int resolveSurfaceCoverClass(int terrainCoverClass, int visualCoverClass) {
-      if (terrainCoverClass == ESA_BUILT) {
-         return ESA_BUILT;
-      } else if (terrainCoverClass == ESA_TREE_COVER) {
-         return ESA_TREE_COVER;
-      } else {
-         return !isWaterLikeCoverClass(terrainCoverClass) && !isWaterLikeCoverClass(visualCoverClass) ? visualCoverClass : terrainCoverClass;
-      }
+      return !isWaterLikeCoverClass(terrainCoverClass) && !isWaterLikeCoverClass(visualCoverClass)
+         ? visualCoverClass
+         : terrainCoverClass;
    }
 
    public static MountainSurfaceRules.ShorelineMaterial classifyShorelineMaterial(
@@ -90,8 +86,7 @@ public final class MountainSurfaceRules {
    }
 
    public static boolean isTreeMarkerCoverClass(int terrainCoverClass, int visualCoverClass) {
-      int surfaceCoverClass = resolveSurfaceCoverClass(terrainCoverClass, visualCoverClass);
-      return surfaceCoverClass == ESA_TREE_COVER || surfaceCoverClass == ESA_MANGROVES;
+      return terrainCoverClass == ESA_TREE_COVER || terrainCoverClass == ESA_MANGROVES;
    }
 
    public static boolean isVegetatedCoverClass(int coverClass) {

@@ -17,11 +17,27 @@ class LandCoverTransitionTest {
    }
 
    @Test
-   void keepsSemanticHardClassesOutOfVisualDithering() {
+   void keepsProtectedCenterClassesOutOfVisualTransitions() {
       assertEquals(80, select(80, 10, 10, 10, 10, 0.5, 0.5, 12, 8));
-      assertEquals(10, select(10, 10, 80, 10, 80, 0.5, 0.5, 12, 8));
-      assertEquals(50, select(50, 10, 60, 30, 40, 0.5, 0.5, 12, 8));
+      assertEquals(0, select(0, 10, 60, 30, 40, 0.5, 0.5, 12, 8));
       assertEquals(95, select(95, 10, 60, 30, 40, 0.5, 0.5, 12, 8));
+   }
+
+   @Test
+   void excludesProtectedNeighborsWithoutDisablingTerrestrialTransitions() {
+      Set<Integer> selectedClasses = new HashSet<>();
+      for (int z = -64; z <= 64; z++) {
+         for (int x = -64; x <= 64; x++) {
+            selectedClasses.add(select(10, 10, 80, 60, 80, 0.5, 0.5, x, z));
+         }
+      }
+      assertEquals(Set.of(10, 60), selectedClasses);
+   }
+
+   @Test
+   void transitionsBuiltUpAndTreeCoverAsVisualSurfaceClasses() {
+      assertEquals(30, select(50, 30, 30, 30, 30, 0.5, 0.5, 12, 8));
+      assertEquals(60, select(10, 60, 60, 60, 60, 0.5, 0.5, 12, 8));
    }
 
    @Test

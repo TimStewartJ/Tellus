@@ -9,26 +9,39 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MountainSurfaceRulesTest {
    @Test
-   void rawTreeCoverKeepsVegetatedSurfaceClassAtVisualEdges() {
+   void visualCoverControlsTerrestrialSurfaceClass() {
       assertEquals(
-         MountainSurfaceRules.ESA_TREE_COVER,
+         MountainSurfaceRules.ESA_BARE,
          MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_TREE_COVER, MountainSurfaceRules.ESA_BARE)
       );
       assertEquals(
          MountainSurfaceRules.ESA_TREE_COVER,
-         MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_TREE_COVER, MountainSurfaceRules.ESA_SNOW_ICE)
+         MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_BUILT, MountainSurfaceRules.ESA_TREE_COVER)
       );
    }
 
    @Test
-   void builtAndWaterLikeTerrainKeepTerrainClass() {
-      assertEquals(
-         MountainSurfaceRules.ESA_BUILT,
-         MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_BUILT, MountainSurfaceRules.ESA_TREE_COVER)
-      );
+   void waterLikeTerrainKeepsItsRawSemanticClass() {
       assertEquals(
          MountainSurfaceRules.ESA_WATER,
          MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_WATER, MountainSurfaceRules.ESA_TREE_COVER)
+      );
+      assertEquals(
+         MountainSurfaceRules.ESA_GRASSLAND,
+         MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_GRASSLAND, MountainSurfaceRules.ESA_WATER)
+      );
+   }
+
+   @Test
+   void treeMarkersFollowRawFeatureSemanticsRatherThanVisualSurface() {
+      assertTrue(
+         MountainSurfaceRules.isTreeMarkerCoverClass(MountainSurfaceRules.ESA_TREE_COVER, MountainSurfaceRules.ESA_BARE)
+      );
+      assertTrue(
+         MountainSurfaceRules.isTreeMarkerCoverClass(MountainSurfaceRules.ESA_MANGROVES, MountainSurfaceRules.ESA_WETLAND)
+      );
+      assertFalse(
+         MountainSurfaceRules.isTreeMarkerCoverClass(MountainSurfaceRules.ESA_GRASSLAND, MountainSurfaceRules.ESA_TREE_COVER)
       );
    }
 

@@ -15,6 +15,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.zip.DeflaterOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -167,6 +169,54 @@ class WorldCoverCogSourceTest {
       assertFalse(
          coldMemoryOnly.sample(-119.0, 38.0, 1.0, WorldCoverCogSource.LookupMode.MEMORY_ONLY).available()
       );
+   }
+
+   @Test
+   void transitionsBuiltUpVisualsWithoutMovingProtectedWater() throws Exception {
+      byte[] cog = syntheticCog();
+      WorldCoverCogSource source = new WorldCoverCogSource(
+         URI.create("https://example.test/worldcover/"),
+         this.temporaryDirectory,
+         uri -> (offset, length) -> range(cog, offset, length)
+      );
+      double worldScale = 1.0;
+      double lat = 38.625;
+      double blockZ = EarthProjection.latToBlockZ(lat, worldScale);
+      Set<Integer> builtUpVisuals = new HashSet<>();
+      for (int sample = 0; sample < 64; sample++) {
+         double lon = -118.5 + sample / 128.0;
+         WorldCoverCogSource.Sample raw = source.sample(
+            lon, lat, 1.0, WorldCoverCogSource.LookupMode.BLOCKING
+         );
+         WorldCoverCogSource.Sample visual = source.sampleVisual(
+            lon,
+            lat,
+            1.0,
+            lon * EarthProjection.blocksPerDegree(worldScale),
+            blockZ,
+            worldScale,
+            WorldCoverCogSource.LookupMode.BLOCKING
+         );
+         assertEquals(50, raw.coverClass());
+         assertTrue(visual.available());
+         builtUpVisuals.add(visual.coverClass());
+      }
+      assertTrue(builtUpVisuals.contains(50));
+      assertTrue(builtUpVisuals.stream().anyMatch(coverClass -> coverClass != 50));
+
+      double waterLon = -117.375;
+      double waterLat = 37.875;
+      WorldCoverCogSource.Sample waterVisual = source.sampleVisual(
+         waterLon,
+         waterLat,
+         1.0,
+         waterLon * EarthProjection.blocksPerDegree(worldScale),
+         EarthProjection.latToBlockZ(waterLat, worldScale),
+         worldScale,
+         WorldCoverCogSource.LookupMode.BLOCKING
+      );
+      assertTrue(waterVisual.available());
+      assertEquals(80, waterVisual.coverClass());
    }
 
    @Test
