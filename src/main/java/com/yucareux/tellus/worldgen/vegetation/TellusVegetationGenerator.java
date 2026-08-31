@@ -44,31 +44,17 @@ public final class TellusVegetationGenerator {
       int chunkMaxX = chunkMinX + 15;
       int chunkMaxZ = chunkMinZ + 15;
       for (TellusVegetationPlanner.Stratum stratum : TellusVegetationPlanner.Stratum.values()) {
-         int cellSize = stratum.cellSize();
-         int minCellX = Math.floorDiv(chunkMinX, cellSize);
-         int maxCellX = Math.floorDiv(chunkMaxX, cellSize);
-         int minCellZ = Math.floorDiv(chunkMinZ, cellSize);
-         int maxCellZ = Math.floorDiv(chunkMaxZ, cellSize);
-         for (int cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
-            for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
-               TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
-                  stratum, cellX, cellZ, worldSeed
-               );
-               if (anchor.worldX() < chunkMinX
-                  || anchor.worldX() > chunkMaxX
-                  || anchor.worldZ() < chunkMinZ
-                  || anchor.worldZ() > chunkMaxZ) {
-                  continue;
-               }
-               TellusVegetationPlanner.Environment environment = sampler.sample(
-                  stratum, anchor.worldX(), anchor.worldZ(), anchor.seed()
-               );
-               TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
-                  stratum, anchor, environment
-               );
-               if (placement != null) {
-                  placements.add(placement);
-               }
+         for (TellusVegetationPlanner.Anchor anchor : TellusVegetationPlanner.anchorsIn(
+            stratum, chunkMinX, chunkMinZ, chunkMaxX, chunkMaxZ, worldSeed
+         )) {
+            TellusVegetationPlanner.Environment environment = sampler.sample(
+               stratum, anchor.worldX(), anchor.worldZ(), anchor.seed()
+            );
+            TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
+               stratum, anchor, environment
+            );
+            if (placement != null) {
+               placements.add(placement);
             }
          }
       }

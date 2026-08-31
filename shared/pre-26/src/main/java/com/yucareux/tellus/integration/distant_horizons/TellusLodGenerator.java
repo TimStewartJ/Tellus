@@ -1045,6 +1045,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                       && !hasBridgeSupport
                       && !underwater
                       && settings.customTrees()
+                      && settings.ecologicalUnderstory()
                       && isEcologicalVegetationCover(coverClass)) {
                      canopyColumn = resolveEcologicalVegetationColumn(
                         biomeHolder,
@@ -1807,6 +1808,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                 && !hasBuilding
                 && !underwater
                 && this.generator.settings().customTrees()
+                && this.generator.settings().ecologicalUnderstory()
                 && isEcologicalVegetationCover(coverClass)) {
                canopyColumn = resolveEcologicalVegetationColumn(
                   biomeHolder,
@@ -4693,186 +4695,144 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          TellusVegetationPlanner.Stratum.SUBCANOPY,
          TellusVegetationPlanner.Stratum.SHRUB
       }) {
-         int placementCellSize = stratum.cellSize();
-         boolean aggregateForLod = cellSize >= placementCellSize;
-         int minCellX;
-         int maxCellX;
-         int minCellZ;
-         int maxCellZ;
+         int cellPadding = Math.max(0, cellSize - 1) / 2;
+         boolean aggregateForLod = cellSize >= stratum.cellSize();
+         List<TellusVegetationPlanner.Anchor> anchors;
          if (aggregateForLod) {
-            int lodCellX = Math.floorDiv(worldX, cellSize);
-            int lodCellZ = Math.floorDiv(worldZ, cellSize);
-            int lodMinX = lodCellX * cellSize;
-            int lodMinZ = lodCellZ * cellSize;
-            int lodMaxX = lodMinX + cellSize - 1;
-            int lodMaxZ = lodMinZ + cellSize - 1;
-            int firstContainedCellX = ceilDiv(lodMinX, placementCellSize);
-            int firstContainedCellZ = ceilDiv(lodMinZ, placementCellSize);
-            int lastContainedCellX = Math.floorDiv(
-               lodMaxX - placementCellSize + 1, placementCellSize
+            // A coarse column renders one representative plant for its whole footprint.
+            int lodMinX = Math.floorDiv(worldX, cellSize) * cellSize;
+            int lodMinZ = Math.floorDiv(worldZ, cellSize) * cellSize;
+            TellusVegetationPlanner.Anchor representative = TellusVegetationPlanner.representativeAnchor(
+               stratum, lodMinX, lodMinZ, lodMinX + cellSize - 1, lodMinZ + cellSize - 1, worldSeed
             );
-            int lastContainedCellZ = Math.floorDiv(
-               lodMaxZ - placementCellSize + 1, placementCellSize
-            );
-            if (firstContainedCellX > lastContainedCellX
-               || firstContainedCellZ > lastContainedCellZ) {
-               aggregateForLod = false;
-               int cellX = Math.floorDiv(worldX, placementCellSize);
-               int cellZ = Math.floorDiv(worldZ, placementCellSize);
-               minCellX = cellX - 1;
-               maxCellX = cellX + 1;
-               minCellZ = cellZ - 1;
-               maxCellZ = cellZ + 1;
-            } else {
-               int cellsAcrossX = lastContainedCellX - firstContainedCellX + 1;
-               int cellsAcrossZ = lastContainedCellZ - firstContainedCellZ + 1;
-               int selection = mixHash(
-                  lodCellX,
-                  lodCellZ,
-                  0x6D3A91E5 + stratum.ordinal() * 0x1F123BB5
-               );
-               minCellX = firstContainedCellX + Math.floorMod(selection, cellsAcrossX);
-               minCellZ = firstContainedCellZ + Math.floorMod(selection >>> 16, cellsAcrossZ);
-               maxCellX = minCellX;
-               maxCellZ = minCellZ;
-            }
+            anchors = representative == null ? List.of() : List.of(representative);
          } else {
-            int cellX = Math.floorDiv(worldX, placementCellSize);
-            int cellZ = Math.floorDiv(worldZ, placementCellSize);
-            minCellX = cellX - 1;
-            maxCellX = cellX + 1;
-            minCellZ = cellZ - 1;
-            maxCellZ = cellZ + 1;
+            // A fine column shows any plant whose crown reaches it; subcanopy crowns reach 4 blocks,
+            // shrubs 3, so scanning that far (plus the column's own footprint) is exhaustive.
+            int reach = (stratum == TellusVegetationPlanner.Stratum.SHRUB ? 3 : 4) + cellPadding;
+            anchors = TellusVegetationPlanner.anchorsIn(
+               stratum, worldX - reach, worldZ - reach, worldX + reach, worldZ + reach, worldSeed
+            );
          }
-         for (int testCellZ = minCellZ; testCellZ <= maxCellZ; testCellZ++) {
-            for (int testCellX = minCellX; testCellX <= maxCellX; testCellX++) {
-               TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
-                  stratum, testCellX, testCellZ, worldSeed
-               );
-               int offsetX = worldX - anchor.worldX();
-               int offsetZ = worldZ - anchor.worldZ();
-               int cellPadding = Math.max(0, cellSize - 1) / 2;
-               int distance = Math.max(
-                  0,
-                  (int)Math.round(Math.sqrt((long)offsetX * offsetX + (long)offsetZ * offsetZ))
-                     - cellPadding
-               );
-               if (aggregateForLod) {
-                  distance = 0;
-               }
-               int anchorCover = aggregateForLod
-                  ? coverClass
-                  : requestCache.vegetationCoverClass(
-                     anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
-                  );
-               TellusCanopyHeightSource.CanopySample canopy = anchorCover == ESA_TREE_COVER
-                  ? requestCache.canopy(
-                     anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
-                  )
-                  : null;
-               Holder<Biome> anchorBiome = requestCache.vegetationBiome(
-                  this.biomeSource,
-                  anchor.worldX(),
-                  anchor.worldZ(),
-                  anchorCover,
-                  previewResolutionMeters
-               );
-               TellusProceduralTreeGenerator.TreePlan treePlan = requestCache.treePlan(
-                  anchor.worldX(),
-                  anchor.worldZ(),
-                  worldScale,
-                  anchor.seed(),
-                  anchorBiome,
-                  canopy
-               );
-               VegetationCommunity community = VegetationCommunity.resolve(
-                  anchorCover, treePlan.profile()
-               );
-               double canopyHeight = canopy != null && canopy.available()
-                  ? canopy.centerHeightMeters() * 0.30
-                     + canopy.percentile75Meters() * 0.42
-                     + canopy.percentile90Meters() * 0.28
-                  : 0.0;
-               double edgeStrength = aggregateForLod
-                  ? 0.35
-                  : requestCache.vegetationEdgeStrength(
-                     anchor.worldX(), anchor.worldZ(), anchorCover, worldScale, previewResolutionMeters
-                  );
-               double shade = anchorCover == ESA_TREE_COVER
-                  ? Mth.clamp(
-                     0.30 + Math.min(0.46, canopyHeight / 90.0) + (1.0 - edgeStrength) * 0.18,
-                     0.0,
-                     0.92
-                  )
-                  : anchorCover == ESA_SHRUBLAND ? 0.16 : 0.04;
-               int distanceToWater = anchorCover == ESA_WETLAND ? 3 : 9;
-               TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
-                  stratum,
-                  anchor,
-                  new TellusVegetationPlanner.Environment(
-                     anchorCover,
-                     community,
-                     treePlan.profile(),
-                     worldSeed,
-                     worldScale,
-                     Integer.MIN_VALUE,
-                     canopyHeight,
-                     canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
-                     shade,
-                     edgeStrength,
-                     distanceToWater,
-                     0,
-                     anchorCover == ESA_SNOW_ICE,
-                     true
-                  )
-               );
-               if (placement == null) {
-                  continue;
-               }
-               int radius = stratum == TellusVegetationPlanner.Stratum.SHRUB
-                  ? placement.size()
-                  : Math.max(2, placement.size() / 3);
-               if (distance > radius) {
-                  continue;
-               }
-               int crownHeight = stratum == TellusVegetationPlanner.Stratum.SHRUB
-                  ? Math.max(1, placement.size())
-                  : Math.max(2, placement.size() / 2);
-               int totalHeight = stratum == TellusVegetationPlanner.Stratum.SHRUB
-                  ? crownHeight + 1
-                  : placement.size();
-               if (totalHeight < bestHeight || totalHeight == bestHeight && distance >= bestDistance) {
-                  continue;
-               }
-               int leafLift = Math.max(1, totalHeight - crownHeight);
-               boolean center = Math.abs(offsetX) <= cellPadding && Math.abs(offsetZ) <= cellPadding;
-               BlockState log = center
-                  ? TellusProceduralTreeGenerator.logState(placement.treeProfile(), placement.seed())
-                  : null;
-               best = new TellusLodGenerator.CanopyColumn(
-                  0,
-                  center ? leafLift : 0,
-                  center ? 0 : leafLift,
-                  crownHeight,
-                  TellusProceduralTreeGenerator.leavesState(placement.treeProfile(), placement.seed()),
-                  log,
-                  null,
-                  aggregateForLod
-                     ? LodCanopyVerticalLayout.UNANCHORED_SURFACE_Y
-                     : requestCache.treeAnchorSurface(
-                        anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
-                     )
-               );
-               bestHeight = totalHeight;
-               bestDistance = distance;
+         for (TellusVegetationPlanner.Anchor anchor : anchors) {
+            int offsetX = worldX - anchor.worldX();
+            int offsetZ = worldZ - anchor.worldZ();
+            int distance = Math.max(
+               0,
+               (int)Math.round(Math.sqrt((long)offsetX * offsetX + (long)offsetZ * offsetZ))
+                  - cellPadding
+            );
+            if (aggregateForLod) {
+               distance = 0;
             }
+            int anchorCover = aggregateForLod
+               ? coverClass
+               : requestCache.vegetationCoverClass(
+                  anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
+               );
+            TellusCanopyHeightSource.CanopySample canopy = anchorCover == ESA_TREE_COVER
+               ? requestCache.canopy(
+                  anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
+               )
+               : null;
+            Holder<Biome> anchorBiome = requestCache.vegetationBiome(
+               this.biomeSource,
+               anchor.worldX(),
+               anchor.worldZ(),
+               anchorCover,
+               previewResolutionMeters
+            );
+            TellusProceduralTreeGenerator.TreePlan treePlan = requestCache.treePlan(
+               anchor.worldX(),
+               anchor.worldZ(),
+               worldScale,
+               anchor.seed(),
+               anchorBiome,
+               canopy
+            );
+            VegetationCommunity community = VegetationCommunity.resolve(
+               anchorCover, treePlan.profile()
+            );
+            double canopyHeight = canopy != null && canopy.available()
+               ? canopy.centerHeightMeters() * 0.30
+                  + canopy.percentile75Meters() * 0.42
+                  + canopy.percentile90Meters() * 0.28
+               : 0.0;
+            double edgeStrength = aggregateForLod
+               ? 0.35
+               : requestCache.vegetationEdgeStrength(
+                  anchor.worldX(), anchor.worldZ(), anchorCover, worldScale, previewResolutionMeters
+               );
+            double shade = anchorCover == ESA_TREE_COVER
+               ? Mth.clamp(
+                  0.30 + Math.min(0.46, canopyHeight / 90.0) + (1.0 - edgeStrength) * 0.18,
+                  0.0,
+                  0.92
+               )
+               : anchorCover == ESA_SHRUBLAND ? 0.16 : 0.04;
+            int distanceToWater = anchorCover == ESA_WETLAND ? 3 : 9;
+            TellusVegetationPlanner.Placement placement = TellusVegetationPlanner.plan(
+               stratum,
+               anchor,
+               new TellusVegetationPlanner.Environment(
+                  anchorCover,
+                  community,
+                  treePlan.profile(),
+                  worldSeed,
+                  worldScale,
+                  Integer.MIN_VALUE,
+                  canopyHeight,
+                  canopy != null && canopy.available() && canopy.maximumHeightMeters() < 2.0,
+                  shade,
+                  edgeStrength,
+                  distanceToWater,
+                  0,
+                  anchorCover == ESA_SNOW_ICE,
+                  true
+               )
+            );
+            if (placement == null) {
+               continue;
+            }
+            int radius = stratum == TellusVegetationPlanner.Stratum.SHRUB
+               ? placement.size()
+               : Math.max(2, placement.size() / 3);
+            if (distance > radius) {
+               continue;
+            }
+            int crownHeight = stratum == TellusVegetationPlanner.Stratum.SHRUB
+               ? Math.max(1, placement.size())
+               : Math.max(2, placement.size() / 2);
+            int totalHeight = stratum == TellusVegetationPlanner.Stratum.SHRUB
+               ? crownHeight + 1
+               : placement.size();
+            if (totalHeight < bestHeight || totalHeight == bestHeight && distance >= bestDistance) {
+               continue;
+            }
+            int leafLift = Math.max(1, totalHeight - crownHeight);
+            boolean center = Math.abs(offsetX) <= cellPadding && Math.abs(offsetZ) <= cellPadding;
+            BlockState log = center
+               ? TellusProceduralTreeGenerator.logState(placement.treeProfile(), placement.seed())
+               : null;
+            best = new TellusLodGenerator.CanopyColumn(
+               0,
+               center ? leafLift : 0,
+               center ? 0 : leafLift,
+               crownHeight,
+               TellusProceduralTreeGenerator.leavesState(placement.treeProfile(), placement.seed()),
+               log,
+               null,
+               aggregateForLod
+                  ? LodCanopyVerticalLayout.UNANCHORED_SURFACE_Y
+                  : requestCache.treeAnchorSurface(
+                     anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters
+                  )
+            );
+            bestHeight = totalHeight;
+            bestDistance = distance;
          }
       }
       return best;
-   }
-
-   private static int ceilDiv(int value, int positiveDivisor) {
-      return -Math.floorDiv(-value, positiveDivisor);
    }
 
    private static TellusLodGenerator.DataCanopyDimensions dataCanopyDimensions(

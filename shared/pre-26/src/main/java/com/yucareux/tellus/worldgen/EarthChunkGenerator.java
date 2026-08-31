@@ -754,8 +754,13 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return !CHUNK_DETAIL_LEGACY_BLOCKING && CHUNK_DETAIL_DEFER_TREES;
    }
 
+   /** Understory strata grow only when both Ecological Trees &amp; Vegetation and the understory toggle are on. */
+   private boolean ecologicalUnderstoryEnabled() {
+      return this.settings.customTrees() && this.settings.ecologicalUnderstory();
+   }
+
    private boolean shouldDeferEcologicalVegetation() {
-      return this.settings.customTrees()
+      return this.ecologicalUnderstoryEnabled()
          && (this.shouldDeferTrees()
             || this.shouldDeferRoadDetails()
             || this.shouldDeferBuildingDetails()
@@ -913,7 +918,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          if (!delayTellusDecoration && !this.shouldDeferTrees()) {
             this.placeTrees(level, chunk);
          }
-         if (!delayTellusDecoration && !this.shouldDeferEcologicalVegetation() && this.settings.customTrees()) {
+         if (!delayTellusDecoration && !this.shouldDeferEcologicalVegetation() && this.ecologicalUnderstoryEnabled()) {
             EarthChunkGenerator.ChunkDecorationContext context = this.chunkDecorationContexts.get(chunkKey);
             EarthChunkGenerator.PreparedChunkBuildings buildings = this.preparedChunkBuildings.get(chunkKey);
             ecologicalVegetation = this.prepareEcologicalVegetation(
@@ -5411,7 +5416,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       EarthChunkGenerator.PreparedChunkBuildings buildings,
       long worldSeed
    ) {
-      if (!this.settings.customTrees()) {
+      if (!this.ecologicalUnderstoryEnabled()) {
          return List.of();
       }
       int chunkMinX = pos.getMinBlockX();

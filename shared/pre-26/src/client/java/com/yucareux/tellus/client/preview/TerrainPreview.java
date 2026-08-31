@@ -1729,6 +1729,7 @@ public final class TerrainPreview implements AutoCloseable {
                     }
                   }
                   if (settings.customTrees()
+                     && settings.ecologicalUnderstory()
                      && !primaryTreeAdded
                      && ecologicalMarkers < PREVIEW_ECOLOGICAL_VEGETATION_MAX_MARKERS) {
                      int surfaceCoverClass = MountainSurfaceRules.resolveSurfaceCoverClass(
@@ -1740,14 +1741,11 @@ public final class TerrainPreview implements AutoCloseable {
                         int blockX = Mth.floor(minWorldX + x * step);
                         int blockZ = Mth.floor(minWorldZ + z * step);
                         TellusVegetationPlanner.Stratum stratum = TellusVegetationPlanner.Stratum.SHRUB;
-                        int centerCellX = Math.floorDiv(blockX, stratum.cellSize());
-                        int centerCellZ = Math.floorDiv(blockZ, stratum.cellSize());
+                        int scanRadius = stratum.scanRadius();
                         anchorSearch:
-                        for (int cellZ = centerCellZ - 1; cellZ <= centerCellZ + 1; cellZ++) {
-                           for (int cellX = centerCellX - 1; cellX <= centerCellX + 1; cellX++) {
-                              TellusVegetationPlanner.Anchor anchor = TellusVegetationPlanner.anchorForCell(
-                                 stratum, cellX, cellZ, 0L
-                              );
+                        for (TellusVegetationPlanner.Anchor anchor : TellusVegetationPlanner.anchorsIn(
+                           stratum, blockX - scanRadius, blockZ - scanRadius, blockX + scanRadius, blockZ + scanRadius, 0L
+                        )) {
                               int ownerGridX = Mth.clamp(
                                  (int)Math.round((anchor.worldX() - minWorldX) / step),
                                  1,
@@ -1808,7 +1806,6 @@ public final class TerrainPreview implements AutoCloseable {
                               ecologicalMarkers++;
                               break anchorSearch;
                            }
-                        }
                         }
                      }
                   }

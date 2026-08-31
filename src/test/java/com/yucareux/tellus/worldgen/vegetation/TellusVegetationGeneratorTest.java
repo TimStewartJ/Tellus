@@ -45,7 +45,12 @@ class TellusVegetationGeneratorTest {
 
       assertEquals(first, second);
       assertFalse(first.isEmpty());
-      assertTrue(first.size() <= 106);
+      // Anchors are gridless: at most about 1.6x the expected count across the five strata.
+      int expectedAnchors = 0;
+      for (TellusVegetationPlanner.Stratum stratum : TellusVegetationPlanner.Stratum.values()) {
+         expectedAnchors += 256 / stratum.neighborhoodSize();
+      }
+      assertTrue(first.size() <= expectedAnchors * 1.6, "too many placements: " + first.size());
       int previousOrder = -1;
       for (TellusVegetationPlanner.Placement placement : first) {
          assertTrue(placement.worldX() >= -16 && placement.worldX() <= -1);

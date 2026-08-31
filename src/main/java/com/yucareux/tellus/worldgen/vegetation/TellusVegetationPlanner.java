@@ -2,37 +2,181 @@ package com.yucareux.tellus.worldgen.vegetation;
 
 import com.yucareux.tellus.worldgen.MountainSurfaceRules;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
  * Registry-free deterministic planning for vegetation below the mature canopy.
+ *
+ * <p>Candidate positions ("anchors") are not laid out on a lattice. Every block column has a
+ * deterministic priority hash per stratum, and a column is an anchor when its priority is the
+ * strict maximum within the stratum's spacing radius. That guarantees a minimum distance between
+ * plants of one stratum, has no periodic structure, and can be evaluated for any block without
+ * knowing its neighbours' data. The expected anchor spacing equals the legacy lattice cell of the
+ * stratum, so the tuned densities keep their meaning: a density of 1.0 still means one plant per
+ * {@code cellSize x cellSize} blocks.
+ *
+ * <p>A low-frequency openness field carves connected corridors (game trails, understory gaps)
+ * through the woody strata so dense forest stays traversable at ground level.
  */
 public final class TellusVegetationPlanner {
    private static final long ANCHOR_SALT = 0x2C1B3C6D5E7F0911L;
+   private static final long PRIORITY_SALT = 0x51E3A9C7B2D6F084L;
+   private static final long REPRESENTATIVE_SALT = 0x6A1D4F7B9C2E8035L;
+   private static final long OPENNESS_SALT = 0x3B9D7E1C5A2F8064L;
    private static final long PATCH_SALT = 0x7093A5C7E1B2D4F6L;
    private static final long STAND_SALT = 0x4D2F86A1B5C739E0L;
    private static final long VARIANT_SALT = 0x65B8E20D4A7193CFL;
+   /**
+    * Wavelength of the corridor network in blocks. Trails are a traversal affordance, so the field
+    * is defined in block space and stays walkable at every world scale.
+    */
+   static final double OPENNESS_WAVELENGTH_BLOCKS = 46.0;
+   /** Half-width of the corridor band in field units; see {@link #openness}. */
+   static final double OPENNESS_BAND = 0.075;
 
    private TellusVegetationPlanner() {
    }
 
-   public static Anchor anchorForCell(Stratum stratum, int cellX, int cellZ, long worldSeed) {
+   /**
+    * Anchors of {@code stratum} inside the inclusive block rectangle, in row-major order
+    * ({@code z} outer, {@code x} inner).
+    */
+   public static List<Anchor> anchorsIn(
+      Stratum stratum, int minX, int minZ, int maxX, int maxZ, long worldSeed
+   ) {
       Objects.requireNonNull(stratum, "stratum");
-      int cellSize = stratum.cellSize();
-      long seed = mix(
+      if (maxX < minX || maxZ < minZ) {
+         return List.of();
+      }
+      List<Anchor> anchors = new ArrayList<>();
+      for (int z = minZ; z <= maxZ; z++) {
+         for (int x = minX; x <= maxX; x++) {
+            if (isAnchor(stratum, x, z, worldSeed)) {
+               anchors.add(new Anchor(x, z, anchorSeed(stratum, x, z, worldSeed)));
+            }
+         }
+      }
+      return anchors;
+   }
+
+   /** The anchor at the given block column, or {@code null} when the column is not one. */
+   public static Anchor anchorAt(Stratum stratum, int worldX, int worldZ, long worldSeed) {
+      Objects.requireNonNull(stratum, "stratum");
+      if (!isAnchor(stratum, worldX, worldZ, worldSeed)) {
+         return null;
+      }
+      return new Anchor(worldX, worldZ, anchorSeed(stratum, worldX, worldZ, worldSeed));
+   }
+
+   /**
+    * Whether the block column's priority is the strict maximum of the stratum's spacing
+    * neighbourhood. Two anchors of one stratum are therefore never closer than the stratum's
+    * spacing radius.
+    */
+   public static boolean isAnchor(Stratum stratum, int worldX, int worldZ, long worldSeed) {
+      Objects.requireNonNull(stratum, "stratum");
+      long own = priority(stratum, worldX, worldZ, worldSeed);
+      for (int[] offset : stratum.spacingOffsets()) {
+         long other = priority(stratum, worldX + offset[0], worldZ + offset[1], worldSeed);
+         if (other > own || other == own && (offset[1] < 0 || offset[1] == 0 && offset[0] < 0)) {
+            return false;
+         }
+      }
+      return true;
+   }
+
+   /**
+    * One deterministic anchor standing in for the inclusive block rectangle, for coarse level-of-detail
+    * columns that render a single representative plant: the highest-priority anchor inside a window
+    * of the stratum's representative size placed at a hashed position in the rectangle, or
+    * {@code null} when that window holds no anchor.
+    */
+   public static Anchor representativeAnchor(
+      Stratum stratum, int minX, int minZ, int maxX, int maxZ, long worldSeed
+   ) {
+      Objects.requireNonNull(stratum, "stratum");
+      if (maxX < minX || maxZ < minZ) {
+         return null;
+      }
+      int width = maxX - minX + 1;
+      int depth = maxZ - minZ + 1;
+      int spanX = Math.min(stratum.representativeWindow(), width);
+      int spanZ = Math.min(stratum.representativeWindow(), depth);
+      long selection = mix(
+         worldSeed
+            ^ REPRESENTATIVE_SALT
+            ^ stratum.salt()
+            ^ (long)minX * 0x632BE59BD9B4E019L
+            ^ (long)minZ * 0x94D049BB133111EBL
+            ^ (long)width * 0x9E3779B97F4A7C15L
+      );
+      int startX = minX + (int)Math.floorMod(selection, (long)(width - spanX + 1));
+      int startZ = minZ + (int)Math.floorMod(selection >>> 32, (long)(depth - spanZ + 1));
+      Anchor best = null;
+      long bestPriority = Long.MIN_VALUE;
+      for (int z = startZ; z < startZ + spanZ; z++) {
+         for (int x = startX; x < startX + spanX; x++) {
+            if (!isAnchor(stratum, x, z, worldSeed)) {
+               continue;
+            }
+            long candidatePriority = priority(stratum, x, z, worldSeed);
+            if (best == null || candidatePriority > bestPriority) {
+               best = new Anchor(x, z, anchorSeed(stratum, x, z, worldSeed));
+               bestPriority = candidatePriority;
+            }
+         }
+      }
+      return best;
+   }
+
+   private static long priority(Stratum stratum, int worldX, int worldZ, long worldSeed) {
+      return mix(
+         worldSeed
+            ^ PRIORITY_SALT
+            ^ stratum.salt()
+            ^ (long)worldX * 0x632BE59BD9B4E019L
+            ^ (long)worldZ * 0x94D049BB133111EBL
+      );
+   }
+
+   private static long anchorSeed(Stratum stratum, int worldX, int worldZ, long worldSeed) {
+      return mix(
          worldSeed
             ^ ANCHOR_SALT
             ^ stratum.salt()
-            ^ (long)cellX * 0x632BE59BD9B4E019L
-            ^ (long)cellZ * 0x94D049BB133111EBL
+            ^ (long)worldX * 0x632BE59BD9B4E019L
+            ^ (long)worldZ * 0x94D049BB133111EBL
       );
-      int offsetX = (int)Math.floorMod(seed, cellSize);
-      int offsetZ = (int)Math.floorMod(seed >>> 32, cellSize);
-      return new Anchor(
-         cellX * cellSize + offsetX,
-         cellZ * cellSize + offsetZ,
-         seed
-      );
+   }
+
+   /**
+    * Openness of the understory at a block column, from 0 (undisturbed) to 1 (centre of a
+    * corridor). Corridors are the band around the zero level set of a smooth two-octave field, which
+    * makes them connected curves rather than isolated gaps.
+    */
+   public static double openness(int worldX, int worldZ, long spatialSeed) {
+      double x = worldX / OPENNESS_WAVELENGTH_BLOCKS;
+      double z = worldZ / OPENNESS_WAVELENGTH_BLOCKS;
+      double broad = valueNoise(x, z, spatialSeed ^ OPENNESS_SALT) * 2.0 - 1.0;
+      double detail = (valueNoise(x * 2.7 + 5.0, z * 2.7 - 3.0, spatialSeed ^ (OPENNESS_SALT >>> 1)) * 2.0 - 1.0)
+         * 0.35;
+      double distance = Math.abs(broad + detail);
+      if (distance >= OPENNESS_BAND) {
+         return 0.0;
+      }
+      return smoothstep(1.0 - distance / OPENNESS_BAND);
+   }
+
+   static double opennessSuppression(Stratum stratum) {
+      return switch (stratum) {
+         case SUBCANOPY -> 0.92;
+         case SHRUB -> 0.96;
+         case DEADWOOD -> 0.85;
+         case GROUND -> 0.40;
+         case HERB -> 0.30;
+      };
    }
 
    public static Placement plan(Stratum stratum, Anchor anchor, Environment environment) {
@@ -66,8 +210,10 @@ public final class TellusVegetationPlanner {
          stratum.patchScaleMeters()
       );
       density *= 0.48 + patch * 0.92;
+      density *= 1.0 - openness(anchor.worldX(), anchor.worldZ(), environment.spatialSeed())
+         * opennessSuppression(stratum);
       double roll = unitHash(anchor.seed() ^ stratum.salt(), anchor.worldX(), anchor.worldZ());
-      if (roll >= clamp01(density)) {
+      if (roll >= stratum.anchorProbability(density)) {
          return null;
       }
 
@@ -372,26 +518,99 @@ public final class TellusVegetationPlanner {
    }
 
    public enum Stratum {
-      SUBCANOPY(7, 48.0, 5, 0x13B579D2468ACE01L),
-      SHRUB(4, 22.0, 8, 0x2C4E6081A3B5D7F9L),
-      HERB(2, 12.0, 12, 0x35A7C9E1F2046B8DL),
-      GROUND(4, 18.0, 10, 0x4A6C8E103254769BL),
-      DEADWOOD(16, 72.0, 4, 0x5D7F91B3C5E7092FL);
+      SUBCANOPY(7, 16, 11, 48.0, 5, 0x13B579D2468ACE01L),
+      SHRUB(4, 4, 7, 22.0, 8, 0x2C4E6081A3B5D7F9L),
+      HERB(2, 1, 5, 12.0, 12, 0x35A7C9E1F2046B8DL),
+      GROUND(4, 2, 7, 18.0, 10, 0x4A6C8E103254769BL),
+      DEADWOOD(16, 78, 23, 72.0, 4, 0x5D7F91B3C5E7092FL);
 
       private final int cellSize;
+      private final int spacingRadiusSquared;
+      private final int representativeWindow;
       private final double patchScaleMeters;
       private final int variantCount;
       private final long salt;
+      private final int[][] spacingOffsets;
+      private final double anchorProbabilityScale;
 
-      Stratum(int cellSize, double patchScaleMeters, int variantCount, long salt) {
+      Stratum(
+         int cellSize,
+         int spacingRadiusSquared,
+         int representativeWindow,
+         double patchScaleMeters,
+         int variantCount,
+         long salt
+      ) {
          this.cellSize = cellSize;
+         this.spacingRadiusSquared = spacingRadiusSquared;
+         this.representativeWindow = representativeWindow;
          this.patchScaleMeters = patchScaleMeters;
          this.variantCount = variantCount;
          this.salt = salt;
+         this.spacingOffsets = spacingOffsets(spacingRadiusSquared);
+         // One anchor per (offsets + 1) blocks on average; density is tuned per cellSize² blocks.
+         this.anchorProbabilityScale = (double)(this.spacingOffsets.length + 1) / ((double)cellSize * cellSize);
       }
 
+      private static int[][] spacingOffsets(int radiusSquared) {
+         int radius = (int)Math.floor(Math.sqrt(radiusSquared));
+         List<int[]> offsets = new ArrayList<>();
+         for (int dz = -radius; dz <= radius; dz++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+               int distanceSquared = dx * dx + dz * dz;
+               if (distanceSquared != 0 && distanceSquared <= radiusSquared) {
+                  offsets.add(new int[]{dx, dz});
+               }
+            }
+         }
+         // Nearer neighbours first: a rejection usually comes from a nearby higher priority.
+         offsets.sort((a, b) -> Integer.compare(a[0] * a[0] + a[1] * a[1], b[0] * b[0] + b[1] * b[1]));
+         return offsets.toArray(new int[0][]);
+      }
+
+      /**
+       * Nominal spacing of the stratum in blocks. Densities are expressed as the probability of one
+       * plant per {@code cellSize x cellSize} blocks; anchors themselves are gridless.
+       */
       public int cellSize() {
          return this.cellSize;
+      }
+
+      /** Squared minimum distance between two anchors of this stratum. */
+      public int spacingRadiusSquared() {
+         return this.spacingRadiusSquared;
+      }
+
+      /** Blocks in the spacing neighbourhood including the centre; one anchor per this many on average. */
+      public int neighborhoodSize() {
+         return this.spacingOffsets.length + 1;
+      }
+
+      /** Side of the window scanned by {@link #representativeAnchor}. */
+      public int representativeWindow() {
+         return this.representativeWindow;
+      }
+
+      /**
+       * Half-width of the block neighbourhood a caller has to scan so that a plant of this stratum
+       * anchored inside it can still reach the centre column; matches the legacy 3x3-cell scan.
+       */
+      public int scanRadius() {
+         return (3 * this.cellSize - 1) / 2;
+      }
+
+      /**
+       * Probability that an anchor carries a plant, given the density tuned per
+       * {@code cellSize x cellSize} blocks. Calibrated so the expected number of plants per block is
+       * {@code min(density, 1) / cellSize²}, the same as the legacy lattice, whenever the spacing
+       * neighbourhood is no larger than the cell.
+       */
+      double anchorProbability(double density) {
+         return clamp01(clamp01(density) * this.anchorProbabilityScale);
+      }
+
+      int[][] spacingOffsets() {
+         return this.spacingOffsets;
       }
 
       double patchScaleMeters() {

@@ -505,6 +505,7 @@ public class EarthCustomizeScreen extends Screen {
       boolean enableBuildings = this.findToggleValue("enable_buildings", EarthGeneratorSettings.DEFAULT.enableBuildings());
       boolean climateBasedBuiltUpTerrain = this.findToggleValue("climate_based_built_up_terrain", EarthGeneratorSettings.DEFAULT.climateBasedBuiltUpTerrain());
       boolean customTrees = this.findToggleValue("custom_trees", EarthGeneratorSettings.DEFAULT.customTrees());
+      boolean ecologicalUnderstory = this.findToggleValue("ecological_understory", EarthGeneratorSettings.DEFAULT.ecologicalUnderstory());
       boolean hugeRedMushrooms = this.findToggleValue("huge_red_mushrooms", EarthGeneratorSettings.DEFAULT.hugeRedMushrooms());
       boolean randomBiomes = this.findToggleValue("random_biomes", EarthGeneratorSettings.DEFAULT.randomBiomes());
       double randomBiomeDensity = this.findSliderValue("random_biome_density", EarthGeneratorSettings.DEFAULT.randomBiomeDensity() * 100.0) / 100.0;
@@ -630,7 +631,8 @@ public class EarthCustomizeScreen extends Screen {
          automaticHeightScaling,
          hugeRedMushrooms,
          worldScaleAtSpawn,
-         centerWorldOnSpawn
+         centerWorldOnSpawn,
+         ecologicalUnderstory
       );
    }
 
@@ -681,6 +683,7 @@ public class EarthCustomizeScreen extends Screen {
       this.setToggleValue("thin_shell_terrain", initialSettings.thinShellTerrain());
       this.setToggleValue("climate_based_built_up_terrain", initialSettings.climateBasedBuiltUpTerrain());
       this.setToggleValue("custom_trees", initialSettings.customTrees());
+      this.setToggleValue("ecological_understory", initialSettings.ecologicalUnderstory());
       this.setToggleValue("huge_red_mushrooms", initialSettings.hugeRedMushrooms());
       this.setToggleValue("random_biomes", initialSettings.randomBiomes());
       this.setSliderValue("random_biome_density", initialSettings.randomBiomeDensity() * 100.0);
@@ -891,6 +894,7 @@ public class EarthCustomizeScreen extends Screen {
                this.categoryLink(biomesCategory),
                slider("random_biome_density", EarthGeneratorSettings.DEFAULT.randomBiomeDensity() * 100.0, 0.0, 40.0, 1.0).withDisplay(EarthCustomizeScreen::formatPercent),
                toggle("custom_trees", EarthGeneratorSettings.DEFAULT.customTrees()),
+               toggle("ecological_understory", EarthGeneratorSettings.DEFAULT.ecologicalUnderstory()),
                toggle("huge_red_mushrooms", EarthGeneratorSettings.DEFAULT.hugeRedMushrooms()),
                slider("trees_density", 100.0, 0.0, 200.0, 5.0).withDisplay(EarthCustomizeScreen::formatPercent).locked(true),
                toggle("aquatic_vegetation", true).locked(true)
