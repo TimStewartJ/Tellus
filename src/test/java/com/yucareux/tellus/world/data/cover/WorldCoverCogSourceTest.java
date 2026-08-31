@@ -93,7 +93,7 @@ class WorldCoverCogSourceTest {
       double lon = -119.5332;
       double lat = 37.7459;
       double blockX = lon * EarthProjection.blocksPerDegree(worldScale);
-      double blockZ = EarthProjection.latToBlockZ(lat, worldScale);
+      double blockZ = blockZForLatitude(lat, worldScale);
 
       var nativeBlocks = source.areaBlockKeys(blockX, blockZ, blockX, blockZ, worldScale, 1.0);
       var coarseBlocks = source.areaBlockKeys(blockX, blockZ, blockX, blockZ, worldScale, 640.0);
@@ -190,7 +190,7 @@ class WorldCoverCogSourceTest {
             lon,
             lat,
             1.0,
-            lon * EarthProjection.blocksPerDegree(worldScale),
+            blockXForLongitude(lon, worldScale),
             blockZ,
             worldScale,
             WorldCoverCogSource.LookupMode.BLOCKING
@@ -208,8 +208,8 @@ class WorldCoverCogSourceTest {
          waterLon,
          waterLat,
          1.0,
-         waterLon * EarthProjection.blocksPerDegree(worldScale),
-         EarthProjection.latToBlockZ(waterLat, worldScale),
+         blockXForLongitude(waterLon, worldScale),
+         blockZForLatitude(waterLat, worldScale),
          worldScale,
          WorldCoverCogSource.LookupMode.BLOCKING
       );
@@ -309,6 +309,16 @@ class WorldCoverCogSourceTest {
       output.position(overviewOffset);
       output.put(overviewBlock);
       return output.array();
+   }
+
+   private static double blockXForLongitude(double longitude, double worldScale) {
+      return longitude * EarthProjection.METERS_PER_DEGREE / worldScale;
+   }
+
+   private static double blockZForLatitude(double latitude, double worldScale) {
+      double earthRadiusMeters = EarthProjection.METERS_PER_DEGREE * 180.0 / Math.PI;
+      double latitudeRadians = Math.toRadians(latitude);
+      return -earthRadiusMeters * Math.log(Math.tan(Math.PI * 0.25 + latitudeRadians * 0.5)) / worldScale;
    }
 
    private static void writeIfd(
