@@ -92,7 +92,7 @@ class WorldCoverCogSourceTest {
       double worldScale = 1.0;
       double lon = -119.5332;
       double lat = 37.7459;
-      double blockX = lon * EarthProjection.blocksPerDegree(worldScale);
+      double blockX = blockXForLongitude(lon, worldScale);
       double blockZ = blockZForLatitude(lat, worldScale);
 
       var nativeBlocks = source.areaBlockKeys(blockX, blockZ, blockX, blockZ, worldScale, 1.0);
@@ -105,8 +105,8 @@ class WorldCoverCogSourceTest {
       assertEquals(64, coarseBlocks.get(0).overviewFactor());
       assertTrue(source.fullyCoversArea(blockX, blockZ, blockX, blockZ, worldScale));
 
-      double partiallyCoveredMinBlockZ = EarthProjection.latToBlockZ(-70.0, worldScale);
-      double partiallyCoveredMaxBlockZ = EarthProjection.latToBlockZ(-50.0, worldScale);
+      double partiallyCoveredMinBlockZ = blockZForLatitude(-70.0, worldScale);
+      double partiallyCoveredMaxBlockZ = blockZForLatitude(-50.0, worldScale);
       assertFalse(
          source.fullyCoversArea(blockX, partiallyCoveredMinBlockZ, blockX, partiallyCoveredMaxBlockZ, worldScale)
       );
@@ -179,7 +179,7 @@ class WorldCoverCogSourceTest {
       );
       double worldScale = 1.0;
       double lat = 38.625;
-      double blockZ = EarthProjection.latToBlockZ(lat, worldScale);
+      double blockZ = blockZForLatitude(lat, worldScale);
       Set<Integer> builtUpVisuals = new HashSet<>();
       for (int sample = 0; sample < 64; sample++) {
          double lon = -118.5 + sample / 128.0;
