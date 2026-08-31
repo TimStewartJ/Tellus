@@ -8,6 +8,7 @@ import com.yucareux.tellus.preload.TerrainPreloadPackage;
 import com.yucareux.tellus.preload.TerrainPreloadPackageRegistry;
 import com.yucareux.tellus.world.data.canopy.TellusCanopyHeightSource;
 import com.yucareux.tellus.world.data.cover.TellusLandCoverSource;
+import com.yucareux.tellus.world.data.cover.LandCoverTransition;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
 import com.yucareux.tellus.world.data.koppen.TellusKoppenSource;
 import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
@@ -10620,7 +10621,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    private static boolean shouldSampleVisualCover(double worldScale, double previewResolutionMeters, int rawCoverClass) {
       return worldScale > 0.0
          && worldScale < ESA_WORLD_COVER_RESOLUTION_METERS
-         && !isHardRawCoverClass(rawCoverClass)
+         && !LandCoverTransition.isProtectedClass(rawCoverClass)
          && effectiveCoverResolutionMeters(worldScale, previewResolutionMeters) < ESA_WORLD_COVER_RESOLUTION_METERS;
    }
 
@@ -10628,10 +10629,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       return Double.isFinite(previewResolutionMeters) && previewResolutionMeters > 0.0
          ? Math.max(worldScale, previewResolutionMeters)
          : worldScale;
-   }
-
-   private static boolean isHardRawCoverClass(int coverClass) {
-      return coverClass == ESA_NO_DATA || coverClass == ESA_WATER || coverClass == ESA_MANGROVES || coverClass == ESA_BUILT_UP;
    }
 
    public int resolveLodTerrainSurface(int worldX, int worldZ, int coverClass, double previewResolutionMeters) {

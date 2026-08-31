@@ -750,7 +750,7 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
 
       double sourceResolutionMeters = WEB_MERCATOR_CIRCUMFERENCE_METERS / ((1L << zoom) * (double)RASTER_SIZE);
       double transitionStrength = LandCoverTransition.strength(sourceResolutionMeters, effectiveResolutionMeters);
-      if (!(transitionStrength > 0.0) || LandCoverTransition.isHardClass(centerClass)) {
+      if (!(transitionStrength > 0.0) || LandCoverTransition.isProtectedClass(centerClass)) {
          return centerClass;
       }
 

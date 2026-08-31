@@ -172,7 +172,7 @@ final class WorldCoverCogSource {
 
       double sourceResolutionMeters = SOURCE_RESOLUTION_METERS * center.level().factor();
       double transitionStrength = LandCoverTransition.strength(sourceResolutionMeters, effectiveResolutionMeters);
-      if (!(transitionStrength > 0.0) || LandCoverTransition.isHardClass(centerSample.coverClass())) {
+      if (!(transitionStrength > 0.0) || LandCoverTransition.isProtectedClass(centerSample.coverClass())) {
          return centerSample;
       }
 
