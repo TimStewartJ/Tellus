@@ -497,6 +497,16 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       return this.settings;
    }
 
+   /** Operator diagnostics: the resolved water column exactly as chunk generation will use it. */
+   public WaterSurfaceResolver.WaterColumnData debugWaterColumn(int blockX, int blockZ) {
+      return this.waterResolver.resolveColumnData(blockX, blockZ);
+   }
+
+   /** Operator diagnostics: the nearest mapped watercourse centreline within a radius, or null. */
+   public WatercourseLocator.Result debugNearestWatercourse(int blockX, int blockZ, int radiusBlocks) {
+      return WatercourseLocator.nearest(TellusWorldgenSources.osmWater(), this.settings.projection(), blockX, blockZ, radiusBlocks);
+   }
+
    /**
     * Initializes the registry-backed vanilla cave sampler before parallel fill work starts.
     * Existing-world startup may call this after spawn preparation; the carver path still has an

@@ -35,6 +35,31 @@ public enum OsmWaterKind {
       return this.ocean;
    }
 
+   /**
+    * Typical bank-to-bank width, in metres, of a watercourse mapped only as a centreline of this kind.
+    * Large rivers carry riverbank polygons and never rely on this; the values describe the medium
+    * rivers, streams and man-made channels that OSM maps as a single way.
+    */
+   public double centerlineWidthMeters() {
+      return switch (this) {
+         case RIVER -> 14.0;
+         case CANAL -> 8.0;
+         case STREAM -> 3.0;
+         case DITCH, DRAIN -> 1.5;
+         default -> 1.0;
+      };
+   }
+
+   /** Widest channel a centreline may occupy, in blocks, however fine the world scale. */
+   public static final int MAX_CENTERLINE_WIDTH_BLOCKS = 24;
+
+   /** Channel width in whole blocks for a centreline of this kind at the given ground scale (never below one). */
+   public int centerlineWidthBlocks(double groundMetersPerBlock) {
+      double metersPerBlock = Double.isFinite(groundMetersPerBlock) && groundMetersPerBlock > 0.0 ? groundMetersPerBlock : 1.0;
+      int width = (int)Math.round(this.centerlineWidthMeters() / metersPerBlock);
+      return Math.max(1, Math.min(MAX_CENTERLINE_WIDTH_BLOCKS, width));
+   }
+
    public static OsmWaterKind fromTags(String classTag, String subtype) {
       OsmWaterKind kind = fromTag(subtype);
       return kind != UNKNOWN ? kind : fromTag(classTag);

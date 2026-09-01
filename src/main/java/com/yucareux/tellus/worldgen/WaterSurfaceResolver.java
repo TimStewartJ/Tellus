@@ -833,6 +833,11 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       Arrays.fill(waterfallNoCarveMask, 0, gridArea, false);
       Arrays.fill(waterBodyKeys, 0, gridArea, 0L);
       Arrays.fill(waterBodySurfaceHints, 0, gridArea, Integer.MIN_VALUE);
+      Arrays.fill(scratch.lineWaterSurface, 0, gridArea, Integer.MIN_VALUE);
+      Arrays.fill(scratch.lineWaterDepth, 0, gridArea, 0);
+      Arrays.fill(scratch.lineSillMask, 0, gridArea, false);
+      Arrays.fill(scratch.lineStamp, 0, gridArea, 0);
+      scratch.lineStampCounter = 0;
       boolean hasWater = false;
       double worldScale = this.settings.worldScale();
       TellusLandMaskSource.LandMaskSampler landMaskSampler = this.osmWaterEnabled ? null : this.landMaskSource.newSampler();
@@ -880,7 +885,8 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                flowingWaterMask,
                waterfallNoCarveMask,
                waterBodyKeys,
-               waterBodySurfaceHints
+               waterBodySurfaceHints,
+               scratch
             );
          if (osmRegionHasWater) {
             hasWater = true;
@@ -1114,11 +1120,13 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                   oceanComponentMask[cell] = true;
                } else if (waterfallNoCarveMask[cell]
                   || shouldUseDirectLineWaterCell(lineWaterMask[cell], areaWaterMask[cell])) {
-                  // A centreline outside polygon coverage follows the DEM
-                  // directly. An Overture waterfall point applies the same DEM
-                  // behavior to all mapped water in its chunk-aligned zone.
+                  // A centreline outside polygon coverage is a channel whose surface was profiled along
+                  // the line. An Overture waterfall point keeps all mapped water in its chunk-aligned
+                  // zone on the DEM so the fall forms.
                   directRiverWaterMask[cell] = true;
-                  waterSurface[cell] = directLineRiverWaterSurface(surfaceHeights[cell]);
+                  waterSurface[cell] = waterfallNoCarveMask[cell]
+                     ? directLineRiverWaterSurface(surfaceHeights[cell])
+                     : lineWaterSurfaceAt(cell, surfaceHeights, scratch.lineWaterSurface);
                } else if (componentx.riverShape || !this.shouldRejectWaterCell(componentx, surfaceHeights[cell], waterSurface[cell])) {
                   inlandWaterMask[cell] = true;
                   terraceWaterMask[cell] = componentx.riverShape && areaWaterMask[cell];
@@ -1126,7 +1134,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
             }
          }
 
-         applyDirectRiverWaterSurfaces(waterSurface, surfaceHeights, directRiverWaterMask);
+         applyDirectRiverWaterSurfaces(waterSurface, surfaceHeights, directRiverWaterMask, waterfallNoCarveMask, scratch.lineWaterSurface);
 
          boolean[] waterMask = scratch.waterMask;
          boolean[] shapedWaterMask = scratch.cascadeMask;
@@ -1258,8 +1266,13 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                   terrainSurface[indexxxxx] = surfaceHeights[indexxxxx];
                } else if (directRiverWaterMask[indexxxxx]) {
                   waterFlags[indexxxxx] = WATER_INLAND;
-                  waterSurface[indexxxxx] = directLineRiverWaterSurface(surfaceHeights[indexxxxx]);
-                  terrainSurface[indexxxxx] = directLineRiverTerrainSurface(waterSurface[indexxxxx]);
+                  if (waterfallNoCarveMask[indexxxxx]) {
+                     waterSurface[indexxxxx] = directLineRiverWaterSurface(surfaceHeights[indexxxxx]);
+                     terrainSurface[indexxxxx] = directLineRiverTerrainSurface(waterSurface[indexxxxx]);
+                  } else {
+                     waterSurface[indexxxxx] = lineWaterSurfaceAt(indexxxxx, surfaceHeights, scratch.lineWaterSurface);
+                     terrainSurface[indexxxxx] = lineTerrainSurfaceAt(indexxxxx, waterSurface[indexxxxx], scratch.lineWaterDepth);
+                  }
                } else if (inlandWaterMask[indexxxxx]) {
                waterFlags[indexxxxx] = WATER_INLAND;
                int componentId = componentIds[indexxxxx];
@@ -1296,6 +1309,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          }
 
          this.applyExperimentalOceanDepthCap(terrainSurface, waterSurface, oceanComponentMask);
+         applyChannelBankLips(terrainSurface, waterSurface, directRiverWaterMask, waterfallNoCarveMask, landMask, gridSize);
          if (this.settings.shorelineBlendCliffLimit()) {
             this.applyInlandShorelineFloorRamp(
                terrainSurface, waterSurface, inlandWaterMask, waterfallProtectionMask, waterDistanceCost, gridSize
@@ -1844,7 +1858,8 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       boolean[] flowingWaterMask,
       boolean[] waterfallNoCarveMask,
       long[] waterBodyKeys,
-      int[] waterBodySurfaceHints
+      int[] waterBodySurfaceHints,
+      WaterSurfaceResolver.RegionScratch scratch
    ) {
       int maxBlockX = gridMinX + gridSize - 1;
       int maxBlockZ = gridMinZ + gridSize - 1;
@@ -1890,13 +1905,15 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                   areaWaterMask,
                   flowingWaterMask,
                   waterBodyKeys,
-                  waterBodySurfaceHints
+                  waterBodySurfaceHints,
+                  surfaceHeights,
+                  scratch
                );
             }
          }
 
          repairFlowingWaterGaps(
-            baseWaterMask, oceanHintMask, lineWaterMask, flowingWaterMask, gridSize, RIVER_CONNECT_GAP_BLOCKS
+            baseWaterMask, oceanHintMask, lineWaterMask, flowingWaterMask, gridSize, RIVER_CONNECT_GAP_BLOCKS, scratch.lineSillMask
          );
 
          for (boolean water : baseWaterMask) {
@@ -1921,7 +1938,9 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       boolean[] areaWaterMask,
       boolean[] flowingWaterMask,
       long[] waterBodyKeys,
-      int[] waterBodySurfaceHints
+      int[] waterBodySurfaceHints,
+      int[] surfaceHeights,
+      WaterSurfaceResolver.RegionScratch scratch
    ) {
       if (feature.crossesWorldSeam(this.projection)) {
          return;
@@ -1955,38 +1974,26 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       int waterBodySurfaceHint = waterBodyKey == 0L ? Integer.MIN_VALUE : this.estimateOsmFeatureSurface(partXs, partZs);
       int gridMaxX = gridMinX + gridSize - 1;
       int gridMaxZ = gridMinZ + gridSize - 1;
-      boolean lineWaterGeometry = isLineWaterGeometry(feature);
       if (feature.lineGeometry()) {
-         for (int part = 0; part < partCount; part++) {
-            double[] xs = partXs[part];
-            double[] zs = partZs[part];
-
-            for (int point = 1; point < xs.length; point++) {
-               this.rasterizeOsmLineSegment(
-                  xs[point - 1],
-                  zs[point - 1],
-                  xs[point],
-                  zs[point],
-                  gridMinX,
-                  gridMinZ,
-                  gridMaxX,
-                  gridMaxZ,
-                  baseWaterMask,
-                  noDataMask,
-                  oceanHintMask,
-                  lineWaterMask,
-                  flowingWaterMask,
-                  feature.oceanHint(),
-                  lineWaterGeometry,
-                  feature.flowingWater(),
-                  waterBodyKey,
-                  waterBodySurfaceHint,
-                  waterBodyKeys,
-                  waterBodySurfaceHints,
-                  gridSize
-               );
-            }
-         }
+         this.rasterizeOsmLineFeature(
+            feature,
+            partXs,
+            partZs,
+            gridMinX,
+            gridMinZ,
+            gridSize,
+            baseWaterMask,
+            noDataMask,
+            oceanHintMask,
+            lineWaterMask,
+            flowingWaterMask,
+            waterBodyKey,
+            waterBodySurfaceHint,
+            waterBodyKeys,
+            waterBodySurfaceHints,
+            surfaceHeights,
+            scratch
+         );
       } else {
          int clampedMinX = Math.max(gridMinX, minWorldX);
          int clampedMaxX = Math.min(gridMaxX, maxWorldX);
@@ -2027,30 +2034,162 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       }
    }
 
-   private void rasterizeOsmLineSegment(
-      double startX,
-      double startZ,
-      double endX,
-      double endZ,
+   /**
+    * Rasterizes a mapped centreline as a channel: {@link StreamChannelProfile} sizes it from the mapped
+    * kind and the ground scale, every channel cell is tied to the nearest one-block station along the
+    * line, each station's terrain is the lowest ground across the channel and its banks, and the water
+    * surface per station follows the terrain downstream without climbing. Cells of stations left dry as
+    * sills are not water at all and are shielded from flowing-water gap repair.
+    */
+   private void rasterizeOsmLineFeature(
+      OsmWaterFeature feature,
+      double[][] partXs,
+      double[][] partZs,
       int gridMinX,
       int gridMinZ,
-      int gridMaxX,
-      int gridMaxZ,
+      int gridSize,
       boolean[] baseWaterMask,
       boolean[] noDataMask,
       boolean[] oceanHintMask,
       boolean[] lineWaterMask,
       boolean[] flowingWaterMask,
-      boolean oceanHint,
-      boolean lineWater,
-      boolean flowingWater,
       long waterBodyKey,
       int waterBodySurfaceHint,
       long[] waterBodyKeys,
       int[] waterBodySurfaceHints,
-      int gridSize
+      int[] surfaceHeights,
+      WaterSurfaceResolver.RegionScratch scratch
    ) {
-      double halfWidth = 0.5;
+      int widthBlocks = this.lineChannelWidthBlocks(feature);
+      double halfWidth = StreamChannelProfile.halfWidthBlocks(widthBlocks);
+      int depth = StreamChannelProfile.depthBlocks(widthBlocks);
+      double bankRadius = halfWidth + 1.0;
+      int gridMaxX = gridMinX + gridSize - 1;
+      int gridMaxZ = gridMinZ + gridSize - 1;
+      IntArrayList cells = scratch.lineCells;
+      IntArrayList cellStations = scratch.lineCellStations;
+      int[] lineStampGrid = scratch.lineStamp;
+      int[] lineWaterSurface = scratch.lineWaterSurface;
+      int[] lineWaterDepth = scratch.lineWaterDepth;
+      boolean[] lineSillMask = scratch.lineSillMask;
+
+      for (int part = 0; part < partXs.length; part++) {
+         double[] xs = partXs[part];
+         double[] zs = partZs[part];
+         if (xs.length < 2) {
+            continue;
+         }
+         double[] arc = new double[xs.length];
+         for (int point = 1; point < xs.length; point++) {
+            arc[point] = arc[point - 1] + Math.hypot(xs[point] - xs[point - 1], zs[point] - zs[point - 1]);
+         }
+         double length = arc[xs.length - 1];
+         if (!(length > 0.0)) {
+            continue;
+         }
+         int stationCount = (int)Math.floor(length) + 1;
+         // A stamp per part: a cell hit by several segments keeps its first (nearest-in-order) station.
+         int stamp = ++scratch.lineStampCounter;
+         cells.clear();
+         cellStations.clear();
+         for (int point = 1; point < xs.length; point++) {
+            collectLineSegmentCells(
+               xs[point - 1], zs[point - 1], xs[point], zs[point], arc[point - 1], halfWidth,
+               gridMinX, gridMinZ, gridMaxX, gridMaxZ, gridSize, stationCount, stamp, lineStampGrid, cells, cellStations
+            );
+         }
+         if (cells.isEmpty()) {
+            continue;
+         }
+
+         int[] stationMin = StreamChannelProfile.filled(stationCount, StreamChannelProfile.UNKNOWN);
+         int segment = 0;
+         for (int station = 0; station < stationCount; station++) {
+            double s = Math.min(station, length);
+            while (segment < xs.length - 2 && arc[segment + 1] < s) {
+               segment++;
+            }
+            double segmentLength = arc[segment + 1] - arc[segment];
+            double t = segmentLength > 0.0 ? Mth.clamp((s - arc[segment]) / segmentLength, 0.0, 1.0) : 0.0;
+            double px = xs[segment] + (xs[segment + 1] - xs[segment]) * t;
+            double pz = zs[segment] + (zs[segment + 1] - zs[segment]) * t;
+            stationMin[station] = stationTerrainMinimum(px, pz, bankRadius, gridMinX, gridMinZ, gridSize, surfaceHeights);
+         }
+         int[] surfaces = StreamChannelProfile.surfaces(
+            stationMin, StreamChannelProfile.LOOKBACK_STATIONS, Math.max(2, RIVER_MAX_TERRAIN_CUT)
+         );
+
+         for (int i = 0; i < cells.size(); i++) {
+            int cell = cells.getInt(i);
+            int surface = surfaces[cellStations.getInt(i)];
+            if (surface == StreamChannelProfile.DRY) {
+               lineSillMask[cell] = true;
+               continue;
+            }
+            int worldX = gridMinX + cell % gridSize;
+            int worldZ = gridMinZ + cell / gridSize;
+            this.markOsmWaterCell(
+               worldX,
+               worldZ,
+               gridMinX,
+               gridMinZ,
+               gridSize,
+               baseWaterMask,
+               noDataMask,
+               oceanHintMask,
+               lineWaterMask,
+               flowingWaterMask,
+               feature.oceanHint(),
+               true,
+               feature.flowingWater(),
+               waterBodyKey,
+               waterBodySurfaceHint,
+               waterBodyKeys,
+               waterBodySurfaceHints
+            );
+            if (surface != StreamChannelProfile.UNKNOWN) {
+               lineWaterSurface[cell] = lineWaterSurface[cell] == Integer.MIN_VALUE
+                  ? surface
+                  : Math.min(lineWaterSurface[cell], surface);
+            }
+            lineWaterDepth[cell] = Math.max(lineWaterDepth[cell], depth);
+         }
+      }
+   }
+
+   /** Channel width of a centreline feature at its latitude, in blocks. */
+   private int lineChannelWidthBlocks(OsmWaterFeature feature) {
+      double midLatitude = (feature.minLat() + feature.maxLat()) * 0.5;
+      double metersPerBlock = this.projection.groundMetersPerBlockX(this.projection.latToBlockZ(midLatitude));
+      return StreamChannelProfile.widthBlocks(feature.kind(), metersPerBlock);
+   }
+
+   /**
+    * Collects the grid cells within {@code halfWidth} of a segment plus the connected centre path (so a
+    * one-block channel never breaks at a diagonal), each with the station nearest to it along the line.
+    */
+   private static void collectLineSegmentCells(
+      double startX,
+      double startZ,
+      double endX,
+      double endZ,
+      double arcStart,
+      double halfWidth,
+      int gridMinX,
+      int gridMinZ,
+      int gridMaxX,
+      int gridMaxZ,
+      int gridSize,
+      int stationCount,
+      int stamp,
+      int[] lineStampGrid,
+      IntArrayList cells,
+      IntArrayList cellStations
+   ) {
+      double dx = endX - startX;
+      double dz = endZ - startZ;
+      double lengthSq = dx * dx + dz * dz;
+      double segmentLength = Math.sqrt(lengthSq);
       double maxDistanceSq = halfWidth * halfWidth + 1.0E-6;
       int minX = Math.max(gridMinX, Mth.floor(Math.min(startX, endX) - halfWidth - 1.0));
       int maxX = Math.min(gridMaxX, Mth.floor(Math.max(startX, endX) + halfWidth + 1.0));
@@ -2059,264 +2198,127 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
 
       for (int worldZ = minZ; worldZ <= maxZ; worldZ++) {
          for (int worldX = minX; worldX <= maxX; worldX++) {
-            double distanceSq = distanceToSegmentSq(worldX, worldZ, startX, startZ, endX, endZ);
-            if (!(distanceSq > maxDistanceSq)) {
-               this.markOsmWaterCell(
-                  worldX,
-                  worldZ,
-                  gridMinX,
-                  gridMinZ,
-                  gridSize,
-                  baseWaterMask,
-                  noDataMask,
-                  oceanHintMask,
-                  lineWaterMask,
-                  flowingWaterMask,
-                  oceanHint,
-                  lineWater,
-                  flowingWater,
-                  waterBodyKey,
-                  waterBodySurfaceHint,
-                  waterBodyKeys,
-                  waterBodySurfaceHints
+            double t = lengthSq <= 1.0E-9 ? 0.0 : Mth.clamp(((worldX - startX) * dx + (worldZ - startZ) * dz) / lengthSq, 0.0, 1.0);
+            double projX = startX + t * dx;
+            double projZ = startZ + t * dz;
+            double distX = worldX - projX;
+            double distZ = worldZ - projZ;
+            if (distX * distX + distZ * distZ <= maxDistanceSq) {
+               claimLineCell(
+                  worldX, worldZ, arcStart + t * segmentLength, gridMinX, gridMinZ, gridSize, stationCount, stamp, lineStampGrid, cells, cellStations
                );
             }
          }
       }
 
-      this.rasterizeOsmLineCenterPath(
-         startX,
-         startZ,
-         endX,
-         endZ,
-         gridMinX,
-         gridMinZ,
-         gridSize,
-         baseWaterMask,
-         noDataMask,
-         oceanHintMask,
-         lineWaterMask,
-         flowingWaterMask,
-         oceanHint,
-         lineWater,
-         flowingWater,
-         waterBodyKey,
-         waterBodySurfaceHint,
-         waterBodyKeys,
-         waterBodySurfaceHints
-      );
-   }
-
-   private void rasterizeOsmLineCenterPath(
-      double startX,
-      double startZ,
-      double endX,
-      double endZ,
-      int gridMinX,
-      int gridMinZ,
-      int gridSize,
-      boolean[] baseWaterMask,
-      boolean[] noDataMask,
-      boolean[] oceanHintMask,
-      boolean[] lineWaterMask,
-      boolean[] flowingWaterMask,
-      boolean oceanHint,
-      boolean lineWater,
-      boolean flowingWater,
-      long waterBodyKey,
-      int waterBodySurfaceHint,
-      long[] waterBodyKeys,
-      int[] waterBodySurfaceHints
-   ) {
-      double dx = endX - startX;
-      double dz = endZ - startZ;
+      // Centre path: walk the segment in half-block steps and connect consecutive blocks four-connectedly.
       int steps = Math.max(1, (int)Math.ceil(Math.max(Math.abs(dx), Math.abs(dz)) * 2.0));
       int previousX = nearestBlock(startX);
       int previousZ = nearestBlock(startZ);
-      this.markConnectedOsmLineCells(
-         previousX,
-         previousZ,
-         previousX,
-         previousZ,
-         gridMinX,
-         gridMinZ,
-         gridSize,
-         baseWaterMask,
-         noDataMask,
-         oceanHintMask,
-         lineWaterMask,
-         flowingWaterMask,
-         oceanHint,
-         lineWater,
-         flowingWater,
-         waterBodyKey,
-         waterBodySurfaceHint,
-         waterBodyKeys,
-         waterBodySurfaceHints
-      );
-
+      claimLineCellInGrid(previousX, previousZ, arcStart, gridMinX, gridMinZ, gridMaxX, gridMaxZ, gridSize, stationCount, stamp, lineStampGrid, cells, cellStations);
       for (int step = 1; step <= steps; step++) {
          double t = (double)step / steps;
+         double arc = arcStart + t * segmentLength;
          int x = nearestBlock(startX + dx * t);
          int z = nearestBlock(startZ + dz * t);
-         this.markConnectedOsmLineCells(
-            previousX,
-            previousZ,
-            x,
-            z,
-            gridMinX,
-            gridMinZ,
-            gridSize,
-            baseWaterMask,
-            noDataMask,
-            oceanHintMask,
-            lineWaterMask,
-            flowingWaterMask,
-            oceanHint,
-            lineWater,
-            flowingWater,
-            waterBodyKey,
-            waterBodySurfaceHint,
-            waterBodyKeys,
-            waterBodySurfaceHints
-         );
-         previousX = x;
-         previousZ = z;
-      }
-   }
-
-   private void markConnectedOsmLineCells(
-      int fromX,
-      int fromZ,
-      int toX,
-      int toZ,
-      int gridMinX,
-      int gridMinZ,
-      int gridSize,
-      boolean[] baseWaterMask,
-      boolean[] noDataMask,
-      boolean[] oceanHintMask,
-      boolean[] lineWaterMask,
-      boolean[] flowingWaterMask,
-      boolean oceanHint,
-      boolean lineWater,
-      boolean flowingWater,
-      long waterBodyKey,
-      int waterBodySurfaceHint,
-      long[] waterBodyKeys,
-      int[] waterBodySurfaceHints
-   ) {
-      int x = fromX;
-      int z = fromZ;
-      this.markOsmLineCell(
-         x,
-         z,
-         gridMinX,
-         gridMinZ,
-         gridSize,
-         baseWaterMask,
-         noDataMask,
-         oceanHintMask,
-         lineWaterMask,
-         flowingWaterMask,
-         oceanHint,
-         lineWater,
-         flowingWater,
-         waterBodyKey,
-         waterBodySurfaceHint,
-         waterBodyKeys,
-         waterBodySurfaceHints
-      );
-
-      while (x != toX || z != toZ) {
-         int stepX = Integer.compare(toX, x);
-         if (stepX != 0) {
-            x += stepX;
-            this.markOsmLineCell(
-               x,
-               z,
-               gridMinX,
-               gridMinZ,
-               gridSize,
-               baseWaterMask,
-               noDataMask,
-               oceanHintMask,
-               lineWaterMask,
-               flowingWaterMask,
-               oceanHint,
-               lineWater,
-               flowingWater,
-               waterBodyKey,
-               waterBodySurfaceHint,
-               waterBodyKeys,
-               waterBodySurfaceHints
-            );
-         }
-
-         int stepZ = Integer.compare(toZ, z);
-         if (stepZ != 0) {
-            z += stepZ;
-            this.markOsmLineCell(
-               x,
-               z,
-               gridMinX,
-               gridMinZ,
-               gridSize,
-               baseWaterMask,
-               noDataMask,
-               oceanHintMask,
-               lineWaterMask,
-               flowingWaterMask,
-               oceanHint,
-               lineWater,
-               flowingWater,
-               waterBodyKey,
-               waterBodySurfaceHint,
-               waterBodyKeys,
-               waterBodySurfaceHints
-            );
+         while (x != previousX || z != previousZ) {
+            int stepX = Integer.compare(x, previousX);
+            if (stepX != 0) {
+               previousX += stepX;
+               claimLineCellInGrid(previousX, previousZ, arc, gridMinX, gridMinZ, gridMaxX, gridMaxZ, gridSize, stationCount, stamp, lineStampGrid, cells, cellStations);
+            }
+            int stepZ = Integer.compare(z, previousZ);
+            if (stepZ != 0) {
+               previousZ += stepZ;
+               claimLineCellInGrid(previousX, previousZ, arc, gridMinX, gridMinZ, gridMaxX, gridMaxZ, gridSize, stationCount, stamp, lineStampGrid, cells, cellStations);
+            }
          }
       }
    }
 
-   private void markOsmLineCell(
+   private static void claimLineCellInGrid(
       int worldX,
       int worldZ,
+      double arc,
+      int gridMinX,
+      int gridMinZ,
+      int gridMaxX,
+      int gridMaxZ,
+      int gridSize,
+      int stationCount,
+      int stamp,
+      int[] lineStampGrid,
+      IntArrayList cells,
+      IntArrayList cellStations
+   ) {
+      if (worldX >= gridMinX && worldX <= gridMaxX && worldZ >= gridMinZ && worldZ <= gridMaxZ) {
+         claimLineCell(worldX, worldZ, arc, gridMinX, gridMinZ, gridSize, stationCount, stamp, lineStampGrid, cells, cellStations);
+      }
+   }
+
+   private static void claimLineCell(
+      int worldX,
+      int worldZ,
+      double arc,
       int gridMinX,
       int gridMinZ,
       int gridSize,
-      boolean[] baseWaterMask,
-      boolean[] noDataMask,
-      boolean[] oceanHintMask,
-      boolean[] lineWaterMask,
-      boolean[] flowingWaterMask,
-      boolean oceanHint,
-      boolean lineWater,
-      boolean flowingWater,
-      long waterBodyKey,
-      int waterBodySurfaceHint,
-      long[] waterBodyKeys,
-      int[] waterBodySurfaceHints
+      int stationCount,
+      int stamp,
+      int[] lineStampGrid,
+      IntArrayList cells,
+      IntArrayList cellStations
    ) {
-      this.markOsmWaterCell(
-         worldX,
-         worldZ,
-         gridMinX,
-         gridMinZ,
-         gridSize,
-         baseWaterMask,
-         noDataMask,
-         oceanHintMask,
-         lineWaterMask,
-         flowingWaterMask,
-         oceanHint,
-         lineWater,
-         flowingWater,
-         waterBodyKey,
-         waterBodySurfaceHint,
-         waterBodyKeys,
-         waterBodySurfaceHints
-      );
+      int cell = (worldZ - gridMinZ) * gridSize + (worldX - gridMinX);
+      if (lineStampGrid[cell] == stamp) {
+         return;
+      }
+      lineStampGrid[cell] = stamp;
+      cells.add(cell);
+      cellStations.add(Mth.clamp((int)Math.round(arc), 0, stationCount - 1));
+   }
+
+   /**
+    * Lowest sampled terrain within {@code radius} of a station centre (the channel plus one ring of bank
+    * cells), or {@link StreamChannelProfile#UNKNOWN} when the centre lies outside the analysed grid.
+    */
+   private static int stationTerrainMinimum(
+      double centerX, double centerZ, double radius, int gridMinX, int gridMinZ, int gridSize, int[] surfaceHeights
+   ) {
+      int centerBlockX = nearestBlock(centerX);
+      int centerBlockZ = nearestBlock(centerZ);
+      int gridMaxX = gridMinX + gridSize - 1;
+      int gridMaxZ = gridMinZ + gridSize - 1;
+      if (centerBlockX < gridMinX || centerBlockX > gridMaxX || centerBlockZ < gridMinZ || centerBlockZ > gridMaxZ) {
+         return StreamChannelProfile.UNKNOWN;
+      }
+      double radiusSq = radius * radius + 1.0E-6;
+      int reach = Mth.ceil(radius);
+      int lowest = StreamChannelProfile.UNKNOWN;
+      for (int worldZ = Math.max(gridMinZ, centerBlockZ - reach); worldZ <= Math.min(gridMaxZ, centerBlockZ + reach); worldZ++) {
+         double distZ = worldZ - centerZ;
+         for (int worldX = Math.max(gridMinX, centerBlockX - reach); worldX <= Math.min(gridMaxX, centerBlockX + reach); worldX++) {
+            double distX = worldX - centerX;
+            if (distX * distX + distZ * distZ <= radiusSq) {
+               int sample = surfaceHeights[(worldZ - gridMinZ) * gridSize + (worldX - gridMinX)];
+               if (sample < lowest) {
+                  lowest = sample;
+               }
+            }
+         }
+      }
+      return lowest;
+   }
+
+   /** Water surface of a centreline channel cell, or the raw terrain where the channel follows the DEM. */
+   private static int lineWaterSurfaceAt(int cell, int[] surfaceHeights, int[] lineWaterSurface) {
+      int surface = lineWaterSurface[cell];
+      return surface == Integer.MIN_VALUE ? directLineRiverWaterSurface(surfaceHeights[cell]) : surface;
+   }
+
+   /** Bed of a centreline channel cell below its water surface. */
+   private static int lineTerrainSurfaceAt(int cell, int waterSurface, int[] lineWaterDepth) {
+      return waterSurface == Integer.MIN_VALUE ? waterSurface : waterSurface - Math.max(1, lineWaterDepth[cell]);
    }
 
    private void markOsmWaterCell(
@@ -2392,6 +2394,22 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       int gridSize,
       int maxGap
    ) {
+      return repairFlowingWaterGaps(waterMask, oceanHintMask, lineWaterMask, flowingWaterMask, gridSize, maxGap, null);
+   }
+
+   /**
+    * Bridges short land gaps between flowing-water cells. Cells in {@code blockedMask} (channel sills that
+    * keep a pool from spilling over a hump) are never bridged through.
+    */
+   static int repairFlowingWaterGaps(
+      boolean[] waterMask,
+      boolean[] oceanHintMask,
+      boolean[] lineWaterMask,
+      boolean[] flowingWaterMask,
+      int gridSize,
+      int maxGap,
+      boolean[] blockedMask
+   ) {
       if (maxGap <= 0 || gridSize <= 0 || waterMask.length < gridSize * gridSize) {
          return 0;
       }
@@ -2416,7 +2434,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                }
 
                int target = z * gridSize + x;
-               if (oceanHintMask[target]) {
+               if (oceanHintMask[target] || blockedMask != null && blockedMask[target]) {
                   break;
                }
                if (!waterMask[target]) {
@@ -2714,13 +2732,53 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
 	   }
 
    private static void applyDirectRiverWaterSurfaces(
-      int[] waterSurface, int[] surfaceHeights, boolean[] directRiverWaterMask
+      int[] waterSurface, int[] surfaceHeights, boolean[] directRiverWaterMask, boolean[] waterfallNoCarveMask, int[] lineWaterSurface
    ) {
       for (int index = 0; index < directRiverWaterMask.length; index++) {
          if (directRiverWaterMask[index]) {
-            waterSurface[index] = directLineRiverWaterSurface(surfaceHeights[index]);
+            waterSurface[index] = waterfallNoCarveMask[index]
+               ? directLineRiverWaterSurface(surfaceHeights[index])
+               : lineWaterSurfaceAt(index, surfaceHeights, lineWaterSurface);
          }
       }
+   }
+
+   /**
+    * Land beside a profiled channel is never left below the water: the channel's cross-section minimum
+    * already includes one ring of bank cells, so this only lifts the odd rounding case by a block or two
+    * instead of letting source water spill down a bank. Waterfall zones keep their DEM.
+    */
+   static int applyChannelBankLips(
+      int[] terrainSurface,
+      int[] waterSurface,
+      boolean[] directRiverWaterMask,
+      boolean[] waterfallNoCarveMask,
+      boolean[] landMask,
+      int gridSize
+   ) {
+      int lifted = 0;
+      int gridArea = gridSize * gridSize;
+      for (int index = 0; index < gridArea; index++) {
+         if (!directRiverWaterMask[index] || waterfallNoCarveMask[index]) {
+            continue;
+         }
+         int x = index % gridSize;
+         int z = index / gridSize;
+         int surface = waterSurface[index];
+         for (int offset = 0; offset < NEIGHBOR_OFFSETS_8.length; offset += 2) {
+            int nx = x + NEIGHBOR_OFFSETS_8[offset];
+            int nz = z + NEIGHBOR_OFFSETS_8[offset + 1];
+            if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
+               continue;
+            }
+            int neighbor = nz * gridSize + nx;
+            if (landMask[neighbor] && terrainSurface[neighbor] < surface) {
+               terrainSurface[neighbor] = surface;
+               lifted++;
+            }
+         }
+      }
+      return lifted;
    }
 
 	   private void collectInlandShoreWater(IntArrayList shoreWater, boolean[] inlandWaterMask, int gridSize, int gridArea) {
@@ -3922,6 +3980,17 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       private int[] adaptiveRemainingInfluence;
       private int[] adaptiveSourceRadius;
       private boolean[] landSource;
+      /** Per cell: water surface of a centreline channel, {@link Integer#MIN_VALUE} where none. */
+      private int[] lineWaterSurface;
+      /** Per cell: bed depth of a centreline channel below its surface (0 where none). */
+      private int[] lineWaterDepth;
+      /** Per cell: a sill left dry by a centreline channel; gap repair must not bridge it. */
+      private boolean[] lineSillMask;
+      /** Per cell: the stamp of the line part that claimed the cell as channel, to dedupe segment overlaps. */
+      private int[] lineStamp;
+      private int lineStampCounter;
+      private final IntArrayList lineCells = new IntArrayList();
+      private final IntArrayList lineCellStations = new IntArrayList();
       private final IntArrayList shoreWater = new IntArrayList();
       private final IntArrayList shoreLand = new IntArrayList();
       private final IntArrayList flowCells = new IntArrayList();
@@ -3997,6 +4066,10 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
             this.adaptiveRemainingInfluence = new int[size];
             this.adaptiveSourceRadius = new int[size];
             this.landSource = new boolean[size];
+            this.lineWaterSurface = new int[size];
+            this.lineWaterDepth = new int[size];
+            this.lineSillMask = new boolean[size];
+            this.lineStamp = new int[size];
          }
       }
 

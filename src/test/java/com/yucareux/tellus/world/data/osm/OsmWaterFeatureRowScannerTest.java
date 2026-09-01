@@ -14,8 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * tests bit for bit, for both the historical global projection and a centered (spawn-projection) world.
  */
 class OsmWaterFeatureRowScannerTest {
-   private static final double LINE_HALF_WIDTH_BLOCKS = 0.5;
-
    @Test
    void lineContainsMatchesBruteForceAcrossScalesAndLatitudes() {
       Random random = new Random(0x5eed5);
@@ -186,9 +184,13 @@ class OsmWaterFeatureRowScannerTest {
       return new int[]{mismatches, hits};
    }
 
-   /** The original touchesBlockLine: every segment projected and tested, no rejects. */
+   /**
+    * The original touchesBlockLine: every segment projected and tested, no rejects. The half width is the
+    * feature's own (a river centreline is a 14-block channel at 1:1, one block at 1:30).
+    */
    private static boolean bruteForceTouchesLine(OsmWaterFeature feature, int blockX, int blockZ, WorldProjection projection) {
-      double maxDistanceSq = LINE_HALF_WIDTH_BLOCKS * LINE_HALF_WIDTH_BLOCKS + 1.0E-6;
+      double halfWidth = feature.lineHalfWidthBlocks(projection);
+      double maxDistanceSq = halfWidth * halfWidth + 1.0E-6;
       for (int part = 0; part < feature.partCount(); part++) {
          for (int point = 1; point < feature.pointCount(part); point++) {
             double startX = projection.lonToBlockX(feature.lonAt(part, point - 1));

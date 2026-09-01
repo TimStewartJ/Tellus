@@ -5,14 +5,8 @@ import java.util.Arrays;
 import java.util.Objects;
 
 public final class OsmWaterFeature {
-   private static final double LINE_HALF_WIDTH_BLOCKS = 0.5;
-   private static final double LINE_MAX_DISTANCE_SQ = LINE_HALF_WIDTH_BLOCKS * LINE_HALF_WIDTH_BLOCKS + 1.0E-6;
-   /**
-    * Anything farther than this from a segment's bounding box cannot be within
-    * {@link #LINE_MAX_DISTANCE_SQ}; the slack over sqrt(LINE_MAX_DISTANCE_SQ) absorbs projection
-    * round-off.
-    */
-   private static final double LINE_REJECT_BLOCKS = 0.51;
+   /** Slack over the half width that absorbs projection round-off in the bounding-box rejects. */
+   private static final double LINE_REJECT_SLACK_BLOCKS = 0.01;
    /**
     * Latitude rejects rely on Mercator stretching latitude (one block never spans more than
     * 1/blocksPerDegree degrees of latitude), which stops holding inside the polar clamp.
@@ -213,13 +207,30 @@ public final class OsmWaterFeature {
       }
    }
 
+   /**
+    * Half the channel width a centreline of this feature's kind occupies at this projection's scale, in
+    * blocks; a block whose centre is within this distance of the line is water. Unknown kinds keep the
+    * historical half-block line.
+    */
+   public double lineHalfWidthBlocks(WorldProjection projection) {
+      if (!this.lineGeometry) {
+         return 0.0;
+      }
+      double midLatitude = (this.minLat + this.maxLat) * 0.5;
+      double metersPerBlock = projection.groundMetersPerBlockX(projection.latToBlockZ(midLatitude));
+      return this.kind.centerlineWidthBlocks(metersPerBlock) / 2.0;
+   }
+
    private boolean touchesBlockLine(int blockX, int blockZ, WorldProjection projection) {
       double queryX = blockX;
       double queryZ = blockZ;
+      double halfWidth = this.lineHalfWidthBlocks(projection);
+      double maxDistanceSq = halfWidth * halfWidth + 1.0E-6;
+      double rejectBlocks = halfWidth + LINE_REJECT_SLACK_BLOCKS;
       double blocksPerDegree = projection.equatorialBlocksPerDegree();
       // Reject in degrees before paying for any projection: one block is exactly
       // 1/blocksPerDegree degrees of longitude and at most that much latitude.
-      double rejectDegrees = LINE_REJECT_BLOCKS / blocksPerDegree;
+      double rejectDegrees = rejectBlocks / blocksPerDegree;
       double lon = projection.blockXToLon(blockX);
       if (lon < this.minLon - rejectDegrees || lon > this.maxLon + rejectDegrees) {
          return false;
@@ -249,7 +260,7 @@ public final class OsmWaterFeature {
             double startZ = projection.latToBlockZ(latA);
             double endX = projection.lonToBlockX(lonB);
             double endZ = projection.latToBlockZ(latB);
-            if (distanceToSegmentSq(queryX, queryZ, startX, startZ, endX, endZ) <= LINE_MAX_DISTANCE_SQ) {
+            if (distanceToSegmentSq(queryX, queryZ, startX, startZ, endX, endZ) <= maxDistanceSq) {
                return true;
             }
          }
@@ -318,12 +329,17 @@ public final class OsmWaterFeature {
       private int crossingCount;
       private boolean rowDry = true;
       private double rowZ;
+      private final double lineMaxDistanceSq;
+      private final double lineRejectBlocks;
 
       private RowScanner(OsmWaterFeature feature, WorldProjection projection) {
          this.feature = feature;
          this.projection = projection;
          this.blocksPerDegree = projection.equatorialBlocksPerDegree();
          this.alwaysDry = !(projection.worldScale() > 0.0) || feature.pointGeometry || feature.crossesWorldSeam(projection);
+         double halfWidth = feature.lineGeometry ? feature.lineHalfWidthBlocks(projection) : 0.0;
+         this.lineMaxDistanceSq = halfWidth * halfWidth + 1.0E-6;
+         this.lineRejectBlocks = halfWidth + LINE_REJECT_SLACK_BLOCKS;
          if (!this.alwaysDry && feature.lineGeometry) {
             int segmentCount = 0;
             for (double[] part : feature.longitudes) {
@@ -406,7 +422,7 @@ public final class OsmWaterFeature {
       private void beginLineRow(int blockZ) {
          double queryZ = blockZ;
          this.rowZ = queryZ;
-         if (queryZ < this.minBlockZ - LINE_REJECT_BLOCKS || queryZ > this.maxBlockZ + LINE_REJECT_BLOCKS) {
+         if (queryZ < this.minBlockZ - this.lineRejectBlocks || queryZ > this.maxBlockZ + this.lineRejectBlocks) {
             this.rowDry = true;
             return;
          }
@@ -414,7 +430,7 @@ public final class OsmWaterFeature {
          for (int segment = 0; segment < this.segmentStartZ.length; segment++) {
             double startZ = this.segmentStartZ[segment];
             double endZ = this.segmentEndZ[segment];
-            if (queryZ >= Math.min(startZ, endZ) - LINE_REJECT_BLOCKS && queryZ <= Math.max(startZ, endZ) + LINE_REJECT_BLOCKS) {
+            if (queryZ >= Math.min(startZ, endZ) - this.lineRejectBlocks && queryZ <= Math.max(startZ, endZ) + this.lineRejectBlocks) {
                this.activeSegments[count++] = segment;
             }
          }
@@ -424,20 +440,20 @@ public final class OsmWaterFeature {
 
       private boolean lineContains(int blockX) {
          double queryX = blockX;
-         if (queryX < this.minBlockX - LINE_REJECT_BLOCKS || queryX > this.maxBlockX + LINE_REJECT_BLOCKS) {
+         if (queryX < this.minBlockX - this.lineRejectBlocks || queryX > this.maxBlockX + this.lineRejectBlocks) {
             return false;
          }
          for (int i = 0; i < this.activeCount; i++) {
             int segment = this.activeSegments[i];
             double startX = this.segmentStartX[segment];
             double endX = this.segmentEndX[segment];
-            if (queryX < Math.min(startX, endX) - LINE_REJECT_BLOCKS || queryX > Math.max(startX, endX) + LINE_REJECT_BLOCKS) {
+            if (queryX < Math.min(startX, endX) - this.lineRejectBlocks || queryX > Math.max(startX, endX) + this.lineRejectBlocks) {
                continue;
             }
             if (distanceToSegmentSq(
                   queryX, this.rowZ, startX, this.segmentStartZ[segment], endX, this.segmentEndZ[segment]
                )
-               <= LINE_MAX_DISTANCE_SQ) {
+               <= this.lineMaxDistanceSq) {
                return true;
             }
          }

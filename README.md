@@ -83,6 +83,8 @@ Water-region builds sample elevation row by row with the tile raster and Mercato
 - `/tellus weather`: Shows local Tellus weather and time information at your current position.
 - `/tellus config weather enable_realtime_time <true|false>`: Overrides the real-time time setting on the server (requires gamemaster permissions).
 - `/tellus config weather enable_realtime_weather <true|false>`: Overrides the real-time weather setting on the server (requires gamemaster permissions).
+- `/tellus water nearest [x z] [radius]`: Operator diagnostics. Reports the nearest mapped watercourse centreline (kind, Overture id, nearest point, channel width, downstream heading and the next vertices) within `radius` blocks (default 512) of the source or the given column. Reads Overture tiles blocking; meant for debugging and automated playtests.
+- `/tellus water column <x> <z>`: Operator diagnostics. Reports the water column Tellus resolves for a block exactly as generation places it (land surface, or inland/ocean water surface, bed and depth).
 
 More commands will be added over time.
 
@@ -190,6 +192,7 @@ This section lets you toggle vanilla structures and world features on or off, su
 - Overture Maps base-theme water features provide inland-water geometry and definitive `ocean`/`sea` coastline polygons.
 - Ocean classification does not use Mapterhorn elevation, land-mask state, or an elevation-at-or-below-zero heuristic.
 - Complete empty vector tiles are valid dry coverage. Pending or failed coverage is kept non-cacheable so temporary source failures cannot become permanent dry seams.
+- Watercourses mapped only as a centreline (rivers without riverbank polygons, streams, canals, ditches, drains) generate as channels: the width comes from the mapped kind and the ground scale (a stream is three blocks at 1:1, a river fourteen, everything one block at 1:30), the bed sits one to four blocks below the water, and the water surface is profiled along the line so it never climbs through DEM noise, every column across the channel shares one height and no bank is lower than the water beside it. Where the mapped line rises more than the river cut budget (`-Dtellus.water.riverMaxTerrainCut`, default 6) through a hump, a dry sill holds the upstream pool back and the water resumes on the crest. Lines are followed in their mapped (OSM downstream) direction.
 - https://docs.overturemaps.org/attribution/
 
 ### Koppen-Geiger climate classification

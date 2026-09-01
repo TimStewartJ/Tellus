@@ -27,6 +27,8 @@ import com.yucareux.tellus.world.realtime.WeatherTemperaturePolicy;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.ExperimentalHeightSupport;
+import com.yucareux.tellus.worldgen.WaterSurfaceResolver;
+import com.yucareux.tellus.worldgen.WatercourseLocator;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -100,6 +102,63 @@ public class TellusCommon {
                                  .requires(TellusMinecraftCompat::hasGamemasterPermission))
                               .executes(context -> openGeoTpMap((CommandSourceStack)context.getSource()))
                         ))
+                     .then(
+                        (Commands.literal("water")
+                              .requires(TellusMinecraftCompat::hasGamemasterPermission))
+                           .then(
+                              (Commands.literal("nearest")
+                                    .executes(context -> showNearestWatercourse((CommandSourceStack)context.getSource(), null, null, 512)))
+                                 .then(
+                                    Commands.argument("radius", Objects.requireNonNull(IntegerArgumentType.integer(1, 4096), "radiusArgument"))
+                                       .executes(
+                                          context -> showNearestWatercourse(
+                                             (CommandSourceStack)context.getSource(), null, null, IntegerArgumentType.getInteger(context, "radius")
+                                          )
+                                       )
+                                 )
+                                 .then(
+                                    Commands.argument("x", Objects.requireNonNull(IntegerArgumentType.integer(), "xArgument"))
+                                       .then(
+                                          Commands.argument("z", Objects.requireNonNull(IntegerArgumentType.integer(), "zArgument"))
+                                             .executes(
+                                                context -> showNearestWatercourse(
+                                                   (CommandSourceStack)context.getSource(),
+                                                   IntegerArgumentType.getInteger(context, "x"),
+                                                   IntegerArgumentType.getInteger(context, "z"),
+                                                   512
+                                                )
+                                             )
+                                             .then(
+                                                Commands.argument("radius", Objects.requireNonNull(IntegerArgumentType.integer(1, 4096), "radiusArgument"))
+                                                   .executes(
+                                                      context -> showNearestWatercourse(
+                                                         (CommandSourceStack)context.getSource(),
+                                                         IntegerArgumentType.getInteger(context, "x"),
+                                                         IntegerArgumentType.getInteger(context, "z"),
+                                                         IntegerArgumentType.getInteger(context, "radius")
+                                                      )
+                                                   )
+                                             )
+                                       )
+                                 )
+                           )
+                           .then(
+                              Commands.literal("column")
+                                 .then(
+                                    Commands.argument("x", Objects.requireNonNull(IntegerArgumentType.integer(), "xArgument"))
+                                       .then(
+                                          Commands.argument("z", Objects.requireNonNull(IntegerArgumentType.integer(), "zArgument"))
+                                             .executes(
+                                                context -> showWaterColumn(
+                                                   (CommandSourceStack)context.getSource(),
+                                                   IntegerArgumentType.getInteger(context, "x"),
+                                                   IntegerArgumentType.getInteger(context, "z")
+                                                )
+                                             )
+                                       )
+                                 )
+                           )
+                     )
                      .then(
                         (Commands.literal("weather")
                               .executes(context -> showTellusWeather((CommandSourceStack)context.getSource())))
@@ -273,6 +332,68 @@ public class TellusCommon {
             return 0;
          }
       }
+   }
+
+   private static EarthChunkGenerator earthGeneratorFor(CommandSourceStack source) {
+      return source.getLevel().getChunkSource().getGenerator() instanceof EarthChunkGenerator earthGenerator ? earthGenerator : null;
+   }
+
+   /**
+    * Operator diagnostics for mapped watercourses: the nearest centreline (kind, width, downstream heading
+    * and vertices) around the source or an explicit column. Reads Overture tiles blocking; not for players.
+    */
+   private static int showNearestWatercourse(CommandSourceStack source, Integer x, Integer z, int radius) {
+      EarthChunkGenerator earthGenerator = earthGeneratorFor(source);
+      if (earthGenerator == null) {
+         source.sendFailure(Component.literal("This command only works in a Tellus world."));
+         return 0;
+      }
+      int blockX = x != null ? x : Mth.floor(source.getPosition().x);
+      int blockZ = z != null ? z : Mth.floor(source.getPosition().z);
+      WatercourseLocator.Result result;
+      try {
+         result = earthGenerator.debugNearestWatercourse(blockX, blockZ, radius);
+      } catch (RuntimeException error) {
+         source.sendFailure(Component.literal("Watercourse lookup failed: " + error.getMessage()));
+         return 0;
+      }
+      if (result == null) {
+         source.sendFailure(Component.literal("No mapped watercourse centreline within " + radius + " blocks of " + blockX + ", " + blockZ + "."));
+         return 0;
+      }
+      String text = result.describe();
+      source.sendSuccess(() -> Component.literal(text), false);
+      return 1;
+   }
+
+   /** Operator diagnostics: the water column Tellus resolves for a block, as generation will place it. */
+   private static int showWaterColumn(CommandSourceStack source, int blockX, int blockZ) {
+      EarthChunkGenerator earthGenerator = earthGeneratorFor(source);
+      if (earthGenerator == null) {
+         source.sendFailure(Component.literal("This command only works in a Tellus world."));
+         return 0;
+      }
+      WaterSurfaceResolver.WaterColumnData column;
+      try {
+         column = earthGenerator.debugWaterColumn(blockX, blockZ);
+      } catch (RuntimeException error) {
+         source.sendFailure(Component.literal("Water column lookup failed: " + error.getMessage()));
+         return 0;
+      }
+      String text = column.hasWater()
+         ? String.format(
+            Locale.ROOT,
+            "Column (%d, %d): %s water, surface y=%d, bed y=%d, depth %d",
+            blockX,
+            blockZ,
+            column.isOcean() ? "ocean" : "inland",
+            column.waterSurface(),
+            column.terrainSurface(),
+            column.waterSurface() - column.terrainSurface()
+         )
+         : String.format(Locale.ROOT, "Column (%d, %d): land, surface y=%d", blockX, blockZ, column.terrainSurface());
+      source.sendSuccess(() -> Component.literal(text), false);
+      return 1;
    }
 
    private static int showTellusWeather(CommandSourceStack source) {

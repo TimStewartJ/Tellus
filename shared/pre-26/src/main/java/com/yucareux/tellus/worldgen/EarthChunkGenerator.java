@@ -483,6 +483,16 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return this.settings;
    }
 
+   /** Operator diagnostics: the resolved water column exactly as chunk generation will use it. */
+   public WaterSurfaceResolver.WaterColumnData debugWaterColumn(int blockX, int blockZ) {
+      return this.waterResolver.resolveColumnData(blockX, blockZ);
+   }
+
+   /** Operator diagnostics: the nearest mapped watercourse centreline within a radius, or null. */
+   public WatercourseLocator.Result debugNearestWatercourse(int blockX, int blockZ, int radiusBlocks) {
+      return WatercourseLocator.nearest(TellusWorldgenSources.osmWater(), this.settings.projection(), blockX, blockZ, radiusBlocks);
+   }
+
    public void initializeParallelCarverPreparation(RegistryAccess registryAccess) {
       if (PARALLEL_CARVER_PREPARATION
          && PREPARED_CAVE_PLAN_CACHE_BYTES > 0L
