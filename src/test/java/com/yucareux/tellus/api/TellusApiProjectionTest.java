@@ -7,8 +7,8 @@ import org.junit.jupiter.api.Test;
 
 class TellusApiProjectionTest {
    @Test
-   void companionApiVersionIncludesChunkDetailReadiness() throws Exception {
-      assertEquals(3, TellusApi.API_VERSION);
+   void apiVersionIncludesChunkDetailContributors() throws Exception {
+      assertEquals(4, TellusApi.API_VERSION);
       assertEquals(
          boolean.class,
          TellusApi.class
@@ -17,6 +17,16 @@ class TellusApiProjectionTest {
                net.minecraft.server.level.ServerLevel.class,
                int.class,
                int.class
+            )
+            .getReturnType()
+      );
+      assertEquals(
+         com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry.Registration.class,
+         TellusApi.class
+            .getMethod(
+              "registerChunkDetailContributor",
+              String.class,
+              com.yucareux.tellus.api.detail.ChunkDetailContributor.class
             )
             .getReturnType()
       );

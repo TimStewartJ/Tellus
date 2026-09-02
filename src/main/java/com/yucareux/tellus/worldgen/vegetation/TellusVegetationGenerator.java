@@ -253,14 +253,18 @@ public final class TellusVegetationGenerator {
          double angle = Math.PI * 2.0 * stem / stems + unitHash(placement.seed(), stem, 1) * 0.55;
          int x = ground.getX() + (int)Math.round(Math.cos(angle));
          int z = ground.getZ() + (int)Math.round(Math.sin(angle));
+         int stemGroundY = localVegetationGround(level, x, z, ground.getY());
+         if (stemGroundY == Integer.MIN_VALUE) {
+            continue;
+         }
          int height = 2 + (int)Math.floor(unitHash(placement.seed(), stem, 2) * 2.0);
          for (int y = 1; y <= height; y++) {
-            placed |= setLog(level, new BlockPos(x, ground.getY() + y, z), axis(log, Direction.Axis.Y));
+            placed |= setLog(level, new BlockPos(x, stemGroundY + y, z), axis(log, Direction.Axis.Y));
          }
          placeLeafEllipsoid(
             level,
             x,
-            ground.getY() + height,
+            stemGroundY + height,
             z,
             Math.max(1, placement.size() - 1),
             1,
@@ -270,6 +274,40 @@ public final class TellusVegetationGenerator {
          );
       }
       return placed;
+   }
+
+   private static int localVegetationGround(
+      WorldGenLevel level, int worldX, int worldZ, int referenceY
+   ) {
+      int topY = Math.min(
+         level.getHeight(
+            net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+            worldX,
+            worldZ
+         ) - 1,
+         referenceY + MAX_SURFACE_RISE
+      );
+      int minimumY = Math.max(
+         MinecraftVersionCompat.minBuildHeight(level),
+         referenceY - MAX_SURFACE_DROP
+      );
+      BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+      for (int y = topY; y >= minimumY; y--) {
+         cursor.set(worldX, y, worldZ);
+         BlockState state = level.getBlockState(cursor);
+         if (state.isAir()
+            || state.is(BlockTags.LOGS)
+            || state.is(BlockTags.LEAVES)
+            || state.is(BlockTags.REPLACEABLE_BY_TREES)) {
+            continue;
+         }
+         if (!supportsVegetation(state)) {
+            return Integer.MIN_VALUE;
+         }
+         cursor.setY(y + 1);
+         return level.getFluidState(cursor).isEmpty() ? y : Integer.MIN_VALUE;
+      }
+      return Integer.MIN_VALUE;
    }
 
    private static boolean placeWindShrub(

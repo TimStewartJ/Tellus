@@ -4,6 +4,9 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.mojang.datafixers.util.Pair;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
+import com.yucareux.tellus.api.detail.ChunkDetailDomain;
+import com.yucareux.tellus.api.detail.ChunkDetailPlanContext;
 import com.yucareux.tellus.preload.TerrainPreloadPackage;
 import com.yucareux.tellus.preload.TerrainPreloadPackageRegistry;
 import com.yucareux.tellus.world.data.canopy.TellusCanopyHeightSource;
@@ -282,6 +285,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private static final boolean CHUNK_DETAIL_LEGACY_BLOCKING = Boolean.parseBoolean(System.getProperty("tellus.chunkdetail.legacyBlocking", "true"));
    private static final int CHUNK_DETAIL_PREFETCH_RADIUS = intProperty("tellus.chunkdetail.prefetchRadius", 1, 0, 32);
    private static final int CHUNK_DETAIL_APPLY_BUDGET_PER_TICK = intProperty("tellus.chunkdetail.applyBudgetPerTick", 2, 0, 64);
+   private static final long CHUNK_DETAIL_PENDING_TIMEOUT_NANOS = TimeUnit.MINUTES.toNanos(5L);
+   private static final long TERRAIN_REFINEMENT_CONTRIBUTOR_TIMEOUT_NANOS =
+      TimeUnit.SECONDS.toNanos(15L);
    private static final int PREPARED_CHUNK_STATE_REAP_INTERVAL_TICKS = intProperty(
       "tellus.chunkgen.preparedChunkStateReapIntervalTicks", 200, 20, 72000
    );
@@ -334,6 +340,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private static final int CHUNK_AREA = 256;
    private static final int TREE_MAX_SURFACE_DROP = 2;
    private static final int TREE_MAX_SURFACE_RISE = 3;
+   private static final int CONTRIBUTOR_TREE_ROOT_RADIUS = 8;
    private static final int VEGETATION_WATER_DISTANCE = 8;
    private static final int VEGETATION_EDGE_SAMPLE_DISTANCE = 8;
    private static final int SHORELINE_BANK_RAMP_MAX_SLOPE = 1;
@@ -402,6 +409,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private final int height;
    private final WaterSurfaceResolver waterResolver;
    private final TerrainPreloadPackageRegistry.SettingsView preloadedTerrain;
+   private final ChunkDetailContributorRegistry.Snapshot chunkDetailContributors;
    private volatile TellusVanillaCarverRunner tellusCarverRunner;
    private final ThreadLocal<EarthChunkGenerator.WaterChunkCache> waterChunkCache = ThreadLocal.withInitial(EarthChunkGenerator.WaterChunkCache::new);
    private final ThreadLocal<EarthChunkGenerator.OsmOverlayScratch> osmOverlayScratch = ThreadLocal.withInitial(EarthChunkGenerator.OsmOverlayScratch::new);
@@ -449,6 +457,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       this.height = limits.height();
       this.waterResolver = TellusWorldgenSources.waterResolver(settings);
       this.preloadedTerrain = TerrainPreloadPackageRegistry.instance().viewFor(settings);
+      this.chunkDetailContributors = ChunkDetailContributorRegistry.global().snapshot();
       int spawnBlockX = Mth.floor(this.projection.lonToBlockX(settings.spawnLongitude()));
       int spawnBlockZ = Mth.floor(this.projection.latToBlockZ(settings.spawnLatitude()));
       this.configuredSpawnChunkX = Math.floorDiv(spawnBlockX, 16);
@@ -647,7 +656,20 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             Tellus.LOGGER.debug("Invalid integer system property {}='{}', using {}", new Object[]{key, value, defaultValue});
             return defaultValue;
          }
+
       }
+   }
+
+   private static int contributorRetryDelayTicks(
+      long createdNs, int requestedTicks
+   ) {
+      long ageSeconds = Math.max(
+         0L, TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - createdNs)
+      );
+      int exponent = ageSeconds <= 0L
+         ? 0
+         : Math.min(6, 64 - Long.numberOfLeadingZeros(ageSeconds));
+      return Math.max(requestedTicks, Math.min(600, 10 << exponent));
    }
 
    private static EarthChunkGenerator.SurfaceMode surfaceModeProperty(String key, EarthChunkGenerator.SurfaceMode defaultValue) {
@@ -665,7 +687,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    private boolean usesDeferredChunkDetails() {
-      return this.shouldDeferRoadDetails()
+      return !this.chunkDetailContributors.isEmpty()
+         || this.chunkDetailManager.hasWork()
+         || this.shouldDeferRoadDetails()
          || this.shouldDeferBuildingDetails()
          || this.shouldDeferDetailedWater()
          || this.shouldDeferTrees()
@@ -682,7 +706,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    private boolean hasDeferredApplyWork() {
-      return this.shouldDeferRoadDetails()
+      return !this.chunkDetailContributors.isEmpty()
+         || this.chunkDetailManager.hasWork()
+         || this.shouldDeferRoadDetails()
          || this.shouldDeferBuildingDetails()
          || this.shouldDeferTrees()
          || this.shouldDeferEcologicalVegetation();
@@ -719,7 +745,16 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    public void discardPreparedChunkState(ChunkPos pos) {
+      this.chunkDetailManager.cancel(pos);
+      this.terrainRefinementManager.cancel(pos);
+      this.terrainGenerationStamps.remove(ChunkPos.asLong(pos.x, pos.z));
       this.discardPreparedChunkState(ChunkPos.asLong(pos.x, pos.z));
+   }
+
+   public void shutdownChunkDetailWork() {
+      this.chunkDetailManager.clear();
+      this.terrainRefinementManager.clear();
+      this.terrainGenerationStamps.clear();
    }
 
    private void discardPreparedChunkState(long chunkKey) {
@@ -787,7 +822,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    private boolean shouldDeferTrees() {
-      return !CHUNK_DETAIL_LEGACY_BLOCKING && CHUNK_DETAIL_DEFER_TREES;
+      return this.chunkDetailContributors.uses(ChunkDetailDomain.MATURE_TREE_EXCLUSION)
+         || !CHUNK_DETAIL_LEGACY_BLOCKING && CHUNK_DETAIL_DEFER_TREES;
    }
 
    /** Understory strata grow only when both Ecological Trees &amp; Vegetation and the understory toggle are on. */
@@ -797,7 +833,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
    private boolean shouldDeferEcologicalVegetation() {
       return this.ecologicalUnderstoryEnabled()
-         && (this.shouldDeferTrees()
+         && (this.chunkDetailContributors.uses(ChunkDetailDomain.UNDERSTORY_EXCLUSION)
+            || this.shouldDeferTrees()
             || this.shouldDeferRoadDetails()
             || this.shouldDeferBuildingDetails()
             || this.shouldDeferDetailedWater());
@@ -5259,7 +5296,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    private List<EarthChunkGenerator.PreparedTreePlacement> prepareDeferredTreePlacements(
-      EarthChunkGenerator.ChunkGenerationContext context, EarthChunkGenerator.PreparedChunkBuildings preparedBuildings
+      EarthChunkGenerator.ChunkGenerationContext context,
+      EarthChunkGenerator.PreparedChunkBuildings preparedBuildings,
+      ChunkDetailContributors.Preparation contributors
    ) {
       ChunkPos pos = context.pos();
       int chunkMinX = pos.getMinBlockX();
@@ -5288,6 +5327,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             int localX = worldX - chunkMinX;
             int localZ = worldZ - chunkMinZ;
             if (preparedBuildings != null && preparedBuildings.suppressesTrees(localX, localZ)) {
+               continue;
+            }
+            if (contributors.suppressesTree(worldX, worldZ, CONTRIBUTOR_TREE_ROOT_RADIUS)) {
                continue;
             }
 
@@ -5421,6 +5463,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          context.biomeCache(),
          context.fallbackBiome(),
          buildings,
+         null,
          worldSeed
       );
    }
@@ -5428,6 +5471,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    private List<TellusVegetationPlanner.Placement> prepareEcologicalVegetation(
       EarthChunkGenerator.ChunkGenerationContext context,
       EarthChunkGenerator.PreparedChunkBuildings buildings,
+      ChunkDetailContributors.Preparation contributors,
       long worldSeed
    ) {
       return this.prepareEcologicalVegetation(
@@ -5438,6 +5482,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          context.biomeCache(),
          context.fallbackBiome(),
          buildings,
+         contributors,
          worldSeed
       );
    }
@@ -5450,6 +5495,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       Holder<Biome>[] biomeCache,
       Holder<Biome> fallbackBiome,
       EarthChunkGenerator.PreparedChunkBuildings buildings,
+      ChunkDetailContributors.Preparation contributors,
       long worldSeed
    ) {
       if (!this.ecologicalUnderstoryEnabled()) {
@@ -5461,7 +5507,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       Map<Long, Integer> externalCover = new HashMap<>();
       Map<Long, TellusCanopyHeightSource.CanopySample> canopySamples = new HashMap<>();
       Map<Long, ResolveEcoregion> ecoregions = new HashMap<>();
-      return TellusVegetationGenerator.planChunk(
+      List<TellusVegetationPlanner.Placement> placements = TellusVegetationGenerator.planChunk(
          chunkMinX,
          chunkMinZ,
          worldSeed,
@@ -5551,7 +5597,11 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                || biome.is(Biomes.FROZEN_PEAKS);
             boolean placeable = !waterFlags[index]
                && terrainSurfaces[index] >= this.seaLevel
-               && (buildings == null || !buildings.suppressesTrees(localX, localZ));
+               && (buildings == null || !buildings.suppressesTrees(localX, localZ))
+               && (contributors == null
+                  || !contributors.suppressesUnderstory(
+                     worldX, worldZ, contributorUnderstoryRadius(stratum)
+                  ));
             return new TellusVegetationPlanner.Environment(
                coverClass,
                community,
@@ -5570,6 +5620,16 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             );
          }
       );
+      return placements;
+   }
+
+   private static int contributorUnderstoryRadius(TellusVegetationPlanner.Stratum stratum) {
+      return switch (stratum) {
+         case SUBCANOPY -> 4;
+         case SHRUB -> 3;
+         case DEADWOOD -> 3;
+         case HERB, GROUND -> 0;
+      };
    }
 
    private double vegetationEdgeStrength(
@@ -7835,12 +7895,24 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       if (this.hasDeferredApplyWork()) {
          EarthChunkGenerator.PreparedChunkDetail detail = this.chunkDetailManager.claimReady(chunk.getPos());
          if (detail != null) {
-            this.applyPreparedChunkDetail(level, chunk, detail);
+            try {
+               this.applyPreparedChunkDetail(level, chunk, detail);
+               this.chunkDetailManager.finishApply(chunk.getPos(), detail, null);
+            } catch (RuntimeException error) {
+               this.chunkDetailManager.finishApply(chunk.getPos(), detail, error);
+               throw error;
+            }
          }
       }
    }
 
    private EarthChunkGenerator.PreparedChunkDetail prepareDeferredChunkDetail(EarthChunkGenerator.ChunkGenerationContext context) {
+      return this.prepareDeferredChunkDetail(context, false);
+   }
+
+   private EarthChunkGenerator.PreparedChunkDetail prepareDeferredChunkDetail(
+      EarthChunkGenerator.ChunkGenerationContext context, boolean failOpenPendingContributors
+   ) {
       EarthChunkGenerator.PreparedChunkDetail detail = this.buildPreparedChunkDetail(
          context,
          this.shouldDeferBuildingDetails(),
@@ -7848,7 +7920,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          this.shouldDeferRoadDetails(),
          this.shouldDeferTrees(),
          this.shouldDeferEcologicalVegetation(),
-         OsmQueryMode.NON_BLOCKING
+         OsmQueryMode.NON_BLOCKING,
+         failOpenPendingContributors
       );
       if (this.shouldDeferDetailedWater()) {
          this.waterResolver.prefetchRegionsForChunk(context.pos().x, context.pos().z, Math.max(1, CHUNK_DETAIL_PREFETCH_RADIUS));
@@ -7864,8 +7937,13 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       boolean prepareRoads,
       boolean prepareTrees,
       boolean prepareVegetation,
-      OsmQueryMode queryMode
+      OsmQueryMode queryMode,
+      boolean failOpenPendingContributors
    ) {
+      ChunkDetailContributors.Preparation contributorPreparation =
+         this.prepareChunkDetailContributors(
+            context, failOpenPendingContributors
+         );
       EarthChunkGenerator.PreparedChunkBuildings preparedBuildings = prepareBuildings
          ? this.buildChunkBuildings(
             context.pos(),
@@ -7882,13 +7960,15 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       List<TellusVegetationPlanner.Placement> ecologicalVegetation = List.of();
       if (prepareTrees) {
          long treePrepStartNs = beginFullChunkProfiling();
-         treePlacements = this.prepareDeferredTreePlacements(context, preparedBuildings);
+         treePlacements = this.prepareDeferredTreePlacements(
+            context, preparedBuildings, contributorPreparation
+         );
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_TREE_PREP, treePrepStartNs);
       }
       if (prepareVegetation) {
          long vegetationPrepStartNs = beginFullChunkProfiling();
          ecologicalVegetation = this.prepareEcologicalVegetation(
-            context, preparedBuildings, this.worldSeed
+            context, preparedBuildings, contributorPreparation, this.worldSeed
          );
          endFullChunkProfiling(
             EarthChunkGenerator.FullChunkPhase.FILL_DETAIL_VEGETATION_PREP,
@@ -7901,8 +7981,39 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          preparedBuildings,
          shouldPlaceBuildings,
          roadQuery,
+         contributorPreparation,
          treePlacements,
          ecologicalVegetation
+      );
+   }
+
+   private ChunkDetailContributors.Preparation prepareChunkDetailContributors(
+      EarthChunkGenerator.ChunkGenerationContext context,
+      boolean failOpenPendingContributors
+   ) {
+      return ChunkDetailContributors.prepare(
+         this.chunkDetailContributors,
+         this.chunkDetailPlanContext(context),
+         failOpenPendingContributors
+      );
+   }
+
+   private ChunkDetailPlanContext chunkDetailPlanContext(
+      EarthChunkGenerator.ChunkGenerationContext context
+   ) {
+      return new ChunkDetailPlanContext(
+         context.pos().x,
+         context.pos().z,
+         context.minY(),
+         context.maxY(),
+         this.worldSeed,
+         context.generationStamp(),
+         this.projection,
+         this.settings.enableRoads(),
+         context.terrainSurfaces(),
+         context.waterSurfaces(),
+         context.waterFlags(),
+         context.coverClasses()
       );
    }
 
@@ -7914,7 +8025,33 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return this.fetchOsmRoadsForAreaDetailed(chunkMinX, chunkMinZ, chunkMaxX, chunkMaxZ, OSM_ROAD_QUERY_MARGIN, queryMode);
    }
 
-   private EarthChunkGenerator.PreparedTerrainRefinement buildPreparedTerrainRefinement(EarthChunkGenerator.TerrainShellBuildResult shell) {
+   private EarthChunkGenerator.PreparedTerrainRefinement buildPreparedTerrainRefinement(
+      EarthChunkGenerator.TerrainShellBuildResult shell
+   ) {
+      return this.buildPreparedTerrainRefinement(shell, false);
+   }
+
+   private EarthChunkGenerator.PreparedTerrainRefinement buildPreparedTerrainRefinement(
+      EarthChunkGenerator.TerrainShellBuildResult shell, boolean failOpenPendingContributors
+   ) {
+      EarthChunkGenerator.ChunkGenerationContext shellContext =
+         EarthChunkGenerator.ChunkGenerationContext.capture(
+            shell.pos(),
+            shell.minY(),
+            shell.maxY(),
+            shell.terrainSurfaces(),
+            shell.waterSurfaces(),
+            shell.waterFlags(),
+            shell.coverClasses(),
+            shell.biomeCache(),
+            null,
+            shell.generationStamp()
+         );
+      ChunkDetailContributors.preflight(
+         this.chunkDetailContributors,
+         this.chunkDetailPlanContext(shellContext),
+         failOpenPendingContributors
+      );
       ChunkPos pos = shell.pos();
       int step = 4;
       int gridSize = 16 + step * 2;
@@ -7993,7 +8130,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       EarthChunkGenerator.ChunkGenerationContext exactContext = EarthChunkGenerator.ChunkGenerationContext.capture(
          pos, chunkMinY, shell.maxY(), terrainSurfaces, waterSurfaces, waterFlags, coverClasses, biomeCache, null, shell.generationStamp()
       );
-      EarthChunkGenerator.PreparedChunkDetail delayedDetail = this.preparePostRefinementChunkDetail(exactContext);
+      EarthChunkGenerator.PreparedChunkDetail delayedDetail = this.preparePostRefinementChunkDetail(
+         exactContext, failOpenPendingContributors
+      );
       return new EarthChunkGenerator.PreparedTerrainRefinement(
          shell,
          exactContext,
@@ -8012,9 +8151,19 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       );
    }
 
-   private EarthChunkGenerator.PreparedChunkDetail preparePostRefinementChunkDetail(EarthChunkGenerator.ChunkGenerationContext context) {
+   private EarthChunkGenerator.PreparedChunkDetail preparePostRefinementChunkDetail(
+      EarthChunkGenerator.ChunkGenerationContext context,
+      boolean failOpenPendingContributors
+   ) {
       return this.buildPreparedChunkDetail(
-         context, true, true, true, true, true, this.resolveFullChunkOsmQueryMode()
+         context,
+         true,
+         true,
+         true,
+         true,
+         true,
+         this.resolveFullChunkOsmQueryMode(),
+         failOpenPendingContributors
       );
    }
 
@@ -8488,6 +8637,19 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             roadQuery
          );
          this.placePreparedRoadLights(level, chunk);
+      }
+
+      ChunkDetailContributors.Preparation contributors = detail.contributors();
+      if (!contributors.plans().isEmpty()) {
+         contributors.apply(
+            new ChunkDetailWorldWriter(
+               level,
+               context.pos().x,
+               context.pos().z,
+               context.minY(),
+               context.maxY()
+            )
+         );
       }
 
       List<EarthChunkGenerator.PreparedTreePlacement> treePlacements = detail.treePlacements();
@@ -14294,6 +14456,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       EarthChunkGenerator.PreparedChunkBuildings preparedBuildings,
       boolean placeBuildings,
       EarthChunkGenerator.OsmRoadQueryResult roadQuery,
+      ChunkDetailContributors.Preparation contributors,
       List<EarthChunkGenerator.PreparedTreePlacement> treePlacements,
       List<TellusVegetationPlanner.Placement> ecologicalVegetation
    ) {
@@ -14765,10 +14928,24 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       private final Map<Long, EarthChunkGenerator.TerrainRefinementJob> jobs = new ConcurrentHashMap<>();
       private final ConcurrentLinkedQueue<Long> readyQueue = new ConcurrentLinkedQueue<>();
       private final Map<Long, Integer> oceanRetryAttempts = new ConcurrentHashMap<>();
+      private volatile boolean shutdown;
 
       private void schedule(EarthChunkGenerator generator, EarthChunkGenerator.TerrainShellBuildResult shell) {
+         this.schedule(generator, shell, System.nanoTime());
+      }
+
+      private void schedule(
+         EarthChunkGenerator generator,
+         EarthChunkGenerator.TerrainShellBuildResult shell,
+         long createdNs
+      ) {
+         if (this.shutdown) {
+            return;
+         }
          long chunkKey = shell.chunkKey();
-         EarthChunkGenerator.TerrainRefinementJob job = new EarthChunkGenerator.TerrainRefinementJob(EarthChunkGenerator.TerrainRefinementJobState.QUEUED);
+         EarthChunkGenerator.TerrainRefinementJob job = new EarthChunkGenerator.TerrainRefinementJob(
+            EarthChunkGenerator.TerrainRefinementJobState.QUEUED, createdNs
+         );
          EarthChunkGenerator.TerrainRefinementJob previous = this.jobs.put(chunkKey, job);
          if (previous != null) {
             previous.state = EarthChunkGenerator.TerrainRefinementJobState.STALE;
@@ -14799,7 +14976,33 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             }
 
             try {
-               job.refinement = generator.buildPreparedTerrainRefinement(shell);
+               try {
+                  job.refinement = generator.buildPreparedTerrainRefinement(shell);
+               } catch (ChunkDetailContributors.PendingException pending) {
+                  if (System.nanoTime() - job.createdNs
+                     < TERRAIN_REFINEMENT_CONTRIBUTOR_TIMEOUT_NANOS) {
+                     job.state = EarthChunkGenerator.TerrainRefinementJobState.QUEUED;
+                     CompletableFuture.runAsync(
+                        () -> {
+                           if (this.jobs.remove(chunkKey, job)) {
+                              this.schedule(generator, shell, job.createdNs);
+                           }
+                        },
+                        CompletableFuture.delayedExecutor(
+                           (long)contributorRetryDelayTicks(
+                              job.createdNs, pending.retryAfterTicks()
+                           ) * 50L,
+                           TimeUnit.MILLISECONDS
+                        )
+                     );
+                     return;
+                  }
+                  Tellus.LOGGER.warn(
+                     "Chunk-detail contributors timed out during terrain refinement for {}; failing open",
+                     shell.pos()
+                  );
+                  job.refinement = generator.buildPreparedTerrainRefinement(shell, true);
+               }
             } catch (RuntimeException error) {
                if (error instanceof OceanCoverageUnavailableException
                   || error.getCause() instanceof OceanCoverageUnavailableException) {
@@ -14808,8 +15011,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                   job.state = EarthChunkGenerator.TerrainRefinementJobState.QUEUED;
                   CompletableFuture.runAsync(
                      () -> {
-                        if (this.jobs.get(chunkKey) == job) {
-                           this.schedule(generator, shell);
+                        if (this.jobs.remove(chunkKey, job)) {
+                           this.schedule(generator, shell, job.createdNs);
                         }
                      },
                      CompletableFuture.delayedExecutor(delaySeconds, TimeUnit.SECONDS)
@@ -14848,15 +15051,37 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
       private EarthChunkGenerator.PreparedTerrainRefinement claimReady(ChunkPos pos) {
          long chunkKey = ChunkPos.asLong(pos.x, pos.z);
-         EarthChunkGenerator.TerrainRefinementJob job = this.jobs.get(chunkKey);
-         if (job == null || job.state != EarthChunkGenerator.TerrainRefinementJobState.READY) {
+         java.util.concurrent.atomic.AtomicReference<EarthChunkGenerator.PreparedTerrainRefinement> claimed =
+            new java.util.concurrent.atomic.AtomicReference<>();
+         this.jobs.computeIfPresent(chunkKey, (key, job) -> {
+            if (job.state == EarthChunkGenerator.TerrainRefinementJobState.READY) {
+               job.state = EarthChunkGenerator.TerrainRefinementJobState.APPLYING;
+               claimed.set(job.refinement);
+            }
+            return job;
+         });
+         return claimed.get();
+      }
+
+      private void finishApply(
+         ChunkPos pos,
+         EarthChunkGenerator.PreparedTerrainRefinement refinement,
+         RuntimeException error
+      ) {
+         long chunkKey = ChunkPos.asLong(pos.x, pos.z);
+         this.jobs.computeIfPresent(chunkKey, (key, job) -> {
+            if (job.refinement != refinement
+               || job.state != EarthChunkGenerator.TerrainRefinementJobState.APPLYING) {
+               return job;
+            }
+            if (error == null) {
+               job.state = EarthChunkGenerator.TerrainRefinementJobState.APPLIED;
+               return null;
+            }
+            job.state = EarthChunkGenerator.TerrainRefinementJobState.FAILED;
+            Tellus.LOGGER.error("Terrain refinement apply failed for {}", pos, error);
             return null;
-         } else if (!this.jobs.remove(chunkKey, job)) {
-            return null;
-         } else {
-            job.state = EarthChunkGenerator.TerrainRefinementJobState.APPLIED;
-            return job.refinement;
-         }
+         });
       }
 
       private void applyReady(ServerLevel level, EarthChunkGenerator generator, int budget) {
@@ -14893,10 +15118,12 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
             try {
                generator.applyPreparedTerrainRefinement(level, chunk, refinement);
+               this.finishApply(chunk.getPos(), refinement, null);
                applied++;
                EarthChunkGenerator.TerrainStreamingPerf.recordRefinementApplied();
             } catch (RuntimeException error) {
-               Tellus.LOGGER.debug("Failed to apply terrain refinement for {}", chunk.getPos(), error);
+               this.finishApply(chunk.getPos(), refinement, error);
+               Tellus.LOGGER.error("Failed to apply terrain refinement for {}", chunk.getPos(), error);
             }
          }
       }
@@ -14907,16 +15134,53 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          }
          return attempt <= 5 ? 1L << (attempt - 1) : 60L;
       }
+
+      private void cancel(ChunkPos pos) {
+         long chunkKey = ChunkPos.asLong(pos.x, pos.z);
+         EarthChunkGenerator.TerrainRefinementJob job = this.jobs.remove(chunkKey);
+         if (job != null) {
+            job.state = EarthChunkGenerator.TerrainRefinementJobState.STALE;
+         }
+         this.oceanRetryAttempts.remove(chunkKey);
+      }
+
+      private void clear() {
+         this.shutdown = true;
+         for (EarthChunkGenerator.TerrainRefinementJob job : this.jobs.values()) {
+            job.state = EarthChunkGenerator.TerrainRefinementJobState.STALE;
+         }
+         this.jobs.clear();
+         this.readyQueue.clear();
+         this.oceanRetryAttempts.clear();
+      }
    }
 
    private static final class ChunkDetailManager {
       private final Map<Long, EarthChunkGenerator.ChunkDetailJob> jobs = new ConcurrentHashMap<>();
       private final ConcurrentLinkedQueue<Long> readyQueue = new ConcurrentLinkedQueue<>();
       private final Map<UUID, EarthChunkGenerator.ChunkDetailManager.PlayerPrefetchState> playerPrefetchStates = new ConcurrentHashMap<>();
+      private volatile boolean shutdown;
+
+      private boolean hasWork() {
+         return !this.jobs.isEmpty();
+      }
 
       private void schedule(EarthChunkGenerator generator, EarthChunkGenerator.ChunkGenerationContext context) {
+         this.schedule(generator, context, System.nanoTime());
+      }
+
+      private void schedule(
+         EarthChunkGenerator generator,
+         EarthChunkGenerator.ChunkGenerationContext context,
+         long createdNs
+      ) {
+         if (this.shutdown) {
+            return;
+         }
          long chunkKey = context.chunkKey();
-         EarthChunkGenerator.ChunkDetailJob job = new EarthChunkGenerator.ChunkDetailJob(EarthChunkGenerator.ChunkDetailJobState.QUEUED);
+         EarthChunkGenerator.ChunkDetailJob job = new EarthChunkGenerator.ChunkDetailJob(
+            EarthChunkGenerator.ChunkDetailJobState.QUEUED, createdNs
+         );
          EarthChunkGenerator.ChunkDetailJob previous = this.jobs.put(chunkKey, job);
          if (previous != null) {
             previous.state = EarthChunkGenerator.ChunkDetailJobState.STALE;
@@ -14947,6 +15211,42 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
             try {
                job.detail = generator.prepareDeferredChunkDetail(context);
+            } catch (ChunkDetailContributors.PendingException pending) {
+               if (System.nanoTime() - job.createdNs
+                  < CHUNK_DETAIL_PENDING_TIMEOUT_NANOS) {
+                  job.state = EarthChunkGenerator.ChunkDetailJobState.QUEUED;
+                  CompletableFuture.runAsync(
+                     () -> {
+                        if (this.jobs.remove(chunkKey, job)) {
+                           this.schedule(generator, context, job.createdNs);
+                        }
+                     },
+                     CompletableFuture.delayedExecutor(
+                        (long)contributorRetryDelayTicks(
+                           job.createdNs, pending.retryAfterTicks()
+                        ) * 50L,
+                        TimeUnit.MILLISECONDS
+                     )
+                  );
+                  return;
+               }
+               Tellus.LOGGER.warn(
+                  "Chunk-detail contributors timed out for {}; failing open",
+                  context.pos()
+               );
+               try {
+                  job.detail = generator.prepareDeferredChunkDetail(context, true);
+               } catch (RuntimeException error) {
+                  EarthChunkGenerator.ChunkDetailPerf.recordFailure();
+                  job.state = EarthChunkGenerator.ChunkDetailJobState.FAILED;
+                  Tellus.LOGGER.error(
+                     "Failed to prepare deferred chunk detail after contributor timeout for {}",
+                     context.pos(),
+                     error
+                  );
+                  this.jobs.remove(chunkKey, job);
+                  return;
+               }
             } catch (RuntimeException error) {
                EarthChunkGenerator.ChunkDetailPerf.recordFailure();
                job.state = EarthChunkGenerator.ChunkDetailJobState.FAILED;
@@ -14979,15 +15279,37 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
       private EarthChunkGenerator.PreparedChunkDetail claimReady(ChunkPos pos) {
          long chunkKey = ChunkPos.asLong(pos.x, pos.z);
-         EarthChunkGenerator.ChunkDetailJob job = this.jobs.get(chunkKey);
-         if (job == null || job.state != EarthChunkGenerator.ChunkDetailJobState.READY) {
+         java.util.concurrent.atomic.AtomicReference<EarthChunkGenerator.PreparedChunkDetail> claimed =
+            new java.util.concurrent.atomic.AtomicReference<>();
+         this.jobs.computeIfPresent(chunkKey, (key, job) -> {
+            if (job.state == EarthChunkGenerator.ChunkDetailJobState.READY) {
+               job.state = EarthChunkGenerator.ChunkDetailJobState.APPLYING;
+               claimed.set(job.detail);
+            }
+            return job;
+         });
+         return claimed.get();
+      }
+
+      private void finishApply(
+         ChunkPos pos,
+         EarthChunkGenerator.PreparedChunkDetail detail,
+         RuntimeException error
+      ) {
+         long chunkKey = ChunkPos.asLong(pos.x, pos.z);
+         this.jobs.computeIfPresent(chunkKey, (key, job) -> {
+            if (job.detail != detail || job.state != EarthChunkGenerator.ChunkDetailJobState.APPLYING) {
+               return job;
+            }
+            if (error == null) {
+               job.state = EarthChunkGenerator.ChunkDetailJobState.APPLIED;
+               return null;
+            }
+            job.state = EarthChunkGenerator.ChunkDetailJobState.FAILED;
+            EarthChunkGenerator.ChunkDetailPerf.recordFailure();
+            Tellus.LOGGER.error("Deferred chunk detail apply failed for {}", pos, error);
             return null;
-         } else if (!this.jobs.remove(chunkKey, job)) {
-            return null;
-         } else {
-            job.state = EarthChunkGenerator.ChunkDetailJobState.APPLIED;
-            return job.detail;
-         }
+         });
       }
 
       private boolean hasPending(ChunkPos pos) {
@@ -15034,12 +15356,31 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                if (generator.settings.customTrees()) {
                   generator.applyRealtimeSnowCover(level, chunk);
                }
+               this.finishApply(chunk.getPos(), detail, null);
                applied++;
             } catch (RuntimeException error) {
-               EarthChunkGenerator.ChunkDetailPerf.recordFailure();
-               Tellus.LOGGER.debug("Failed to apply deferred chunk detail for {}", chunk.getPos(), error);
+               this.finishApply(chunk.getPos(), detail, error);
+               Tellus.LOGGER.error("Failed to apply deferred chunk detail for {}", chunk.getPos(), error);
             }
          }
+      }
+
+      private void cancel(ChunkPos pos) {
+         long chunkKey = ChunkPos.asLong(pos.x, pos.z);
+         EarthChunkGenerator.ChunkDetailJob job = this.jobs.remove(chunkKey);
+         if (job != null) {
+            job.state = EarthChunkGenerator.ChunkDetailJobState.STALE;
+         }
+      }
+
+      private void clear() {
+         this.shutdown = true;
+         for (EarthChunkGenerator.ChunkDetailJob job : this.jobs.values()) {
+            job.state = EarthChunkGenerator.ChunkDetailJobState.STALE;
+         }
+         this.jobs.clear();
+         this.readyQueue.clear();
+         this.playerPrefetchStates.clear();
       }
 
       private void prefetchAroundPlayers(ServerLevel level, EarthChunkGenerator generator, int radius) {
@@ -15270,11 +15611,15 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    private static final class TerrainRefinementJob {
+      private final long createdNs;
       private volatile EarthChunkGenerator.TerrainRefinementJobState state;
       private volatile EarthChunkGenerator.PreparedTerrainRefinement refinement;
 
-      private TerrainRefinementJob(EarthChunkGenerator.TerrainRefinementJobState state) {
+      private TerrainRefinementJob(
+         EarthChunkGenerator.TerrainRefinementJobState state, long createdNs
+      ) {
          this.state = state;
+         this.createdNs = createdNs;
       }
    }
 
@@ -15282,18 +15627,22 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       QUEUED,
       FETCHING,
       READY,
+      APPLYING,
       APPLIED,
       FAILED,
       STALE;
    }
 
    private static final class ChunkDetailJob {
-      private final long createdNs = EarthChunkGenerator.ChunkDetailPerf.now();
+      private final long createdNs;
       private volatile EarthChunkGenerator.ChunkDetailJobState state;
       private volatile EarthChunkGenerator.PreparedChunkDetail detail;
 
-      private ChunkDetailJob(EarthChunkGenerator.ChunkDetailJobState state) {
+      private ChunkDetailJob(
+         EarthChunkGenerator.ChunkDetailJobState state, long createdNs
+      ) {
          this.state = state;
+         this.createdNs = createdNs;
       }
    }
 
@@ -15301,6 +15650,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       QUEUED,
       FETCHING,
       READY,
+      APPLYING,
       APPLIED,
       FAILED,
       STALE;

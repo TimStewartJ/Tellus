@@ -1,5 +1,7 @@
 package com.yucareux.tellus.api;
 
+import com.yucareux.tellus.api.detail.ChunkDetailContributor;
+import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.TellusResolveSource;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
@@ -15,9 +17,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 
 /**
- * Stable, intentionally small entry points for companion mods such as Tellus Expeditions.
+ * Stable, intentionally small entry points for optional integrations.
  *
- * <p>Everything here delegates to Tellus internals that may be reorganised between releases; companions
+ * <p>Everything here delegates to Tellus internals that may be reorganised between releases; integrations
  * should depend on this class rather than on {@code com.yucareux.tellus.worldgen} or
  * {@code com.yucareux.tellus.world.data} directly. Sampling methods are safe to call off-thread and never
  * require chunks to be generated; they read Tellus' cached rasters and download tiles on demand, so the
@@ -25,9 +27,22 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
  */
 public final class TellusApi {
    /** Incremented whenever a method here changes signature or semantics. */
-   public static final int API_VERSION = 3;
+   public static final int API_VERSION = 4;
 
    private TellusApi() {
+   }
+
+   /**
+    * Registers an optional chunk-detail contributor for Earth generators created afterward.
+    *
+    * <p>Registration identifiers determine deterministic arbitration order. Register during common
+    * initialization, before a server begins loading worlds.</p>
+    */
+   public static ChunkDetailContributorRegistry.Registration registerChunkDetailContributor(
+      String identifier,
+      ChunkDetailContributor contributor
+   ) {
+      return ChunkDetailContributorRegistry.global().register(identifier, contributor);
    }
 
    /** Returns the Earth generator of {@code level} when the level is a Tellus world. */

@@ -101,6 +101,10 @@ public final class MinecraftVersionCompat {
       return level.getMaxY();
    }
 
+   public static int minBuildHeight(WorldGenLevel level) {
+      return level.getMinY();
+   }
+
    public static boolean isInsideBuildHeight(WorldGenLevel level, BlockPos position) {
       return level.isInsideBuildHeight(position);
    }

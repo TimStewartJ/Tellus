@@ -6,6 +6,10 @@ import com.yucareux.tellus.world.data.resolve.ResolveBiome;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.ResolveRealm;
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 import net.minecraft.core.BlockPos;
@@ -15,6 +19,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.tags.BiomeTags;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.WorldGenLevel;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
@@ -44,6 +49,10 @@ public final class TellusProceduralTreeGenerator {
    private static final long PLAN_SALT = 0x42C5A19F371D2E6BL;
    private static final long REGIONAL_PROFILE_SALT = 0x718D3A42E5C690F1L;
    private static final long BUSH_FOLIAGE_SALT = 0x2A7856E43D19BC0FL;
+   private static final int ROOT_SURFACE_SCAN_DEPTH = 10;
+   private static final int ROOT_MAX_STEP = 2;
+   private static final int ROOT_MAX_ANCHOR_DELTA = 6;
+   private static final int BASE_MAX_SUPPORT_DEPTH = 4;
 
    private TellusProceduralTreeGenerator() {
    }
@@ -349,6 +358,7 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growTrunk(WorldGenLevel level, BlockPos ground, TreePlan plan, BlockState log) {
+      Map<Long, Integer> baseSurfaces = new HashMap<>();
       int trunkTop;
       if (plan.profile() == Profile.COAST_REDWOOD) {
          trunkTop = Math.max(plan.crownBase() + 2, plan.height() - 3);
@@ -369,7 +379,21 @@ public final class TellusProceduralTreeGenerator {
             && (y == 1 || y == 2 && plan.trunkRadius() >= 3)) {
             radius++;
          }
-         placeLogDisc(level, centerX, ground.getY() + y, centerZ, radius, axis(log, Direction.Axis.Y));
+         BlockState verticalLog = axis(log, Direction.Axis.Y);
+         if (radius > 0 && y <= 2) {
+            placeSupportedBaseDisc(
+               level,
+               ground,
+               centerX,
+               ground.getY() + y,
+               centerZ,
+               radius,
+               verticalLog,
+               baseSurfaces
+            );
+         } else {
+            placeLogDisc(level, centerX, ground.getY() + y, centerZ, radius, verticalLog);
+         }
       }
    }
 
@@ -392,18 +416,179 @@ public final class TellusProceduralTreeGenerator {
          double angle = Math.PI * 2.0 * index / roots + random.nextDouble() * 0.35;
          int endX = ground.getX() + (int)Math.round(Math.cos(angle) * length);
          int endZ = ground.getZ() + (int)Math.round(Math.sin(angle) * length);
-         placeLogLine(
-            level,
+         int baseHeight = Math.min(
+            coastRedwood ? 4 : 3,
+            plan.trunkRadius() + (coastRedwood ? 1 : 0)
+         );
+         List<RootColumn> columns = planRootColumns(
             ground.getX(),
-            ground.getY() + Math.min(coastRedwood ? 4 : 3, plan.trunkRadius() + (coastRedwood ? 1 : 0)),
+            ground.getY(),
             ground.getZ(),
             endX,
-            ground.getY() + 1,
             endZ,
-            log,
-            0
+            baseHeight,
+            (worldX, worldZ) -> findRootSurfaceY(
+               level, worldX, worldZ, ground.getY()
+            )
          );
+         Direction.Axis rootAxis = Math.abs(endX - ground.getX()) >= Math.abs(endZ - ground.getZ())
+            ? Direction.Axis.X
+            : Direction.Axis.Z;
+         BlockState horizontalLog = axis(log, rootAxis);
+         BlockState verticalLog = axis(log, Direction.Axis.Y);
+         for (RootColumn column : columns) {
+            boolean supported = true;
+            for (int y = column.surfaceY() + 1; y < column.topY(); y++) {
+               if (!setRootLog(
+                  level,
+                  new BlockPos(column.worldX(), y, column.worldZ()),
+                  verticalLog
+               )) {
+                  supported = false;
+                  break;
+               }
+            }
+            if (supported) {
+               setRootLog(
+                  level,
+                  new BlockPos(column.worldX(), column.topY(), column.worldZ()),
+                  horizontalLog
+               );
+            }
+         }
       }
+   }
+
+   static List<RootColumn> planRootColumns(
+      int startX,
+      int anchorGroundY,
+      int startZ,
+      int endX,
+      int endZ,
+      int baseHeight,
+      RootSurfaceSampler surfaces
+   ) {
+      Objects.requireNonNull(surfaces, "surfaces");
+      int dx = endX - startX;
+      int dz = endZ - startZ;
+      int steps = Math.max(1, Math.max(Math.abs(dx), Math.abs(dz)));
+      List<RootColumn> columns = new ArrayList<>(steps + 1);
+      int previousX = Integer.MIN_VALUE;
+      int previousZ = Integer.MIN_VALUE;
+      int previousSurface = anchorGroundY;
+      for (int step = 0; step <= steps; step++) {
+         double progress = step / (double)steps;
+         int worldX = (int)Math.round(startX + dx * progress);
+         int worldZ = (int)Math.round(startZ + dz * progress);
+         if (worldX == previousX && worldZ == previousZ) {
+            continue;
+         }
+         int surfaceY = surfaces.surfaceY(worldX, worldZ);
+         if (surfaceY == Integer.MIN_VALUE
+            || Math.abs(surfaceY - previousSurface) > ROOT_MAX_STEP
+            || Math.abs(surfaceY - anchorGroundY) > ROOT_MAX_ANCHOR_DELTA) {
+            break;
+         }
+         int ridge = Math.max(0, Math.max(1, baseHeight) - 1 - step);
+         columns.add(new RootColumn(worldX, worldZ, surfaceY, surfaceY + 1 + ridge));
+         previousX = worldX;
+         previousZ = worldZ;
+         previousSurface = surfaceY;
+      }
+      return List.copyOf(columns);
+   }
+
+   private static void placeSupportedBaseDisc(
+      WorldGenLevel level,
+      BlockPos anchorGround,
+      int centerX,
+      int targetY,
+      int centerZ,
+      int radius,
+      BlockState log,
+      Map<Long, Integer> surfaceCache
+   ) {
+      BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+      for (int dz = -radius; dz <= radius; dz++) {
+         for (int dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dz * dz > radius * radius + radius) {
+               continue;
+            }
+            int worldX = centerX + dx;
+            int worldZ = centerZ + dz;
+            long key = (long)worldX << 32 | worldZ & 0xFFFF_FFFFL;
+            int surfaceY = surfaceCache.computeIfAbsent(
+               key,
+               ignored -> findRootSurfaceY(
+                  level, worldX, worldZ, anchorGround.getY()
+               )
+            );
+            if (surfaceY == Integer.MIN_VALUE
+               || surfaceY >= targetY
+               || targetY - surfaceY > BASE_MAX_SUPPORT_DEPTH) {
+               continue;
+            }
+            boolean supported = true;
+            for (int y = surfaceY + 1; y <= targetY; y++) {
+               cursor.set(worldX, y, worldZ);
+               if (!setRootLog(level, cursor, log)) {
+                  supported = false;
+                  break;
+               }
+            }
+            if (!supported) {
+               continue;
+            }
+         }
+      }
+   }
+
+   private static int findRootSurfaceY(
+      WorldGenLevel level, int worldX, int worldZ, int anchorGroundY
+   ) {
+      int heightmapTop = level.getHeight(
+         Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, worldX, worldZ
+      ) - 1;
+      int startY = Math.min(heightmapTop, anchorGroundY + ROOT_MAX_ANCHOR_DELTA);
+      int minimumY = Math.max(
+         MinecraftVersionCompat.minBuildHeight(level),
+         anchorGroundY - ROOT_SURFACE_SCAN_DEPTH
+      );
+      BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+      for (int y = startY; y >= minimumY; y--) {
+         cursor.set(worldX, y, worldZ);
+         BlockState state = level.getBlockState(cursor);
+         if (state.isAir()
+            || state.is(BlockTags.LOGS)
+            || state.is(BlockTags.LEAVES)
+            || state.is(BlockTags.REPLACEABLE_BY_TREES)
+            || state.getFluidState().isEmpty() && state.canBeReplaced()) {
+            continue;
+         }
+         if (!state.getFluidState().isEmpty() || !supportsTreeRoot(state)) {
+            return Integer.MIN_VALUE;
+         }
+         cursor.setY(y + 1);
+         return level.getFluidState(cursor).isEmpty() ? y : Integer.MIN_VALUE;
+      }
+      return Integer.MIN_VALUE;
+   }
+
+   private static boolean supportsTreeRoot(BlockState state) {
+      return state.is(BlockTags.DIRT)
+         || state.is(BlockTags.BASE_STONE_OVERWORLD)
+         || state.is(Blocks.GRAVEL)
+         || state.is(Blocks.SAND)
+         || state.is(Blocks.RED_SAND)
+         || state.is(Blocks.SANDSTONE)
+         || state.is(Blocks.RED_SANDSTONE)
+         || state.is(Blocks.TERRACOTTA)
+         || state.is(Blocks.DIRT_PATH)
+         || state.is(Blocks.CLAY)
+         || state.is(Blocks.MUD)
+         || state.is(Blocks.PACKED_MUD)
+         || state.is(Blocks.MOSS_BLOCK)
+         || state.is(Blocks.SNOW_BLOCK);
    }
 
    private static void growCoastRedwood(
@@ -812,7 +997,16 @@ public final class TellusProceduralTreeGenerator {
             0.64
          );
       }
-      placeLogDisc(level, ground.getX(), ground.getY() + 1, ground.getZ(), 1, axis(log, Direction.Axis.Y));
+      placeSupportedBaseDisc(
+         level,
+         ground,
+         ground.getX(),
+         ground.getY() + 1,
+         ground.getZ(),
+         1,
+         axis(log, Direction.Axis.Y),
+         new HashMap<>()
+      );
    }
 
    /** Wind-shaped, often multi-stemmed birch at the boreal/tundra tree line. */
@@ -1148,6 +1342,24 @@ public final class TellusProceduralTreeGenerator {
       }
    }
 
+   private static boolean setRootLog(
+      WorldGenLevel level, BlockPos position, BlockState log
+   ) {
+      if (!MinecraftVersionCompat.isInsideBuildHeight(level, position)
+         || !level.ensureCanWrite(position)
+         || !level.getFluidState(position).isEmpty()) {
+         return false;
+      }
+      BlockState current = level.getBlockState(position);
+      if (current.is(BlockTags.LOGS)) {
+         return true;
+      }
+      if (!canReplaceTrunk(current) && !current.canBeReplaced()) {
+         return false;
+      }
+      return level.setBlock(position, log, PLACEMENT_FLAGS);
+   }
+
    private static void setLeaves(WorldGenLevel level, BlockPos position, BlockState leaves) {
       if (!MinecraftVersionCompat.isInsideBuildHeight(level, position) || !level.ensureCanWrite(position)) {
          return;
@@ -1160,6 +1372,14 @@ public final class TellusProceduralTreeGenerator {
 
    private static boolean canReplaceTrunk(BlockState state) {
       return state.isAir() || state.is(BlockTags.LEAVES) || state.is(BlockTags.REPLACEABLE_BY_TREES);
+   }
+
+   @FunctionalInterface
+   interface RootSurfaceSampler {
+      int surfaceY(int worldX, int worldZ);
+   }
+
+   record RootColumn(int worldX, int worldZ, int surfaceY, int topY) {
    }
 
    private static BlockState persistentLeaves(BlockState leaves) {

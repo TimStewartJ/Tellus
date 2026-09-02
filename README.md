@@ -88,12 +88,11 @@ Water-region builds sample elevation row by row with the tile raster and Mercato
 
 More commands will be added over time.
 
-## Companion mod API
+## Integration API
 
-`com.yucareux.tellus.api.TellusApi` exposes a small, stable surface for companion mods (for example
-[Tellus Expeditions](https://github.com/TimStewartJ/Tellus-Expeditions)): elevation, slope, land cover,
-Koppen class, RESOLVE ecoregion, real-time temperature, and block/geographic coordinate conversions.
-Companions should depend on this class instead of internal packages; `TellusApi.API_VERSION` is bumped
+`com.yucareux.tellus.api.TellusApi` exposes a small, stable surface for optional integrations: elevation,
+slope, land cover, Köppen class, RESOLVE ecoregion, real-time temperature, and block/geographic coordinate
+conversions. Integrations should depend on this class instead of internal packages; `TellusApi.API_VERSION` is bumped
 whenever a method changes signature or semantics. The API takes the world's `WorldProjection`, obtained
 from `TellusApi.projection(generator)`, so spawn-centred and historical global worlds resolve the same
 real location as Tellus terrain, OSM features, previews and teleports.
@@ -104,6 +103,14 @@ Tellus has no terrain-refinement or deferred-detail job left for that loaded chu
 blocks from racing exact terrain, roads, trees or ecological vegetation. The owner chunk and all eight
 neighbours must be loaded and free of pending work because a deferred tree or canopy originating next door
 may cross the owner-chunk boundary.
+
+API v4 adds an optional chunk-detail contributor contract. A contributor registers during common
+initialization, receives an immutable 16×16 terrain snapshot on a detail worker, and returns bounded
+surface-write, mature-tree-exclusion, and understory-exclusion claims. Tellus resolves conflicts by priority,
+identifier, and stable claim key; applies granted owner-chunk writes before native trees; and plans trees and
+understory against the merged claims. Planning is nonblocking and retryable, application uses a restricted
+writer, unloads cancel stale work, and a five-minute source deadline fails open so an optional integration
+cannot permanently hold terrain readiness.
 
 <details>
   <summary>Settings</summary>
@@ -188,6 +195,9 @@ This section lets you toggle vanilla structures and world features on or off, su
 - The same ecological profile now drives deterministic subcanopy trees, shrub thickets, herbs, ground cover, deadwood, canopy-gap regeneration, cover-class edges, and riparian growth. ESA shrubland therefore produces woody scrub instead of changing only the surface palette.
 - Nested stand and patch fields create openings, regenerating patches, mature interiors, and old-growth debris without storing per-chunk ecosystem state. Fine vegetation is thinned as horizontal scale increases, while Distant Horizons and the terrain preview retain representative shrub and subcanopy structure.
 - Understory plants are placed without a lattice: each block column has a per-stratum priority and becomes a candidate only when it is the local maximum within the stratum's spacing radius, so plants keep a minimum distance and show no repeating pattern. A block-space openness field carves connected game trails through the woody strata so dense forest stays passable at ground level. The **Ecological Understory** world setting (default on) switches the understory off independently of the canopy trees.
+- Procedural roots and wide trunk flares sample each occupied column before placement. Buttress logs follow the
+  local surface, fill down to support on gentle slopes, and stop before cliffs, fluids, unsupported ground, or
+  reserved generation corridors instead of drawing anchor-height log rays through open air.
 - Distant Horizons reuses the full-detail nine-block tree anchors, regional profile, ETH-derived height, crown dimensions, and material palette. This keeps distant canopies stable when their full chunks load while retaining a cheaper column representation for LOD generation.
 - Raw tile storage is bounded to 256 MiB by default and decoded memory storage to 64 tiles. Override them with `tellus.canopyHeight.diskCacheMiB` and `tellus.canopyHeight.memoryTiles`.
 - The official service is the default; a compatible mirror can later be selected with `tellus.canopyHeight.serviceUrl` without changing tree-generation code.

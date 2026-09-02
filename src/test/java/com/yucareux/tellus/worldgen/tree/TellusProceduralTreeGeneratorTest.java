@@ -159,6 +159,57 @@ class TellusProceduralTreeGeneratorTest {
    }
 
    @Test
+   void rootColumnsFollowTerrainAndEveryLogColumnStartsOnItsSurface() {
+      int[] surfaces = {100, 99, 98, 97, 98, 98};
+
+      var columns = TellusProceduralTreeGenerator.planRootColumns(
+         0,
+         100,
+         0,
+         5,
+         0,
+         4,
+         (x, z) -> surfaces[x]
+      );
+
+      assertEquals(6, columns.size());
+      for (int index = 0; index < columns.size(); index++) {
+         var column = columns.get(index);
+         assertEquals(surfaces[index], column.surfaceY());
+         assertTrue(column.topY() >= column.surfaceY() + 1);
+      }
+      assertEquals(104, columns.get(0).topY());
+      assertEquals(99, columns.get(5).topY());
+   }
+
+   @Test
+   void rootsStopBeforeCliffsOrMissingSupportInsteadOfBridgingAir() {
+      var cliff = TellusProceduralTreeGenerator.planRootColumns(
+         0,
+         80,
+         0,
+         6,
+         0,
+         3,
+         (x, z) -> x < 3 ? 80 - x : 72
+      );
+      var unsupported = TellusProceduralTreeGenerator.planRootColumns(
+         0,
+         80,
+         0,
+         6,
+         0,
+         3,
+         (x, z) -> x < 2 ? 80 : Integer.MIN_VALUE
+      );
+
+      assertEquals(3, cliff.size());
+      assertEquals(2, unsupported.size());
+      assertEquals(2, cliff.get(cliff.size() - 1).worldX());
+      assertEquals(1, unsupported.get(unsupported.size() - 1).worldX());
+   }
+
+   @Test
    void registryFreePreviewPlanningUsesTheFullDetailBiomeProfiles() {
       assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla biome registry keys");
       assertEquals(

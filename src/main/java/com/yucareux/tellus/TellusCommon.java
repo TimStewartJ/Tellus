@@ -270,6 +270,12 @@ public class TellusCommon {
          }
       }));
       runtime.onServerStopping(server -> {
+         for (ServerLevel level : server.getAllLevels()) {
+            ChunkGenerator generator = level.getChunkSource().getGenerator();
+            if (generator instanceof EarthChunkGenerator earthGenerator) {
+               earthGenerator.shutdownChunkDetailWork();
+            }
+         }
          REALTIME_MANAGER.onServerStopping(server);
          VOXY_PREGEN_MANAGER.shutdown();
          MANAGED_TERRAIN_DOWNLOAD_MANAGER.reset();

@@ -75,7 +75,7 @@ jobs:
             echo
             echo "Based on upstream Yucareux/Tellus 0.8.3 with the fork's changes: chunk-generation performance,"
             echo "coarse-first Distant Horizons streaming, spawn-centered projection, coherent climate and land-cover"
-            echo "transitions, ecological vegetation, and the companion API (\`TellusApi\`, API v$API_VERSION) used by Tellus Expeditions."
+            echo "transitions, ecological vegetation, and the optional integration API (\`TellusApi\`, API v$API_VERSION)."
             echo
             echo "Distant Horizons: works with stock DH; true-height (Increase Height) worlds need the Tellus DH fork"
             echo "(TimStewartJ/distant-horizons)."
