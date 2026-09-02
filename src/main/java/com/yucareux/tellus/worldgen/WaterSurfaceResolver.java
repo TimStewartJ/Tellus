@@ -17,6 +17,7 @@ import com.yucareux.tellus.world.data.osm.OsmWaterFeature;
 import com.yucareux.tellus.world.data.osm.TellusOsmWaterSource;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.Arrays;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.util.Mth;
 
@@ -78,6 +79,12 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
    private static final double LAKE_SURFACE_HINT_PERCENTILE = 0.25;
    private static final int LAKE_MAX_TERRAIN_CUT = intProperty("tellus.water.lakeMaxTerrainCut", 12, 1, 64);
    private static final int MAX_LAKE_SURFACE_CACHE = intProperty("tellus.waterLakeSurfaceCacheSize", 8192, 256, 65536);
+   private static final int MAX_LINE_PROFILE_CACHE_BYTES = intProperty(
+      "tellus.waterLineProfileCacheBytes",
+      16 * 1024 * 1024,
+      1024 * 1024,
+      256 * 1024 * 1024
+   );
    private static final int MAX_FEATURE_SURFACE_SAMPLES = intProperty("tellus.water.featureSurfaceSamples", 128, 8, 2048);
    private static final int ESA_LAKE_KEY_GRID_BLOCKS = intProperty("tellus.water.esaLakeKeyGridBlocks", 512, 64, 8192);
    private static final int ESA_LAKE_HEIGHT_BUCKET = intProperty("tellus.water.esaLakeHeightBucket", 4, 1, 64);
@@ -127,6 +134,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
    private final int regionMargin;
    private final boolean regionClamped;
    private final Cache<Long, Integer> lakeSurfaceCache;
+   private final Cache<Long, StreamChannelProfile.Profile> lineProfileCache;
    private final OceanCoastField oceanCoastField;
    private final int oceanFloorTransitionBlocks;
    private final int minimumOffshoreDepth;
@@ -172,6 +180,13 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       this.regionCache = CacheBuilder.newBuilder().maximumSize(MAX_REGION_CACHE).build();
       this.nearWaterChunkCache = CacheBuilder.newBuilder().maximumSize(MAX_NEAR_WATER_CACHE).build();
       this.lakeSurfaceCache = CacheBuilder.newBuilder().maximumSize(MAX_LAKE_SURFACE_CACHE).build();
+      this.lineProfileCache = CacheBuilder.newBuilder()
+         .maximumWeight(MAX_LINE_PROFILE_CACHE_BYTES)
+         .weigher(
+            (Long key, StreamChannelProfile.Profile profile) ->
+               Math.min(Integer.MAX_VALUE, 64 + profile.stationCount() * Integer.BYTES)
+         )
+         .build();
       EarthGeneratorSettings.HeightLimits heightLimits = EarthGeneratorSettings.resolveHeightLimits(settings);
       this.minimumOceanFloor = Math.min(this.seaLevel - OCEAN_MIN_DEPTH, heightLimits.minY() + OCEAN_FLOOR_SUPPORT_BLOCKS);
       this.expectedMaximumOceanDepth = Math.max(
@@ -234,7 +249,8 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          || domain == TellusCacheDomain.LAND_COVER
          || domain == TellusCacheDomain.TERRAIN
          || domain == TellusCacheDomain.NORMALIZED_TERRAIN
-         || domain == TellusCacheDomain.OPENWATERS;
+         || domain == TellusCacheDomain.OPENWATERS
+         || domain == TellusCacheDomain.PRELOADED_TERRAIN;
    }
 
    @Override
@@ -245,12 +261,14 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       synchronized (this.lakeSurfaceCache) {
          this.lakeSurfaceCache.invalidateAll();
       }
+      this.lineProfileCache.invalidateAll();
       this.oceanCoastField.clear();
       this.regionCache.cleanUp();
       this.nearWaterChunkCache.cleanUp();
       synchronized (this.lakeSurfaceCache) {
          this.lakeSurfaceCache.cleanUp();
       }
+      this.lineProfileCache.cleanUp();
    }
 
    public boolean isWaterClass(int coverClass) {
@@ -1906,7 +1924,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                   flowingWaterMask,
                   waterBodyKeys,
                   waterBodySurfaceHints,
-                  surfaceHeights,
                   scratch
                );
             }
@@ -1939,7 +1956,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       boolean[] flowingWaterMask,
       long[] waterBodyKeys,
       int[] waterBodySurfaceHints,
-      int[] surfaceHeights,
       WaterSurfaceResolver.RegionScratch scratch
    ) {
       if (feature.crossesWorldSeam(this.projection)) {
@@ -1991,7 +2007,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
             waterBodySurfaceHint,
             waterBodyKeys,
             waterBodySurfaceHints,
-            surfaceHeights,
             scratch
          );
       } else {
@@ -2057,7 +2072,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       int waterBodySurfaceHint,
       long[] waterBodyKeys,
       int[] waterBodySurfaceHints,
-      int[] surfaceHeights,
       WaterSurfaceResolver.RegionScratch scratch
    ) {
       int widthBlocks = this.lineChannelWidthBlocks(feature);
@@ -2102,22 +2116,15 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
             continue;
          }
 
-         int[] stationMin = StreamChannelProfile.filled(stationCount, StreamChannelProfile.UNKNOWN);
-         int segment = 0;
-         for (int station = 0; station < stationCount; station++) {
-            double s = Math.min(station, length);
-            while (segment < xs.length - 2 && arc[segment + 1] < s) {
-               segment++;
-            }
-            double segmentLength = arc[segment + 1] - arc[segment];
-            double t = segmentLength > 0.0 ? Mth.clamp((s - arc[segment]) / segmentLength, 0.0, 1.0) : 0.0;
-            double px = xs[segment] + (xs[segment + 1] - xs[segment]) * t;
-            double pz = zs[segment] + (zs[segment + 1] - zs[segment]) * t;
-            stationMin[station] = stationTerrainMinimum(px, pz, bankRadius, gridMinX, gridMinZ, gridSize, surfaceHeights);
-         }
-         int[] surfaces = StreamChannelProfile.surfaces(
-            stationMin, StreamChannelProfile.LOOKBACK_STATIONS, Math.max(2, RIVER_MAX_TERRAIN_CUT)
+         StreamChannelProfile.Profile profile = this.canonicalLineProfile(
+            feature,
+            part,
+            xs,
+            zs,
+            arc,
+            bankRadius
          );
+         int[] surfaces = profile.surfaces();
 
          for (int i = 0; i < cells.size(); i++) {
             int cell = cells.getInt(i);
@@ -2278,36 +2285,176 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       cellStations.add(Mth.clamp((int)Math.round(arc), 0, stationCount - 1));
    }
 
-   /**
-    * Lowest sampled terrain within {@code radius} of a station centre (the channel plus one ring of bank
-    * cells), or {@link StreamChannelProfile#UNKNOWN} when the centre lies outside the analysed grid.
-    */
-   private static int stationTerrainMinimum(
-      double centerX, double centerZ, double radius, int gridMinX, int gridMinZ, int gridSize, int[] surfaceHeights
+   private StreamChannelProfile.Profile canonicalLineProfile(
+      OsmWaterFeature feature,
+      int part,
+      double[] xs,
+      double[] zs,
+      double[] arc,
+      double bankRadius
    ) {
-      int centerBlockX = nearestBlock(centerX);
-      int centerBlockZ = nearestBlock(centerZ);
-      int gridMaxX = gridMinX + gridSize - 1;
-      int gridMaxZ = gridMinZ + gridSize - 1;
-      if (centerBlockX < gridMinX || centerBlockX > gridMaxX || centerBlockZ < gridMinZ || centerBlockZ > gridMaxZ) {
-         return StreamChannelProfile.UNKNOWN;
-      }
-      double radiusSq = radius * radius + 1.0E-6;
-      int reach = Mth.ceil(radius);
-      int lowest = StreamChannelProfile.UNKNOWN;
-      for (int worldZ = Math.max(gridMinZ, centerBlockZ - reach); worldZ <= Math.min(gridMaxZ, centerBlockZ + reach); worldZ++) {
-         double distZ = worldZ - centerZ;
-         for (int worldX = Math.max(gridMinX, centerBlockX - reach); worldX <= Math.min(gridMaxX, centerBlockX + reach); worldX++) {
-            double distX = worldX - centerX;
-            if (distX * distX + distZ * distZ <= radiusSq) {
-               int sample = surfaceHeights[(worldZ - gridMinZ) * gridSize + (worldX - gridMinX)];
-               if (sample < lowest) {
-                  lowest = sample;
-               }
+      while (true) {
+         long generation = this.cacheGeneration.get();
+         long preloadGeneration = this.preloadedTerrain.generation();
+         long key = lineProfileKey(feature, part, xs, zs, bankRadius)
+            ^ Long.rotateLeft(generation * 0x9E3779B97F4A7C15L, 17)
+            ^ Long.rotateLeft(preloadGeneration * 0x632BE59BD9B4E019L, 41);
+         try {
+            StreamChannelProfile.Profile profile = this.lineProfileCache.get(
+               key,
+               () -> this.buildCanonicalLineProfile(xs, zs, arc, bankRadius)
+            );
+            if (generation == this.cacheGeneration.get()
+               && preloadGeneration == this.preloadedTerrain.generation()) {
+               return profile;
             }
+            this.lineProfileCache.invalidate(key);
+         } catch (ExecutionException error) {
+            throw new IllegalStateException(
+               "Could not profile mapped watercourse " + feature.featureId() + " part " + part,
+               error.getCause()
+            );
          }
       }
-      return lowest;
+   }
+
+   private StreamChannelProfile.Profile buildCanonicalLineProfile(
+      double[] xs,
+      double[] zs,
+      double[] arc,
+      double bankRadius
+   ) {
+      double length = arc[arc.length - 1];
+      int stationCount = (int)Math.floor(length) + 1;
+      int[] stationTerrain = StreamChannelProfile.filled(
+         stationCount,
+         StreamChannelProfile.UNKNOWN
+      );
+      int crossSectionCapacity = Math.max(3, Mth.ceil(bankRadius) * 2 + 1);
+      int[] crossSectionSamples = new int[crossSectionCapacity];
+      int[] crossSectionXs = new int[crossSectionCapacity];
+      int[] crossSectionZs = new int[crossSectionCapacity];
+      int segment = 0;
+      for (int station = 0; station < stationCount; station++) {
+         double distance = Math.min(station, length);
+         while (segment < xs.length - 2 && arc[segment + 1] < distance) {
+            segment++;
+         }
+         double segmentLength = arc[segment + 1] - arc[segment];
+         double t = segmentLength > 0.0
+            ? Mth.clamp((distance - arc[segment]) / segmentLength, 0.0, 1.0)
+            : 0.0;
+         double centerX = xs[segment] + (xs[segment + 1] - xs[segment]) * t;
+         double centerZ = zs[segment] + (zs[segment + 1] - zs[segment]) * t;
+         double tangentX = segmentLength > 0.0
+            ? (xs[segment + 1] - xs[segment]) / segmentLength
+            : 1.0;
+         double tangentZ = segmentLength > 0.0
+            ? (zs[segment + 1] - zs[segment]) / segmentLength
+            : 0.0;
+         stationTerrain[station] = this.canonicalStationTerrain(
+            centerX,
+            centerZ,
+            -tangentZ,
+            tangentX,
+            bankRadius,
+            crossSectionSamples,
+            crossSectionXs,
+            crossSectionZs
+         );
+      }
+      boolean reverseOnTie = reverseCanonicalGeometry(xs, zs);
+      return StreamChannelProfile.profile(
+         stationTerrain,
+         Math.max(2, RIVER_MAX_TERRAIN_CUT),
+         Math.max(RIVER_MAX_TERRAIN_CUT, RIVER_HYDRO_FLATTEN_MAX_CUT),
+         FLOW_HYDRO_FLATTEN_LOOKAHEAD_BLOCKS,
+         reverseOnTie
+      );
+   }
+
+   /**
+    * Robust cross-section terrain sample from the complete geometry part. Sampling independently of
+    * a requesting region makes direction and reach level identical across region generation order.
+    */
+   private int canonicalStationTerrain(
+      double centerX,
+      double centerZ,
+      double normalX,
+      double normalZ,
+      double bankRadius,
+      int[] samples,
+      int[] sampleXs,
+      int[] sampleZs
+   ) {
+      int reach = Math.max(1, Mth.ceil(bankRadius));
+      int count = 0;
+      for (int offset = -reach; offset <= reach; offset++) {
+         double limitedOffset = Mth.clamp(offset, -bankRadius, bankRadius);
+         int worldX = nearestBlock(centerX + normalX * limitedOffset);
+         int worldZ = nearestBlock(centerZ + normalZ * limitedOffset);
+         boolean duplicate = false;
+         for (int previous = 0; previous < count; previous++) {
+            duplicate |= sampleXs[previous] == worldX && sampleZs[previous] == worldZ;
+         }
+         if (duplicate) {
+            continue;
+         }
+         sampleXs[count] = worldX;
+         sampleZs[count] = worldZ;
+         samples[count++] = this.sampleSurface(
+            worldX,
+            worldZ,
+            false,
+            this.settings.worldScale()
+         ).height();
+      }
+      if (count == 0) {
+         return StreamChannelProfile.UNKNOWN;
+      }
+      Arrays.sort(samples, 0, count);
+      int robustLowIndex = count <= 3 ? 0 : Math.min(count - 1, count / 5);
+      return samples[robustLowIndex];
+   }
+
+   private static long lineProfileKey(
+      OsmWaterFeature feature,
+      int part,
+      double[] xs,
+      double[] zs,
+      double bankRadius
+   ) {
+      long hash = mix64(
+         feature.featureId()
+            ^ (long)feature.kind().ordinal() * 0x9E3779B97F4A7C15L
+            ^ (long)part * 0x632BE59BD9B4E019L
+            ^ Double.doubleToLongBits(bankRadius)
+      );
+      for (int point = 0; point < xs.length; point++) {
+         hash = mix64(hash ^ Double.doubleToLongBits(xs[point]));
+         hash = mix64(hash ^ Double.doubleToLongBits(zs[point]));
+      }
+      return hash;
+   }
+
+   static boolean reverseCanonicalGeometry(double[] xs, double[] zs) {
+      for (int point = 0; point < xs.length; point++) {
+         int reversedPoint = xs.length - 1 - point;
+         int comparison = Double.compare(xs[point], xs[reversedPoint]);
+         if (comparison == 0) {
+            comparison = Double.compare(zs[point], zs[reversedPoint]);
+         }
+         if (comparison != 0) {
+            return comparison > 0;
+         }
+      }
+      return false;
+   }
+
+   private static long mix64(long value) {
+      value = (value ^ value >>> 30) * 0xBF58476D1CE4E5B9L;
+      value = (value ^ value >>> 27) * 0x94D049BB133111EBL;
+      return value ^ value >>> 31;
    }
 
    /** Water surface of a centreline channel cell, or the raw terrain where the channel follows the DEM. */

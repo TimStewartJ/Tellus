@@ -208,6 +208,11 @@ public final class TerrainPreloadPackageRegistry {
          return this.sample(blockX, blockZ, Double.POSITIVE_INFINITY);
       }
 
+      public long generation() {
+         this.registry.requestRefreshIfNeeded();
+         return this.registry.snapshot.generation();
+      }
+
       public TerrainPreloadPackage.Sample sample(int blockX, int blockZ, double requestedResolutionMeters) {
          for (TerrainPreloadPackageRegistry.Entry entry : this.entriesFor(blockX, blockZ)) {
             if (!entry.contains(blockX, blockZ) || !entry.supportsResolution(requestedResolutionMeters)) {

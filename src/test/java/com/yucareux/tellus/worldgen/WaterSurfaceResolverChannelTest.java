@@ -68,4 +68,22 @@ class WaterSurfaceResolverChannelTest {
       assertEquals(62, terrain[1 * side + 4]);
       assertTrue(lifted >= 2);
    }
+
+   @Test
+   void closedGeometryUsesItsFullSequenceForCanonicalDirection() {
+      double[] xs = {0.0, 2.0, 0.0, 0.0};
+      double[] zs = {0.0, 1.0, 2.0, 0.0};
+      assertTrue(WaterSurfaceResolver.reverseCanonicalGeometry(xs, zs));
+      assertFalse(
+         WaterSurfaceResolver.reverseCanonicalGeometry(reverse(xs), reverse(zs))
+      );
+   }
+
+   private static double[] reverse(double[] values) {
+      double[] reversed = new double[values.length];
+      for (int i = 0; i < values.length; i++) {
+         reversed[i] = values[values.length - 1 - i];
+      }
+      return reversed;
+   }
 }

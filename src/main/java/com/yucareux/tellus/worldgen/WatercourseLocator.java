@@ -11,10 +11,10 @@ import net.minecraft.util.Mth;
 
 /**
  * Finds the mapped watercourse centreline nearest to a block, for operator diagnostics and automated
- * playtests: where a stream will run, how wide Tellus makes it, and which way it flows.
+ * playtests: where a stream will run, how wide Tellus makes it, and the source geometry around it.
  */
 public final class WatercourseLocator {
-   /** How many downstream vertices of the line are reported after the nearest point. */
+   /** How many subsequent source-order vertices are reported after the nearest point. */
    private static final int PATH_POINTS = 24;
 
    private WatercourseLocator() {
@@ -29,10 +29,10 @@ public final class WatercourseLocator {
     * @param nearestZ block Z of the nearest point on the line
     * @param distanceBlocks distance from the query block to that point
     * @param widthBlocks channel width Tellus generates for this line
-    * @param headingX downstream unit direction at the nearest point (mapped line order), X component
-    * @param headingZ downstream unit direction at the nearest point, Z component
+    * @param headingX source-order unit direction at the nearest point, X component
+    * @param headingZ source-order unit direction at the nearest point, Z component
     * @param lengthBlocks total length of the line part within the query
-    * @param downstream block positions of the line's vertices after the nearest point, in flow order
+    * @param downstream block positions of subsequent source-order vertices; this is not a flow claim
     */
    public record Result(
       OsmWaterKind kind,
@@ -56,7 +56,7 @@ public final class WatercourseLocator {
          }
          return String.format(
             Locale.ROOT,
-            "Watercourse %s #%d: nearest (%d, %d) %.1f blocks away, width %d blocks, heading (%.2f, %.2f) downstream, line %.0f blocks; downstream vertices: %s",
+            "Watercourse %s #%d: nearest (%d, %d) %.1f blocks away, width %d blocks, mapped-order heading (%.2f, %.2f), line %.0f blocks; following vertices: %s",
             this.kind,
             this.featureId,
             this.nearestX,

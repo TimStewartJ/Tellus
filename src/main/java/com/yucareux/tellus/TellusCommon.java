@@ -339,8 +339,8 @@ public class TellusCommon {
    }
 
    /**
-    * Operator diagnostics for mapped watercourses: the nearest centreline (kind, width, downstream heading
-    * and vertices) around the source or an explicit column. Reads Overture tiles blocking; not for players.
+    * Operator diagnostics for mapped watercourses: the nearest centreline (kind, width and source geometry)
+    * around the source or an explicit column. Reads Overture tiles blocking; not for players.
     */
    private static int showNearestWatercourse(CommandSourceStack source, Integer x, Integer z, int radius) {
       EarthChunkGenerator earthGenerator = earthGeneratorFor(source);

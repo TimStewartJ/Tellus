@@ -14,25 +14,20 @@ import java.util.Arrays;
  *       scale, so a stream is three blocks at 1:1 and a single block at 1:30.</li>
  *   <li><b>Depth</b> of the bed below the water surface grows with the width.</li>
  *   <li><b>Surface</b>: the line is sampled at one-block stations along its length; each station's
- *       terrain value is the lowest ground across the channel and its banks. The water surface at a
- *       station is the lowest such value within {@code lookback} stations upstream, so DEM noise
- *       never makes water climb, banks are never lower than the water beside them, and every column
- *       across the channel shares one height. Where the terrain rises more than {@code maxCut} above
- *       that running level the mapped line is climbing through a hump the channel may not cut: the
- *       station stays dry as a sill, the water resumes at the crest and follows the ground down the
- *       far side. Sills keep an upstream pool from spilling and keep the higher downstream reach
- *       from flowing backwards over it.</li>
+ *       terrain value is the lowest ground across the channel and its banks. Both source orientations
+ *       are scored against that terrain because vector-tile clipping does not guarantee downstream
+ *       vertex order. The lower-conflict direction becomes the reach direction. Its wet surface never
+ *       climbs; bounded short DEM humps may be cut through with a larger hydro-flattening budget, while
+ *       unresolved conflicts stay dry until the terrain returns to the established reach level.</li>
  * </ul>
  *
- * <p>Stations are ordered in the mapped direction of the line; OSM draws waterways downstream, which
- * Overture preserves. The rules depend only on stations within {@code 2 * lookback} of each other,
- * so overlapping analysis windows agree wherever they both see the line.
+ * <p>This class profiles one assembled geometry part. Direction and surface decisions are deterministic
+ * for the complete sampled part; callers must provide the same part and terrain halo regardless of the
+ * chunk being generated.
  */
 final class StreamChannelProfile {
    /** Widest channel a centreline may carve, in blocks, however fine the world scale. */
    static final int MAX_WIDTH_BLOCKS = OsmWaterKind.MAX_CENTERLINE_WIDTH_BLOCKS;
-   /** Stations upstream a surface may look back to; twice this must fit inside the analysis margin. */
-   static final int LOOKBACK_STATIONS = 32;
    /** Station carries no water: the channel would have to cut deeper than allowed through a hump. */
    static final int DRY = Integer.MIN_VALUE;
    /** No terrain sample is available for the station (outside the analysed grid). */
@@ -66,57 +61,173 @@ final class StreamChannelProfile {
    }
 
    /**
-    * Water surface per station from the lowest ground across the channel at each station.
+    * Infers the lower-conflict flow direction and profiles a non-climbing wet reach.
     *
-    * @param stationMin lowest terrain height across the channel and its banks at each station in flow
-    *        order, or {@link #UNKNOWN} where no terrain was sampled
-    * @param lookback how many upstream stations the running level may remember
-    * @param maxCut deepest cut below the local ground before a hump is left as a sill
-    * @return the surface per station: a height, {@link #DRY} for a sill, or {@link #UNKNOWN} where the
-    *         station had no sample (callers follow the terrain there)
+    * @param stationMin terrain minima in source geometry order
+    * @param ordinaryMaxCut maximum persistent cut below terrain
+    * @param shortHumpMaxCut larger cut allowed only for a bracketed short DEM hump
+    * @param shortHumpMaxLength maximum stations from a hump to terrain returning near the reach level
     */
-   static int[] surfaces(int[] stationMin, int lookback, int maxCut) {
-      int count = stationMin.length;
-      int[] out = new int[count];
-      int window = Math.max(0, lookback);
-      int cut = Math.max(0, maxCut);
-      int windowStart = 0;
-      boolean climbing = false;
+   static Profile profile(
+      int[] stationMin,
+      int ordinaryMaxCut,
+      int shortHumpMaxCut,
+      int shortHumpMaxLength
+   ) {
+      return profile(
+         stationMin,
+         ordinaryMaxCut,
+         shortHumpMaxCut,
+         shortHumpMaxLength,
+         false
+      );
+   }
 
-      for (int k = 0; k < count; k++) {
-         int here = stationMin[k];
+   static Profile profile(
+      int[] stationMin,
+      int ordinaryMaxCut,
+      int shortHumpMaxCut,
+      int shortHumpMaxLength,
+      boolean reverseOnTie
+   ) {
+      int cut = Math.max(0, ordinaryMaxCut);
+      int bridgeCut = Math.max(cut, shortHumpMaxCut);
+      int bridgeLength = Math.max(0, shortHumpMaxLength);
+      int[] sourceSurfaces = profileDirected(stationMin, cut, bridgeCut, bridgeLength);
+      int[] reversedTerrain = reversed(stationMin);
+      int[] reversedSurfaces = profileDirected(reversedTerrain, cut, bridgeCut, bridgeLength);
+      Conflict sourceConflict = profileConflict(stationMin, sourceSurfaces);
+      Conflict reversedConflict = profileConflict(reversedTerrain, reversedSurfaces);
+      int comparison = reversedConflict.compareTo(sourceConflict);
+      boolean reversed = comparison < 0 || comparison == 0 && reverseOnTie;
+      int[] surfaces = reversed ? reversed(reversedSurfaces) : sourceSurfaces;
+      return new Profile(
+         surfaces,
+         reversed ? Direction.REVERSED : Direction.SOURCE_ORDER,
+         sourceConflict,
+         reversedConflict
+      );
+   }
+
+   static int[] profileDirected(
+      int[] terrain,
+      int ordinaryMaxCut,
+      int shortHumpMaxCut,
+      int shortHumpMaxLength
+   ) {
+      int[] surfaces = new int[terrain.length];
+      int reachLevel = UNKNOWN;
+      for (int station = 0; station < terrain.length; station++) {
+         int here = terrain[station];
          if (here == UNKNOWN) {
-            out[k] = UNKNOWN;
-            // No sample breaks the memory of the reach: the next known station starts fresh.
-            windowStart = k + 1;
-            climbing = false;
+            surfaces[station] = UNKNOWN;
+            reachLevel = UNKNOWN;
             continue;
          }
-         if (climbing) {
-            // Stay dry while the mapped line keeps rising; resume on the crest or the far slope so
-            // the last dry station stands at least as high as the water that follows it.
-            if (k > 0 && stationMin[k - 1] != UNKNOWN && here > stationMin[k - 1]) {
-               out[k] = DRY;
-               continue;
-            }
-            climbing = false;
-            windowStart = k;
-         }
-         int level = UNKNOWN;
-         for (int j = Math.max(windowStart, k - window); j <= k; j++) {
-            int sample = stationMin[j];
-            if (sample != UNKNOWN && sample < level) {
-               level = sample;
-            }
-         }
-         if (here - level > cut) {
-            out[k] = DRY;
-            climbing = true;
+         if (reachLevel == UNKNOWN || here < reachLevel) {
+            reachLevel = here;
+            surfaces[station] = here;
             continue;
          }
-         out[k] = level;
+         int requiredCut = here - reachLevel;
+         if (requiredCut <= ordinaryMaxCut
+            || requiredCut <= shortHumpMaxCut
+               && shortHumpReturns(
+                  terrain,
+                  station,
+                  reachLevel,
+                  ordinaryMaxCut,
+                  shortHumpMaxCut,
+                  shortHumpMaxLength
+               )) {
+            surfaces[station] = reachLevel;
+         } else {
+            surfaces[station] = DRY;
+         }
       }
-      return out;
+      return surfaces;
+   }
+
+   private static boolean shortHumpReturns(
+      int[] terrain,
+      int start,
+      int reachLevel,
+      int ordinaryMaxCut,
+      int shortHumpMaxCut,
+      int maxLength
+   ) {
+      int end = Math.min(terrain.length - 1, start + maxLength);
+      for (int station = start; station <= end; station++) {
+         int sample = terrain[station];
+         if (sample == UNKNOWN || sample - reachLevel > shortHumpMaxCut) {
+            return false;
+         }
+         if (station > start && sample - reachLevel <= ordinaryMaxCut) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   private static Conflict profileConflict(int[] terrain, int[] surfaces) {
+      long barriers = 0L;
+      long cutCost = 0L;
+      long ascent = 0L;
+      int previous = UNKNOWN;
+      for (int station = 0; station < terrain.length; station++) {
+         int sample = terrain[station];
+         if (sample == UNKNOWN) {
+            previous = UNKNOWN;
+            continue;
+         }
+         if (previous != UNKNOWN && sample > previous) {
+            ascent = saturatedAdd(ascent, sample - previous);
+         }
+         previous = sample;
+         int surface = surfaces[station];
+         if (surface == DRY) {
+            barriers++;
+            continue;
+         }
+         if (surface != UNKNOWN) {
+            long cut = Math.max(0L, (long)sample - surface);
+            cutCost = saturatedAdd(cutCost, cut * cut);
+         }
+      }
+      int start = endpointMedian(terrain, false);
+      int end = endpointMedian(terrain, true);
+      long endpointRise = start == UNKNOWN || end == UNKNOWN ? 0L : Math.max(0L, (long)end - start);
+      return new Conflict(barriers, endpointRise, cutCost, ascent);
+   }
+
+   private static int endpointMedian(int[] terrain, boolean fromEnd) {
+      int band = Math.min(8, Math.max(1, terrain.length / 3));
+      int[] values = new int[band];
+      int count = 0;
+      for (int offset = 0; offset < terrain.length && count < values.length; offset++) {
+         int index = fromEnd ? terrain.length - 1 - offset : offset;
+         int sample = terrain[index];
+         if (sample != UNKNOWN) {
+            values[count++] = sample;
+         }
+      }
+      if (count == 0) {
+         return UNKNOWN;
+      }
+      Arrays.sort(values, 0, count);
+      return values[count / 2];
+   }
+
+   private static long saturatedAdd(long left, long right) {
+      return Long.MAX_VALUE - left < right ? Long.MAX_VALUE : left + right;
+   }
+
+   private static int[] reversed(int[] values) {
+      int[] reversed = new int[values.length];
+      for (int i = 0; i < values.length; i++) {
+         reversed[i] = values[values.length - 1 - i];
+      }
+      return reversed;
    }
 
    /** Lowest known value, or {@link #UNKNOWN} when no station has a sample. */
@@ -145,5 +256,45 @@ final class StreamChannelProfile {
       int[] values = new int[count];
       Arrays.fill(values, value);
       return values;
+   }
+
+   enum Direction {
+      SOURCE_ORDER,
+      REVERSED
+   }
+
+   record Profile(
+      int[] surfaces,
+      Direction direction,
+      Conflict sourceOrderConflict,
+      Conflict reversedConflict
+   ) {
+      Profile {
+         surfaces = surfaces.clone();
+      }
+
+      @Override
+      public int[] surfaces() {
+         return this.surfaces.clone();
+      }
+
+      int stationCount() {
+         return this.surfaces.length;
+      }
+   }
+
+   record Conflict(long barriers, long endpointRise, long cutCost, long ascent)
+      implements Comparable<Conflict> {
+      @Override
+      public int compareTo(Conflict other) {
+         int result = Long.compare(this.barriers, other.barriers);
+         if (result == 0) {
+            result = Long.compare(this.endpointRise, other.endpointRise);
+         }
+         if (result == 0) {
+            result = Long.compare(this.cutCost, other.cutCost);
+         }
+         return result == 0 ? Long.compare(this.ascent, other.ascent) : result;
+      }
    }
 }
