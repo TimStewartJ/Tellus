@@ -94,9 +94,16 @@ More commands will be added over time.
 [Tellus Expeditions](https://github.com/TimStewartJ/Tellus-Expeditions)): elevation, slope, land cover,
 Koppen class, RESOLVE ecoregion, real-time temperature, and block/geographic coordinate conversions.
 Companions should depend on this class instead of internal packages; `TellusApi.API_VERSION` is bumped
-whenever a method changes signature or semantics. API v2 takes the world's `WorldProjection`, obtained
+whenever a method changes signature or semantics. The API takes the world's `WorldProjection`, obtained
 from `TellusApi.projection(generator)`, so spawn-centred and historical global worlds resolve the same
 real location as Tellus terrain, OSM features, previews and teleports.
+
+API v3 additionally exposes `TellusApi.isChunkDetailReady(level, chunkX, chunkZ)`: a non-loading,
+non-blocking server-thread readiness probe for companion surface decorators. It becomes true only after
+Tellus has no terrain-refinement or deferred-detail job left for that loaded chunk, preventing companion
+blocks from racing exact terrain, roads, trees or ecological vegetation. The owner chunk and all eight
+neighbours must be loaded and free of pending work because a deferred tree or canopy originating next door
+may cross the owner-chunk boundary.
 
 <details>
   <summary>Settings</summary>

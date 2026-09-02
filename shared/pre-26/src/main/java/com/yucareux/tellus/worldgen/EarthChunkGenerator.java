@@ -692,6 +692,32 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return this.terrainRefinementManager.hasPending(pos);
    }
 
+   /**
+    * True when Tellus has no terrain-refinement or deferred-detail job left for a loaded chunk.
+    * Companion decorators must wait for this before changing surface blocks, otherwise deferred
+    * trees, vegetation, roads or exact terrain can overwrite their work.
+    *
+    * <p>This is a readiness probe only: it never loads, generates, schedules or blocks on a chunk.
+    * Call it from the server thread after confirming the chunk is loaded.</p>
+    */
+   public boolean isChunkDetailReady(ServerLevel level, int chunkX, int chunkZ) {
+      for (int dz = -1; dz <= 1; dz++) {
+         for (int dx = -1; dx <= 1; dx++) {
+            int x = chunkX + dx;
+            int z = chunkZ + dz;
+            if (level.getChunkSource().getChunkNow(x, z) == null) {
+               return false;
+            }
+            ChunkPos pos = new ChunkPos(x, z);
+            if (this.hasPendingTerrainRefinement(pos)
+               || this.usesDeferredChunkDetails() && this.chunkDetailManager.hasPending(pos)) {
+               return false;
+            }
+         }
+      }
+      return true;
+   }
+
    public void discardPreparedChunkState(ChunkPos pos) {
       this.discardPreparedChunkState(ChunkPos.asLong(pos.x, pos.z));
    }
@@ -14962,6 +14988,13 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             job.state = EarthChunkGenerator.ChunkDetailJobState.APPLIED;
             return job.detail;
          }
+      }
+
+      private boolean hasPending(ChunkPos pos) {
+         EarthChunkGenerator.ChunkDetailJob job = this.jobs.get(ChunkPos.asLong(pos.x, pos.z));
+         return job != null
+            && job.state != EarthChunkGenerator.ChunkDetailJobState.APPLIED
+            && job.state != EarthChunkGenerator.ChunkDetailJobState.FAILED;
       }
 
       private void applyReady(ServerLevel level, EarthChunkGenerator generator, int budget) {

@@ -25,7 +25,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
  */
 public final class TellusApi {
    /** Incremented whenever a method here changes signature or semantics. */
-   public static final int API_VERSION = 2;
+   public static final int API_VERSION = 3;
 
    private TellusApi() {
    }
@@ -45,6 +45,17 @@ public final class TellusApi {
    /** The exact per-world projection, including an optional spawn-centred origin. */
    public static WorldProjection projection(EarthChunkGenerator generator) {
       return Objects.requireNonNull(generator, "generator").settings().projection();
+   }
+
+   /**
+    * True when Tellus has finished every deferred terrain/detail write for an already-loaded chunk.
+    * Companion world decorators should wait for this before changing surface blocks. The probe never
+    * loads, generates, schedules or waits for a chunk.
+    */
+   public static boolean isChunkDetailReady(ServerLevel level, int chunkX, int chunkZ) {
+      return earthGenerator(Objects.requireNonNull(level, "level"))
+         .map(generator -> generator.isChunkDetailReady(level, chunkX, chunkZ))
+         .orElse(false);
    }
 
    /** Real-world terrain elevation in metres above sea level at a block column, or {@code NaN} when unavailable. */
