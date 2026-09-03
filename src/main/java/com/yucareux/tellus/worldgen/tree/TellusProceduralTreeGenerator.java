@@ -5,11 +5,14 @@ import com.yucareux.tellus.world.data.canopy.TellusCanopyHeightSource;
 import com.yucareux.tellus.world.data.resolve.ResolveBiome;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.ResolveRealm;
+import java.util.ArrayDeque;
 import java.util.Locale;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
@@ -54,6 +57,7 @@ public final class TellusProceduralTreeGenerator {
    private static final int ROOT_MAX_STEP = 2;
    private static final int ROOT_MAX_ANCHOR_DELTA = 6;
    private static final int BASE_MAX_SUPPORT_DEPTH = 4;
+   private static final int BASE_MIN_CONNECTED_CORE_COLUMNS = 6;
    public static final int ROOT_EXCLUSION_RADIUS = 8;
 
    private TellusProceduralTreeGenerator() {
@@ -394,6 +398,38 @@ public final class TellusProceduralTreeGenerator {
       Objects.requireNonNull(surfaces, "surfaces");
       Objects.requireNonNull(trunkPlacement, "trunkPlacement");
       Objects.requireNonNull(rootPlacement, "rootPlacement");
+      int baseTargetY = anchorGroundY + 1;
+      BasalFootprintPlan basalFootprint = planBasalFootprint(
+         anchorX,
+         anchorGroundY,
+         anchorZ,
+         plan,
+         (worldX, worldZ) -> {
+            int surfaceY = surfaces.surfaceY(worldX, worldZ);
+            if (!isDirectSupportSurface(surfaceY, baseTargetY)) {
+               return surfaceY;
+            }
+            return trunkPlacement.canPlace(worldX, baseTargetY, worldZ)
+                  && supportPathIsClear(
+                     worldX,
+                     surfaceY + 1,
+                     baseTargetY - 1,
+                     worldZ,
+                     rootPlacement
+                  )
+               ? surfaceY
+               : Integer.MIN_VALUE;
+         }
+      );
+      if (!basalFootprint.valid()) {
+         return TrunkPlacementPlan.invalid();
+      }
+      Map<Long, Integer> basalSurfaces = new HashMap<>();
+      for (BasalColumn column : basalFootprint.columns()) {
+         basalSurfaces.put(
+            packColumn(column.worldX(), column.worldZ()), column.surfaceY()
+         );
+      }
       List<TrunkBlock> supports = new ArrayList<>();
       List<TrunkBlock> trunk = new ArrayList<>();
       Set<Long> previousLayer = Set.of();
@@ -419,27 +455,33 @@ public final class TellusProceduralTreeGenerator {
                long column = packColumn(worldX, worldZ);
                boolean centerline = dx == 0 && dz == 0;
                boolean core = y == 1 && insideDisc(dx, dz, coreRadius);
-               boolean placeable = trunkPlacement.canPlace(worldX, targetY, worldZ);
+               Integer basalSurface = core ? basalSurfaces.get(column) : null;
+               if (core && basalSurface == null) {
+                  continue;
+               }
+               boolean placeable = core
+                  || trunkPlacement.canPlace(worldX, targetY, worldZ);
                boolean connected = y > 1 && touchesPreviousLayer(
                   previousLayer, worldX, worldZ
                );
-               int surfaceY = connected
-                  ? Integer.MIN_VALUE
-                  : surfaces.surfaceY(worldX, worldZ);
-               boolean directlySupported = !connected
-                  && placeable
-                  && surfaceY != Integer.MIN_VALUE
-                  && surfaceY < targetY
-                  && targetY - surfaceY <= BASE_MAX_SUPPORT_DEPTH
-                  && supportPathIsClear(
-                     worldX,
-                     surfaceY + 1,
-                     targetY - 1,
-                     worldZ,
-                     rootPlacement
-                  );
+               int surfaceY = core
+                  ? basalSurface
+                  : connected
+                     ? Integer.MIN_VALUE
+                     : surfaces.surfaceY(worldX, worldZ);
+               boolean directlySupported = core
+                  || !connected
+                     && placeable
+                     && isDirectSupportSurface(surfaceY, targetY)
+                     && supportPathIsClear(
+                        worldX,
+                        surfaceY + 1,
+                        targetY - 1,
+                        worldZ,
+                        rootPlacement
+                     );
                if (!placeable || !directlySupported && !connected) {
-                  if (centerline || core) {
+                  if (centerline) {
                      return TrunkPlacementPlan.invalid();
                   }
                   continue;
@@ -463,6 +505,75 @@ public final class TellusProceduralTreeGenerator {
          previousLayer = Set.copyOf(currentLayer);
       }
       return new TrunkPlacementPlan(true, supports, trunk);
+   }
+
+   public static BasalFootprintPlan planBasalFootprint(
+      int anchorX,
+      int anchorGroundY,
+      int anchorZ,
+      TreePlan plan,
+      BasalSurfaceSampler surfaces
+   ) {
+      Objects.requireNonNull(plan, "plan");
+      Objects.requireNonNull(surfaces, "surfaces");
+      int targetY = anchorGroundY + 1;
+      int coreRadius = Math.min(1, trunkRadiusAt(plan, 1));
+      Map<Long, BasalColumn> supported = new HashMap<>();
+      for (int dz = -coreRadius; dz <= coreRadius; dz++) {
+         for (int dx = -coreRadius; dx <= coreRadius; dx++) {
+            if (!insideDisc(dx, dz, coreRadius)) {
+               continue;
+            }
+            int worldX = anchorX + dx;
+            int worldZ = anchorZ + dz;
+            int surfaceY = surfaces.surfaceY(worldX, worldZ);
+            if (isDirectSupportSurface(surfaceY, targetY)) {
+               supported.put(
+                  packColumn(worldX, worldZ),
+                  new BasalColumn(worldX, worldZ, surfaceY)
+               );
+            }
+         }
+      }
+
+      long center = packColumn(anchorX, anchorZ);
+      if (!supported.containsKey(center)) {
+         return BasalFootprintPlan.invalid(targetY);
+      }
+      Set<Long> connected = new LinkedHashSet<>();
+      ArrayDeque<Long> pending = new ArrayDeque<>();
+      connected.add(center);
+      pending.add(center);
+      while (!pending.isEmpty()) {
+         long current = pending.removeFirst();
+         int worldX = (int)(current >> 32);
+         int worldZ = (int)current;
+         for (Direction direction : Direction.Plane.HORIZONTAL) {
+            long neighbor = packColumn(
+               worldX + direction.getStepX(), worldZ + direction.getStepZ()
+            );
+            if (supported.containsKey(neighbor) && connected.add(neighbor)) {
+               pending.addLast(neighbor);
+            }
+         }
+      }
+
+      int requiredColumns = coreRadius == 0
+         ? 1
+         : BASE_MIN_CONNECTED_CORE_COLUMNS;
+      if (connected.size() < requiredColumns) {
+         return BasalFootprintPlan.invalid(targetY);
+      }
+      List<BasalColumn> columns = connected.stream()
+         .map(supported::get)
+         .toList();
+      return new BasalFootprintPlan(true, targetY, columns);
+   }
+
+   private static boolean isDirectSupportSurface(int surfaceY, int targetY) {
+      return surfaceY != Integer.MIN_VALUE
+         && surfaceY < targetY
+         && targetY - surfaceY <= BASE_MAX_SUPPORT_DEPTH;
    }
 
    private static boolean insideDisc(int dx, int dz, int radius) {
@@ -1471,6 +1582,11 @@ public final class TellusProceduralTreeGenerator {
    }
 
    @FunctionalInterface
+   public interface BasalSurfaceSampler {
+      int surfaceY(int worldX, int worldZ);
+   }
+
+   @FunctionalInterface
    interface TrunkPlacementTester {
       boolean canPlace(int worldX, int worldY, int worldZ);
    }
@@ -1479,6 +1595,21 @@ public final class TellusProceduralTreeGenerator {
    }
 
    record TrunkBlock(int worldX, int worldY, int worldZ) {
+   }
+
+   public record BasalColumn(int worldX, int worldZ, int surfaceY) {
+   }
+
+   public record BasalFootprintPlan(
+      boolean valid, int targetY, List<BasalColumn> columns
+   ) {
+      public BasalFootprintPlan {
+         columns = List.copyOf(columns);
+      }
+
+      private static BasalFootprintPlan invalid(int targetY) {
+         return new BasalFootprintPlan(false, targetY, List.of());
+      }
    }
 
    record TrunkPlacementPlan(

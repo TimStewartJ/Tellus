@@ -17,7 +17,10 @@ import com.yucareux.tellus.world.data.osm.OsmWaterFeature;
 import com.yucareux.tellus.world.data.osm.TellusOsmWaterSource;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.util.Mth;
 
@@ -30,6 +33,10 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
    private static final byte WATER_WATERFALL_DROP = 3;
    private static final int REGION_SIZE = 64;
    private static final int MAX_REGION_CACHE = intProperty("tellus.waterRegionCacheSize", 1024, 64, 8192);
+   private static final long WATERFALL_REGION_PENDING_TIMEOUT_NANOS =
+      TimeUnit.SECONDS.toNanos(15L);
+   private static final long WATERFALL_REGION_SUBMISSION_RETRY_NANOS =
+      TimeUnit.SECONDS.toNanos(1L);
    private static final int MAX_NEAR_WATER_CACHE = intProperty("tellus.waterNearChunkCacheSize", 8192, 256, 65536);
    private static final int REGION_LOOKUP_CAPACITY = intProperty("tellus.waterRegionLookupCapacity", 4, 1, 16);
    private static final int CHUNK_SHIFT = 4;
@@ -123,6 +130,9 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
    private final int seaLevel;
    private final Cache<Long, WaterSurfaceResolver.WaterRegionData> regionCache;
    private final Cache<Long, Boolean> nearWaterChunkCache;
+   private final Cache<Long, Boolean> failedWaterfallRegionLoads;
+   private final ConcurrentMap<Long, PendingWaterfallRegionLoad> pendingWaterfallRegionLoads =
+      new ConcurrentHashMap<>();
    private final ThreadLocal<WaterSurfaceResolver.RegionLookup> regionLookup = ThreadLocal.withInitial(WaterSurfaceResolver.RegionLookup::new);
    private final AtomicLong cacheGeneration = new AtomicLong();
    private final long regionSalt;
@@ -179,6 +189,10 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       this.regionClamped = rawRegionMargin > this.regionMargin;
       this.regionCache = CacheBuilder.newBuilder().maximumSize(MAX_REGION_CACHE).build();
       this.nearWaterChunkCache = CacheBuilder.newBuilder().maximumSize(MAX_NEAR_WATER_CACHE).build();
+      this.failedWaterfallRegionLoads = CacheBuilder.newBuilder()
+         .maximumSize(MAX_REGION_CACHE)
+         .expireAfterWrite(1L, TimeUnit.MINUTES)
+         .build();
       this.lakeSurfaceCache = CacheBuilder.newBuilder().maximumSize(MAX_LAKE_SURFACE_CACHE).build();
       this.lineProfileCache = CacheBuilder.newBuilder()
          .maximumWeight(MAX_LINE_PROFILE_CACHE_BYTES)
@@ -258,6 +272,8 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       this.cacheGeneration.incrementAndGet();
       this.regionCache.invalidateAll();
       this.nearWaterChunkCache.invalidateAll();
+      this.failedWaterfallRegionLoads.invalidateAll();
+      this.pendingWaterfallRegionLoads.clear();
       synchronized (this.lakeSurfaceCache) {
          this.lakeSurfaceCache.invalidateAll();
       }
@@ -265,6 +281,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       this.oceanCoastField.clear();
       this.regionCache.cleanUp();
       this.nearWaterChunkCache.cleanUp();
+      this.failedWaterfallRegionLoads.cleanUp();
       synchronized (this.lakeSurfaceCache) {
          this.lakeSurfaceCache.cleanUp();
       }
@@ -403,30 +420,68 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       return region.waterfallInfo(blockX, blockZ);
    }
 
-   /**
-    * Prevents vanilla's infinite-source rule from turning a terrain-following
-    * waterfall into a self-filling flood. The cached region mask deliberately
-    * covers only mapped inland water inside an active Overture waterfall zone;
-    * all other water keeps vanilla source conversion.
-    */
-   public boolean shouldSuppressWaterSourceConversion(int blockX, int blockZ) {
-      if (!this.osmWaterEnabled || WaterfallNoCarveZone.radiusChunks(this.settings.worldScale()) <= 0) {
-         return false;
+   WaterfallFlowCell resolveCachedWaterfallFlowCell(int blockX, int blockZ) {
+      if (!this.osmWaterEnabled
+         || WaterfallNoCarveZone.radiusChunks(this.settings.worldScale()) <= 0) {
+         return WaterfallFlowCell.RESOLVED_NONE;
       }
-      WaterSurfaceResolver.WaterRegionData region = this.resolveRegionData(regionCoord(blockX), regionCoord(blockZ));
-      return region.suppressesSourceConversion(blockX, blockZ);
+      int regionX = regionCoord(blockX);
+      int regionZ = regionCoord(blockZ);
+      long generation = this.cacheGeneration.get();
+      long key = this.regionKey(regionX, regionZ, generation);
+      WaterSurfaceResolver.WaterRegionData region = this.getRegionIfPresent(
+         regionX, regionZ
+      );
+      if (region != null) {
+         this.failedWaterfallRegionLoads.invalidate(key);
+         return new WaterfallFlowCell(
+            true,
+            region.waterfallInfo(blockX, blockZ),
+            region.suppressesSourceConversion(blockX, blockZ)
+         );
+      }
+      if (this.failedWaterfallRegionLoads.getIfPresent(key) != null) {
+         return WaterfallFlowCell.RESOLVED_NONE;
+      }
+      long now = System.nanoTime();
+      PendingWaterfallRegionLoad pending =
+         this.pendingWaterfallRegionLoads.get(key);
+      if (pending != null) {
+         if (!waterfallRegionLoadMayRemainPending(
+            pending.startedAtNs(), now
+         )) {
+            if (this.pendingWaterfallRegionLoads.remove(key, pending)) {
+               this.failedWaterfallRegionLoads.put(key, Boolean.TRUE);
+            }
+            return WaterfallFlowCell.RESOLVED_NONE;
+         }
+         if (!pending.loading() && now >= pending.retryAfterNs()) {
+            PendingWaterfallRegionLoad loading = pending.asLoading();
+            if (this.pendingWaterfallRegionLoads.replace(
+               key, pending, loading
+            )) {
+               return this.submitWaterfallRegionLoad(
+                  regionX, regionZ, generation, key, loading, now
+               );
+            }
+         }
+         return WaterfallFlowCell.PENDING;
+      }
+      return this.requestWaterfallRegionLoad(
+         regionX, regionZ, generation, key, now
+      );
+   }
+
+   static boolean waterfallRegionLoadMayRemainPending(
+      long startedAtNs, long nowNs
+   ) {
+      return nowNs - startedAtNs < WATERFALL_REGION_PENDING_TIMEOUT_NANOS;
    }
 
    static boolean isSourceConversionProtectedCell(
       boolean waterfallNoCarve, boolean lineWater, boolean areaWater, boolean inlandWater
    ) {
       return waterfallNoCarve && (lineWater || areaWater) && inlandWater;
-   }
-
-   static boolean shouldScheduleFlowSource(int waterSurface, WaterSurfaceResolver.WaterfallInfo drop) {
-      return drop.waterfall()
-         && waterSurface >= drop.upstreamSurface()
-         && drop.upstreamSurface() > drop.terrainSurface();
    }
 
    public WaterSurfaceResolver.PreviewWaterGrid resolvePreviewWaterGrid(
@@ -583,6 +638,75 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
             Tellus.LOGGER.debug("Failed to prefetch water region {}:{}", new Object[]{regionX, regionZ, error});
          }
       }
+   }
+
+   private WaterfallFlowCell requestWaterfallRegionLoad(
+      int regionX,
+      int regionZ,
+      long generation,
+      long key,
+      long now
+   ) {
+      PendingWaterfallRegionLoad pending =
+         PendingWaterfallRegionLoad.loading(now);
+      PendingWaterfallRegionLoad existing =
+         this.pendingWaterfallRegionLoads.putIfAbsent(key, pending);
+      if (existing != null) {
+         return waterfallRegionLoadMayRemainPending(
+            existing.startedAtNs(), now
+         )
+            ? WaterfallFlowCell.PENDING
+            : WaterfallFlowCell.RESOLVED_NONE;
+      }
+      return this.submitWaterfallRegionLoad(
+         regionX, regionZ, generation, key, pending, now
+      );
+   }
+
+   private WaterfallFlowCell submitWaterfallRegionLoad(
+      int regionX,
+      int regionZ,
+      long generation,
+      long key,
+      PendingWaterfallRegionLoad pending,
+      long now
+   ) {
+      TellusWorldgenSources.PrefetchSubmission submission =
+         TellusWorldgenSources.submitPrefetchTaskNonBlocking(
+         () -> {
+            boolean loaded = false;
+            try {
+               if (generation == this.cacheGeneration.get()) {
+                  this.prefetchRegion(regionX, regionZ);
+                  loaded = this.regionCache.getIfPresent(key) != null;
+               }
+            } finally {
+               this.pendingWaterfallRegionLoads.remove(key, pending);
+               if (loaded) {
+                  this.failedWaterfallRegionLoads.invalidate(key);
+               } else if (generation == this.cacheGeneration.get()) {
+                  this.failedWaterfallRegionLoads.put(key, Boolean.TRUE);
+               }
+            }
+         }
+      );
+      if (submission == TellusWorldgenSources.PrefetchSubmission.SUBMITTED) {
+         return WaterfallFlowCell.PENDING;
+      }
+      if (submission == TellusWorldgenSources.PrefetchSubmission.REJECTED) {
+         this.pendingWaterfallRegionLoads.replace(
+            key,
+            pending,
+            pending.retryAfter(
+               now + WATERFALL_REGION_SUBMISSION_RETRY_NANOS
+            )
+         );
+         return WaterfallFlowCell.PENDING;
+      }
+      if (this.pendingWaterfallRegionLoads.remove(key, pending)) {
+         this.failedWaterfallRegionLoads.put(key, Boolean.TRUE);
+      }
+      return WaterfallFlowCell.RESOLVED_NONE;
    }
 
    private WaterSurfaceResolver.WaterRegionData getRegionIfPresent(int regionX, int regionZ) {
@@ -4329,6 +4453,37 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       private static final WaterSurfaceResolver.WaterfallInfo NONE = new WaterSurfaceResolver.WaterfallInfo(
          false, Integer.MIN_VALUE, Integer.MIN_VALUE
       );
+   }
+
+   record WaterfallFlowCell(
+      boolean resolved,
+      WaterfallInfo waterfall,
+      boolean suppressSourceConversion
+   ) {
+      private static final WaterfallFlowCell PENDING =
+         new WaterfallFlowCell(false, WaterfallInfo.NONE, false);
+      private static final WaterfallFlowCell RESOLVED_NONE =
+         new WaterfallFlowCell(true, WaterfallInfo.NONE, false);
+   }
+
+   private record PendingWaterfallRegionLoad(
+      long startedAtNs, long retryAfterNs, boolean loading
+   ) {
+      private static PendingWaterfallRegionLoad loading(long now) {
+         return new PendingWaterfallRegionLoad(now, now, true);
+      }
+
+      private PendingWaterfallRegionLoad asLoading() {
+         return new PendingWaterfallRegionLoad(
+            this.startedAtNs, this.retryAfterNs, true
+         );
+      }
+
+      private PendingWaterfallRegionLoad retryAfter(long retryAfterNs) {
+         return new PendingWaterfallRegionLoad(
+            this.startedAtNs, retryAfterNs, false
+         );
+      }
    }
 
    public record PreviewWaterGrid(

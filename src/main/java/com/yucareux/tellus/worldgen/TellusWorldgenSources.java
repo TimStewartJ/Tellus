@@ -686,6 +686,29 @@ public final class TellusWorldgenSources {
       }
    }
 
+   static PrefetchSubmission submitPrefetchTaskNonBlocking(Runnable task) {
+      if (PREFETCH_EXECUTOR == null) {
+         return PrefetchSubmission.UNAVAILABLE;
+      }
+      try {
+         PREFETCH_EXECUTOR.execute(task);
+         return PrefetchSubmission.SUBMITTED;
+      } catch (RejectedExecutionException error) {
+         EarthChunkGenerator.recordTerrainStreamingPrefetchQueueRejection();
+         Tellus.LOGGER.debug("Skipped Tellus prefetch task because the queue is full");
+         return PrefetchSubmission.REJECTED;
+      } catch (RuntimeException error) {
+         Tellus.LOGGER.debug("Failed to schedule Tellus prefetch task", error);
+         return PrefetchSubmission.UNAVAILABLE;
+      }
+   }
+
+   enum PrefetchSubmission {
+      SUBMITTED,
+      REJECTED,
+      UNAVAILABLE
+   }
+
    private static void submitPrefetch(Runnable task, boolean allowInlineExecution) {
       try {
          PREFETCH_EXECUTOR.execute(task);

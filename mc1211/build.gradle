@@ -14,7 +14,7 @@ ext.tellus = [
 	mapboxVersion: '24.1.1',
 	protobufVersion: '4.28.2',
 	officialMappings: true,
-	testDistantHorizonsRuntime: false,
+	testDistantHorizonsRuntime: true,
 ]
 
 apply from: rootProject.file('gradle/tellus-fabric.gradle')

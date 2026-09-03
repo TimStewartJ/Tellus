@@ -75,7 +75,7 @@ The cave preparation lane has its own deterministic scaling benchmark; serialize
 ./gradlew :mc262:benchmarkCarverPreparation -PcarverBenchRadius=6 -PcarverBenchThreads=16 -PcarverBenchRounds=3
 ```
 
-Water-region builds sample elevation row by row with the tile raster and Mercator math hoisted per row (`-Dtellus.water.rowSampling=false` restores the per-sample path for A/B comparisons; results are identical). The dense grid margin is the hydrology context only (`tellus.water.flowContextBlocks`, default 192); Overture waterfall markers are queried separately out to `WaterfallNoCarveZone.queryMarginBlocks`, so lowering `tellus.water.waterfallNoCarveRadiusChunks` no longer changes the grid size.
+Water-region builds sample elevation row by row with the tile raster and Mercator math hoisted per row (`-Dtellus.water.rowSampling=false` restores the per-sample path for A/B comparisons; results are identical). The dense grid margin is the hydrology context only (`tellus.water.flowContextBlocks`, default 192); Overture waterfall markers are queried separately out to `WaterfallNoCarveZone.queryMarginBlocks`, so changing `tellus.water.waterfallNoCarveRadiusChunks` (default 2 at 1:1, scaled down with world scale) no longer changes the grid size.
 
 ## Commands
 
@@ -202,8 +202,12 @@ This section lets you toggle vanilla structures and world features on or off, su
 - Understory plants are placed without a lattice: each block column has a per-stratum priority and becomes a candidate only when it is the local maximum within the stratum's spacing radius, so plants keep a minimum distance and show no repeating pattern. A block-space openness field carves connected game trails through the woody strata so dense forest stays passable at ground level. The **Ecological Understory** world setting (default on) switches the understory off independently of the canopy trees.
 - Procedural roots and wide trunk flares sample each occupied column before placement. Buttress logs follow the
   local surface, fill down to support on gentle slopes, and stop before cliffs, fluids, unsupported ground, or
-  reserved generation corridors instead of drawing anchor-height log rays through open air.
-- Distant Horizons reuses the full-detail nine-block tree anchors, regional profile, ETH-derived height, crown dimensions, and material palette. This keeps distant canopies stable when their full chunks load while retaining a cheaper column representation for LOD generation.
+  reserved generation corridors instead of drawing anchor-height log rays through open air. Wide trunks keep a
+  grounded centre and at least six connected core columns; benign uphill perimeter cells are trimmed instead of
+  rejecting the whole tree, while narrow or disconnected supports still fail atomically before any writes.
+- Distant Horizons reuses the full-detail nine-block tree anchors, regional profile, ETH-derived height, crown
+  dimensions, material palette, and basal-footprint eligibility. The footprint result is cached per anchor so
+  terrain-rejected canopies do not pop out near the native boundary without turning the check into per-column work.
 - Raw tile storage is bounded to 256 MiB by default and decoded memory storage to 64 tiles. Override them with `tellus.canopyHeight.diskCacheMiB` and `tellus.canopyHeight.memoryTiles`.
 - The official service is the default; a compatible mirror can later be selected with `tellus.canopyHeight.serviceUrl` without changing tree-generation code.
 - Dataset: Lang, N., Schindler, K., and Wegner, J. D. (2022), ETH_GlobalCanopyHeight_10m_2020_version1, ETH Zurich. License: CC BY 4.0.
@@ -216,6 +220,9 @@ This section lets you toggle vanilla structures and world features on or off, su
 - Complete empty vector tiles are valid dry coverage. Pending or failed coverage is kept non-cacheable so temporary source failures cannot become permanent dry seams.
 - Watercourses mapped only as a centreline (rivers without riverbank polygons, streams, canals, ditches, drains) generate as directed reaches. Width comes from mapped kind and ground scale (a stream is three blocks at 1:1, a river fourteen, everything one block at 1:30), and the bed sits one to four blocks below the water.
 - Vector-tile vertex order is not assumed to be downstream. Tellus scores both orientations against cross-channel terrain and uses the lower-conflict direction. Wet surfaces are non-climbing in that direction. Ordinary DEM noise is cut within `-Dtellus.water.riverMaxTerrainCut` (default 6); a short hump may use the existing hydro-flattening ceiling (default 12) only when terrain returns within the bounded 48-block lookahead. A long or excessive conflict stays dry until the established reach level can resume—it never restarts water higher on the first crest.
+- Confirmed waterfall drops generate bounded falling-water curtains from the raw terrain to the upstream reach.
+  Only resolver-confirmed curtain cells are held against vanilla lateral spreading or draining; normal water and
+  ordinary source conversion remain unchanged.
 - This directed profile is the first stage of a longer-term reach graph: future work can stitch compatible tile fragments at canonical endpoints, split at confluences and explicit waterfalls, and propagate outlet evidence across the graph without changing the channel cross-section contract.
 - https://docs.overturemaps.org/attribution/
 

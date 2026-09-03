@@ -15,34 +15,30 @@ class WaterfallNoCarveZoneTest {
    private static final OsmWaterFeature MARKER = OsmWaterFeature.waterfallMarker(1L, 0.0, 0.0);
 
    @Test
-   void protectsAThirtyTwoChunkRadiusCircle() {
-      assertEquals(32, WaterfallNoCarveZone.radiusChunks());
-      assertEquals(32, WaterfallNoCarveZone.radiusChunks(WORLD_SCALE));
-      assertTrue(WaterfallNoCarveZone.containsBlock(MARKER, -512, 0, PROJECTION));
-      assertTrue(WaterfallNoCarveZone.containsBlock(MARKER, 527, 0, PROJECTION));
-      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, -513, 0, PROJECTION));
-      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, 528, 0, PROJECTION));
-      assertTrue(WaterfallNoCarveZone.containsBlock(MARKER, 352, 352, PROJECTION));
-      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, 368, 368, PROJECTION));
-      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, -512, -512, PROJECTION));
+   void protectsATwoChunkRadiusCircle() {
+      assertEquals(2, WaterfallNoCarveZone.radiusChunks());
+      assertEquals(2, WaterfallNoCarveZone.radiusChunks(WORLD_SCALE));
+      assertTrue(WaterfallNoCarveZone.containsBlock(MARKER, -32, 0, PROJECTION));
+      assertTrue(WaterfallNoCarveZone.containsBlock(MARKER, 47, 0, PROJECTION));
+      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, -33, 0, PROJECTION));
+      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, 48, 0, PROJECTION));
+      assertTrue(WaterfallNoCarveZone.containsBlock(MARKER, 16, 16, PROJECTION));
+      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, 32, 16, PROJECTION));
+      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, -32, -32, PROJECTION));
    }
 
    @Test
    void scalesTheRadiusByRealWorldDistanceUntilItIsDisabled() {
-      assertEquals(16, WaterfallNoCarveZone.radiusChunks(2.0));
-      assertEquals(4, WaterfallNoCarveZone.radiusChunks(8.0));
-      assertEquals(2, WaterfallNoCarveZone.radiusChunks(16.0));
-      assertEquals(1, WaterfallNoCarveZone.radiusChunks(30.0));
-      assertEquals(1, WaterfallNoCarveZone.radiusChunks(32.0));
-      assertEquals(0, WaterfallNoCarveZone.radiusChunks(33.0));
-      assertEquals(31, WaterfallNoCarveZone.queryMarginBlocks(30.0));
-      assertEquals(0, WaterfallNoCarveZone.queryMarginBlocks(33.0));
-      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, 0, 0, WorldProjection.global(33.0)));
+      assertEquals(1, WaterfallNoCarveZone.radiusChunks(2.0));
+      assertEquals(0, WaterfallNoCarveZone.radiusChunks(3.0));
+      assertEquals(31, WaterfallNoCarveZone.queryMarginBlocks(2.0));
+      assertEquals(0, WaterfallNoCarveZone.queryMarginBlocks(3.0));
+      assertFalse(WaterfallNoCarveZone.containsBlock(MARKER, 0, 0, WorldProjection.global(3.0)));
    }
 
    @Test
    void marksPreviewSamplesAndCoarseDistantHorizonCells() {
-      double[] samples = new double[]{-513.0, -512.0, 0.0, 352.0, 368.0, 527.0, 528.0};
+      double[] samples = new double[]{-33.0, -32.0, 0.0, 16.0, 32.0, 47.0, 48.0};
       boolean[] previewMask = new boolean[samples.length * samples.length];
       WaterfallNoCarveZone.markSampleGrid(previewMask, samples, samples, List.of(MARKER), PROJECTION);
 
@@ -54,19 +50,19 @@ class WaterfallNoCarveZoneTest {
       assertFalse(previewMask[index(samples.length, 6, 2)]);
       assertFalse(previewMask[index(samples.length, 1, 1)]);
 
-      boolean[] lodMask = new boolean[9 * 9];
-      WaterfallNoCarveZone.markRegularCellGrid(lodMask, -512, -512, 9, 128, List.of(MARKER), PROJECTION);
-      assertFalse(lodMask[index(9, 0, 0)]);
-      assertTrue(lodMask[index(9, 1, 1)]);
-      assertTrue(lodMask[index(9, 8, 4)]);
-      assertFalse(lodMask[index(9, 8, 8)]);
+      boolean[] lodMask = new boolean[5 * 5];
+      WaterfallNoCarveZone.markRegularCellGrid(lodMask, -32, -32, 5, 16, List.of(MARKER), PROJECTION);
+      assertFalse(lodMask[index(5, 0, 0)]);
+      assertTrue(lodMask[index(5, 0, 2)]);
+      assertTrue(lodMask[index(5, 4, 2)]);
+      assertFalse(lodMask[index(5, 4, 4)]);
    }
 
    @Test
    void marksAChunkAlignedCircleInTheFullResolutionGrid() {
       boolean[] mask = new boolean[17 * 17];
 
-      WaterfallNoCarveZone.markBlockGrid(mask, 352, 352, 17, 17, List.of(MARKER), PROJECTION);
+      WaterfallNoCarveZone.markBlockGrid(mask, 16, 16, 17, 17, List.of(MARKER), PROJECTION);
 
       assertTrue(mask[index(17, 0, 0)]);
       assertFalse(mask[index(17, 16, 16)]);

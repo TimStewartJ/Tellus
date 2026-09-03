@@ -14,7 +14,7 @@ public final class WaterfallNoCarveZone {
    private static final int CHUNK_SHIFT = 4;
    private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
    private static final int BASE_RADIUS_CHUNKS = intProperty(
-      "tellus.water.waterfallNoCarveRadiusChunks", 32, 0, 64
+      "tellus.water.waterfallNoCarveRadiusChunks", 2, 0, 64
    );
 
    private WaterfallNoCarveZone() {

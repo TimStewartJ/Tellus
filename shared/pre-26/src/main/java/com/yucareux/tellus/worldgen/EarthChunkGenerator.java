@@ -515,8 +515,24 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       }
    }
 
-   public boolean shouldSuppressWaterSourceConversion(int blockX, int blockZ) {
-      return this.waterResolver.shouldSuppressWaterSourceConversion(blockX, blockZ);
+   public WaterfallFluidPolicy waterfallFluidPolicy(
+      int blockX, int blockY, int blockZ
+   ) {
+      WaterSurfaceResolver.WaterfallFlowCell cell =
+         this.waterResolver.resolveCachedWaterfallFlowCell(blockX, blockZ);
+      return new WaterfallFluidPolicy(
+         cell.resolved(),
+         cell.resolved()
+            && WaterfallCurtain.contains(blockY, cell.waterfall()),
+         cell.resolved() && cell.suppressSourceConversion()
+      );
+   }
+
+   public record WaterfallFluidPolicy(
+      boolean resolved,
+      boolean preserveCurtain,
+      boolean suppressSourceConversion
+   ) {
    }
 
    public long worldSeed() {
@@ -1322,6 +1338,18 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          this.applyPreparedBuildingsToTerrain(preparedBuildings, terrainSurfaces, waterSurfaces, waterFlags, chunkMinY, chunkMaxY - 1);
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.FILL_BUILDING_TERRAIN, phaseStartNs);
       }
+      restoreWaterfallDropTerrain(
+         waterData,
+         terrainSurfaces,
+         heightGrid,
+         gridSize,
+         step,
+         preparedBuildings
+      );
+      int[] waterfallTops = WaterfallCurtain.tops(
+         waterData, terrainSurfaces, chunkMaxY - 1
+      );
+      suppressBuildingWaterfallCurtains(waterfallTops, preparedBuildings);
       int[] terrainShellBedrockSkinTopYs = thinShellTerrain
          ? this.computeTerrainShellBedrockSkinTopYs(
             terrainSurfaces, heightGrid, gridSize, step, chunkMinY, chunkMaxY - 1
@@ -1381,6 +1409,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             terrainSurfaces,
             waterSurfaces,
             waterFlags,
+            waterfallTops,
             coverClasses,
             visualCoverClasses,
             surfaceCoverClasses,
@@ -1607,6 +1636,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                columnStoneFillNs += elapsedFullChunkProfilingSince(subPhaseStartNs);
 
                subPhaseStartNs = beginFullChunkProfiling();
+               int waterfallTop = waterfallTops[index];
                if (hasWater && surface < waterSurface) {
                   if (sectionWriter != null) {
                      sectionWriter.fillColumnConstant(localX, localZ, surface + 1, waterSurface, WATER_STATE);
@@ -1616,9 +1646,22 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                         chunk.setBlockState(cursor, WATER_STATE, false);
                      }
                   }
-                  if (this.isWaterfallSourceColumn(worldX, worldZ, waterSurface)) {
-                     cursor.set(worldX, waterSurface, worldZ);
-                     chunk.markPosForPostprocessing(cursor);
+               } else if (waterfallTop != WaterfallCurtain.NONE) {
+                  if (sectionWriter != null) {
+                     sectionWriter.fillColumnConstant(
+                        localX,
+                        localZ,
+                        surface + 1,
+                        waterfallTop,
+                        WaterfallCurtain.blockState()
+                     );
+                  } else {
+                     for (int yx = surface + 1; yx <= waterfallTop; yx++) {
+                        cursor.set(worldX, yx, worldZ);
+                        chunk.setBlockState(
+                           cursor, WaterfallCurtain.blockState(), false
+                        );
+                     }
                   }
                }
                waterColumnFillNs += elapsedFullChunkProfilingSince(subPhaseStartNs);
@@ -8105,6 +8148,17 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 	      this.repairAnomalousChunkTerrain(
 	         terrainSurfaces, waterSurfaces, waterFlags, oceanFlags, coverClasses, heightGrid, gridSize, step, chunkMinY, shell.maxY()
 	      );
+	      restoreWaterfallDropTerrain(
+	         exactWaterData,
+	         terrainSurfaces,
+	         heightGrid,
+	         gridSize,
+	         step,
+	         null
+	      );
+	      int[] waterfallTops = WaterfallCurtain.tops(
+	         exactWaterData, terrainSurfaces, shell.maxY()
+	      );
       int[] terrainShellBedrockSkinTopYs = this.computeTerrainShellBedrockSkinTopYs(
          terrainSurfaces, heightGrid, gridSize, step, chunkMinY, shell.maxY()
       );
@@ -8142,6 +8196,9 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       EarthChunkGenerator.PreparedChunkDetail delayedDetail = this.preparePostRefinementChunkDetail(
          exactContext, failOpenPendingContributors
       );
+      suppressBuildingWaterfallCurtains(
+         waterfallTops, delayedDetail.preparedBuildings()
+      );
       return new EarthChunkGenerator.PreparedTerrainRefinement(
          shell,
          exactContext,
@@ -8151,6 +8208,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          terrainShellBedrockCurtainBottomYs,
          waterSurfaces,
          waterFlags,
+         waterfallTops,
          coverClasses,
          visualCoverClasses,
          surfaceCoverClasses,
@@ -8212,6 +8270,46 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
          int sourceIndex = (localZ + step) * gridSize + step;
          System.arraycopy(heightGrid, sourceIndex, terrainSurfaces, localZ * CHUNK_SIDE, CHUNK_SIDE);
+      }
+   }
+
+   private static void restoreWaterfallDropTerrain(
+      WaterSurfaceResolver.WaterChunkData water,
+      int[] terrainSurfaces,
+      int[] heightGrid,
+      int gridSize,
+      int step,
+      EarthChunkGenerator.PreparedChunkBuildings buildings
+   ) {
+      for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
+         for (int localX = 0; localX < CHUNK_SIDE; localX++) {
+            if (!water.isWaterfallDrop(localX, localZ)) {
+               continue;
+            }
+            int index = chunkIndex(localX, localZ);
+            if (buildings != null
+               && buildings.flattenedTerrainSurface(index)
+                  != Integer.MIN_VALUE) {
+               continue;
+            }
+            int surface = water.terrainSurface(localX, localZ);
+            terrainSurfaces[index] = surface;
+            heightGrid[(localZ + step) * gridSize + localX + step] = surface;
+         }
+      }
+   }
+
+   private static void suppressBuildingWaterfallCurtains(
+      int[] waterfallTops,
+      EarthChunkGenerator.PreparedChunkBuildings buildings
+   ) {
+      if (buildings == null) {
+         return;
+      }
+      for (int index = 0; index < CHUNK_AREA; index++) {
+         if (buildings.occupiesColumn(index)) {
+            waterfallTops[index] = WaterfallCurtain.NONE;
+         }
       }
    }
 
@@ -8450,9 +8548,11 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int[] shellTerrainSurfaces = shell.terrainSurfaces();
       int[] shellWaterSurfaces = shell.waterSurfaces();
       boolean[] shellWaterFlags = shell.waterFlags();
+      int[] shellWaterfallTops = shell.waterfallTops();
       int[] refinedTerrainSurfaces = refinement.terrainSurfaces();
       int[] refinedWaterSurfaces = refinement.waterSurfaces();
       boolean[] refinedWaterFlags = refinement.waterFlags();
+      int[] refinedWaterfallTops = refinement.waterfallTops();
       int[] refinedSlopeDiffs = refinement.slopeDiffs();
       int[] refinedConvexities = refinement.convexities();
       int[] refinedSurfaceCoverClasses = refinement.surfaceCoverClasses();
@@ -8468,8 +8568,12 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             int index = rowIndex + localX;
             int oldSurface = shellTerrainSurfaces[index];
             int newSurface = refinedTerrainSurfaces[index];
-            int oldTop = shellWaterFlags[index] ? Math.max(oldSurface, shellWaterSurfaces[index]) : oldSurface;
-            int newTop = refinedWaterFlags[index] ? Math.max(newSurface, refinedWaterSurfaces[index]) : newSurface;
+            int oldTop = shellWaterFlags[index]
+               ? Math.max(oldSurface, shellWaterSurfaces[index])
+               : Math.max(oldSurface, shellWaterfallTops[index]);
+            int newTop = refinedWaterFlags[index]
+               ? Math.max(newSurface, refinedWaterSurfaces[index])
+               : Math.max(newSurface, refinedWaterfallTops[index]);
             int oldSupportBottom = thinShellTerrain
                ? this.resolveThinShellSupportBottomY(
                   localX, localZ, worldX, worldZ, oldSurface, oldTop, shellTerrainSurfaces, chunkMinY,
@@ -8547,9 +8651,16 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
                   cursor.set(worldX, y, worldZ);
                   chunk.setBlockState(cursor, WATER_STATE, false);
                }
-               if (this.isWaterfallSourceColumn(worldX, worldZ, refinedWaterSurfaces[index])) {
-                  cursor.set(worldX, refinedWaterSurfaces[index], worldZ);
-                  chunk.markPosForPostprocessing(cursor);
+            } else if (refinedWaterfallTops[index] > newSurface) {
+               for (
+                  int y = newSurface + 1;
+                  y <= refinedWaterfallTops[index];
+                  y++
+               ) {
+                  cursor.set(worldX, y, worldZ);
+                  chunk.setBlockState(
+                     cursor, WaterfallCurtain.blockState(), false
+                  );
                }
             }
 
@@ -11607,18 +11718,6 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       }
    }
 
-   private boolean isWaterfallSourceColumn(int worldX, int worldZ, int waterSurface) {
-      for (Direction direction : Direction.Plane.HORIZONTAL) {
-         WaterSurfaceResolver.WaterfallInfo waterfall = this.waterResolver.resolveWaterfallInfo(
-            worldX + direction.getStepX(), worldZ + direction.getStepZ()
-         );
-         if (WaterSurfaceResolver.shouldScheduleFlowSource(waterSurface, waterfall)) {
-            return true;
-         }
-      }
-      return false;
-   }
-
    private WaterSurfaceResolver.WaterChunkData resolveChunkWaterData(ChunkPos pos) {
       return this.resolveChunkWaterData(pos, null);
    }
@@ -14202,6 +14301,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int[] terrainSurfaces,
       int[] waterSurfaces,
       boolean[] waterFlags,
+      int[] waterfallTops,
       int[] coverClasses,
       int[] visualCoverClasses,
       int[] surfaceCoverClasses,
@@ -14217,6 +14317,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          int[] terrainSurfaces,
          int[] waterSurfaces,
          boolean[] waterFlags,
+         int[] waterfallTops,
          int[] coverClasses,
          int[] visualCoverClasses,
          int[] surfaceCoverClasses,
@@ -14232,6 +14333,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
             terrainSurfaces.clone(),
             waterSurfaces.clone(),
             waterFlags.clone(),
+            waterfallTops.clone(),
             coverClasses.clone(),
             visualCoverClasses.clone(),
             surfaceCoverClasses.clone(),
@@ -14256,6 +14358,7 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       int[] terrainShellBedrockCurtainBottomYs,
       int[] waterSurfaces,
       boolean[] waterFlags,
+      int[] waterfallTops,
       int[] coverClasses,
       int[] visualCoverClasses,
       int[] surfaceCoverClasses,
@@ -16443,6 +16546,10 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
       private int flattenedTerrainSurface(int index) {
          return this.flattenedTerrain[index];
+      }
+
+      private boolean occupiesColumn(int index) {
+         return this.columnSpans.get(index) != null;
       }
 
       private boolean suppressesTrees(int localX, int localZ) {

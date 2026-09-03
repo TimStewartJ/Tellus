@@ -268,7 +268,9 @@ class TellusProceduralTreeGeneratorTest {
             100,
             0,
             treePlan(52, 4),
-            (x, z) -> x >= 1 ? Integer.MIN_VALUE : 100,
+            (x, z) -> x < 0 || x == 0 && z == 0
+               ? 100
+               : Integer.MIN_VALUE,
             (x, y, z) -> true,
             (x, y, z) -> true
          );
@@ -282,6 +284,85 @@ class TellusProceduralTreeGeneratorTest {
       ));
       assertFalse(unsupported.valid());
       assertTrue(unsupported.trunk().isEmpty());
+   }
+
+   @Test
+   void wideTrunksKeepSixConnectedSupportsAndTrimUphillCoreCells() {
+      TellusProceduralTreeGenerator.BasalFootprintPlan footprint =
+         TellusProceduralTreeGenerator.planBasalFootprint(
+            0,
+            100,
+            0,
+            treePlan(52, 4),
+            (x, z) -> x == 1 ? 101 : 100
+         );
+      TellusProceduralTreeGenerator.TrunkPlacementPlan trunk =
+         TellusProceduralTreeGenerator.planTrunkPlacement(
+            0,
+            100,
+            0,
+            treePlan(52, 4),
+            (x, z) -> x == 1 ? 101 : 100,
+            (x, y, z) -> y > (x == 1 ? 101 : 100),
+            (x, y, z) -> true
+         );
+
+      assertTrue(footprint.valid());
+      assertEquals(6, footprint.columns().size());
+      assertTrue(trunk.valid());
+      assertFalse(hasTrunkBlock(trunk, 1, 101, 0));
+      assertTrue(hasTrunkBlock(trunk, 1, 102, 0));
+   }
+
+   @Test
+   void wideTrunksRejectFiveOrFewerConnectedCoreSupports() {
+      TellusProceduralTreeGenerator.BasalFootprintPlan footprint =
+         TellusProceduralTreeGenerator.planBasalFootprint(
+            0,
+            100,
+            0,
+            treePlan(52, 4),
+            (x, z) -> x < 0 || x == 0 && (z == 0 || z == 1)
+               ? 100
+               : Integer.MIN_VALUE
+         );
+
+      assertFalse(footprint.valid());
+      assertTrue(footprint.columns().isEmpty());
+   }
+
+   @Test
+   void wideTrunksRejectSixSupportsWhenTheCenterComponentHasOnlyFive() {
+      TellusProceduralTreeGenerator.BasalFootprintPlan footprint =
+         TellusProceduralTreeGenerator.planBasalFootprint(
+            0,
+            100,
+            0,
+            treePlan(52, 4),
+            (x, z) -> x < 0
+                  || x == 0 && z <= 0
+                  || x == 1 && z == 1
+               ? 100
+               : Integer.MIN_VALUE
+         );
+
+      assertFalse(footprint.valid());
+      assertTrue(footprint.columns().isEmpty());
+   }
+
+   @Test
+   void thinTrunksNeedOnlyTheirGroundedCenter() {
+      TellusProceduralTreeGenerator.BasalFootprintPlan footprint =
+         TellusProceduralTreeGenerator.planBasalFootprint(
+            0,
+            100,
+            0,
+            treePlan(20, 1),
+            (x, z) -> x == 0 && z == 0 ? 100 : Integer.MIN_VALUE
+         );
+
+      assertTrue(footprint.valid());
+      assertEquals(1, footprint.columns().size());
    }
 
    @Test

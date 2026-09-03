@@ -4745,7 +4745,18 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             TellusProceduralTreeGenerator.TreePlan treePlan = useFullDetailAnchors
                ? requestCache.treePlan(bestCenterX, bestCenterZ, worldScale, bestSeed, biomeHolder, canopy)
                : null;
-            if (treePlan != null && (!treePlan.present() || bestDist > treePlan.crownRadius())) {
+            if (treePlan != null
+               && (!treePlan.present()
+                  || bestDist > treePlan.crownRadius()
+                  || !requestCache.treeFootprintPresent(
+                     bestCenterX,
+                     bestCenterZ,
+                     worldScale,
+                     previewResolutionMeters,
+                     bestSeed,
+                     biomeHolder,
+                     treePlan
+                  ))) {
                return null;
             }
             if (treePlan == null && lowCanopyBush && bestDist > 2) {
@@ -5091,6 +5102,19 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          worldZ,
          TellusProceduralTreeGenerator.ROOT_EXCLUSION_RADIUS
       );
+   }
+
+   static boolean acceptsLodTreeFootprint(
+      int anchorX,
+      int anchorGroundY,
+      int anchorZ,
+      TellusProceduralTreeGenerator.TreePlan plan,
+      TellusProceduralTreeGenerator.BasalSurfaceSampler surfaces
+   ) {
+      return plan.bush()
+         || TellusProceduralTreeGenerator.planBasalFootprint(
+            anchorX, anchorGroundY, anchorZ, plan, surfaces
+         ).valid();
    }
 
    static boolean suppressesLodUnderstory(
@@ -5914,7 +5938,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       private final Map<Long, TellusCanopyHeightSource.CanopySample> canopySamples = new HashMap<>();
       private final Map<Long, ResolveEcoregion> ecoregions = new HashMap<>();
       private final Map<TellusLodGenerator.CanopyPlanKey, TellusProceduralTreeGenerator.TreePlan> treePlans = new HashMap<>();
+      private final Map<TellusLodGenerator.CanopyPlanKey, Boolean> treeFootprints = new HashMap<>();
       private final Map<Long, Integer> treeAnchorSurfaces = new HashMap<>();
+      private final Map<Long, Integer> treeFootprintSurfaces = new HashMap<>();
       private final Map<Long, Integer> vegetationCoverClasses = new HashMap<>();
       private final Map<Long, Holder<Biome>> vegetationBiomes = new HashMap<>();
 
@@ -5975,6 +6001,60 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                worldX, worldZ, previewResolutionMeters
             )
          );
+      }
+
+      private boolean treeFootprintPresent(
+         int worldX,
+         int worldZ,
+         double worldScale,
+         double previewResolutionMeters,
+         long treeSeed,
+         Holder<Biome> biome,
+         TellusProceduralTreeGenerator.TreePlan plan
+      ) {
+         TellusLodGenerator.CanopyPlanKey key =
+            new TellusLodGenerator.CanopyPlanKey(
+               worldX, worldZ, treeSeed, biome
+            );
+         return this.treeFootprints.computeIfAbsent(key, ignored -> {
+            int anchorSurface = this.treeFootprintSurface(
+               worldX, worldZ, worldScale, previewResolutionMeters
+            );
+            return anchorSurface != Integer.MIN_VALUE
+               && acceptsLodTreeFootprint(
+                  worldX,
+                  anchorSurface,
+                  worldZ,
+                  plan,
+                  (sampleX, sampleZ) -> this.treeFootprintSurface(
+                     sampleX,
+                     sampleZ,
+                     worldScale,
+                     previewResolutionMeters
+                  )
+               );
+         });
+      }
+
+      private int treeFootprintSurface(
+         int worldX,
+         int worldZ,
+         double worldScale,
+         double previewResolutionMeters
+      ) {
+         long key = packHorizontal(worldX, worldZ);
+         return this.treeFootprintSurfaces.computeIfAbsent(key, ignored -> {
+            int coverClass = this.vegetationCoverClass(
+               worldX, worldZ, worldScale, previewResolutionMeters
+            );
+            WaterSurfaceResolver.WaterColumnData water =
+               this.generator.resolveLodWaterColumn(
+                  worldX, worldZ, coverClass, previewResolutionMeters
+               );
+            return water.hasWater()
+               ? Integer.MIN_VALUE
+               : water.terrainSurface();
+         });
       }
 
       private double vegetationEdgeStrength(
