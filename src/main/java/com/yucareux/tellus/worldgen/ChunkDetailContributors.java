@@ -6,6 +6,10 @@ import com.yucareux.tellus.api.detail.ChunkDetailClaim;
 import com.yucareux.tellus.api.detail.ChunkDetailContributor;
 import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
 import com.yucareux.tellus.api.detail.ChunkDetailDomain;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlan;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlanContext;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPendingException;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlanResult;
 import com.yucareux.tellus.api.detail.ChunkDetailPlan;
 import com.yucareux.tellus.api.detail.ChunkDetailPlanContext;
 import com.yucareux.tellus.api.detail.ChunkDetailPlanResult;
@@ -16,6 +20,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Validation and deterministic arbitration for the public chunk-detail contract.
@@ -197,6 +202,7 @@ final class ChunkDetailContributors {
                );
             }
          }
+
       }
 
       if (!pendingReasons.isEmpty()) {
@@ -213,6 +219,116 @@ final class ChunkDetailContributors {
          );
          return Preparation.empty(context);
       }
+   }
+
+   static ChunkDetailLodPlan prepareLodExclusions(
+      ChunkDetailContributorRegistry.Snapshot snapshot,
+      ChunkDetailLodPlanContext context
+   ) {
+      if (snapshot.isEmpty()) {
+         return ChunkDetailLodPlan.none();
+      }
+
+      List<PreparedLodPlan> plans = new ArrayList<>(snapshot.entries().size());
+      List<String> pendingReasons = new ArrayList<>();
+      int retryAfterTicks = 1;
+      for (ChunkDetailContributorRegistry.Entry registration : snapshot.entries()) {
+         ChunkDetailContributor contributor = registration.contributor();
+         if (!usesLodExclusionDomain(contributor.domains())) {
+            continue;
+         }
+         boolean active;
+         try {
+            active = contributor.active();
+         } catch (RuntimeException error) {
+            LOGGER.error(
+               "Chunk-detail contributor {} failed its active-state probe for LOD planning",
+               registration.identifier(),
+               error
+            );
+            continue;
+         }
+         if (!active) {
+            continue;
+         }
+
+         long revision = contributor.revision();
+         ChunkDetailLodPlanResult result;
+         try {
+            result = Objects.requireNonNull(
+               contributor.planLodExclusions(context),
+               "contributor LOD plan result"
+            );
+         } catch (RuntimeException error) {
+            LOGGER.error(
+               "Chunk-detail contributor {} failed LOD exclusion planning for [{},{}]-[{},{}]",
+               registration.identifier(),
+               context.minBlockX(),
+               context.minBlockZ(),
+               context.maxBlockX(),
+               context.maxBlockZ(),
+               error
+            );
+            continue;
+         }
+         if (contributor.revision() != revision) {
+            result = ChunkDetailLodPlanResult.pending(
+               1, "contributor revision changed during LOD planning"
+            );
+         }
+
+         if (result instanceof ChunkDetailLodPlanResult.Ready ready) {
+            plans.add(new PreparedLodPlan(registration, ready.plan()));
+         } else if (result instanceof ChunkDetailLodPlanResult.Pending pending) {
+            retryAfterTicks = Math.max(retryAfterTicks, pending.retryAfterTicks());
+            pendingReasons.add(
+               registration.identifier() + ": " + pending.reason()
+            );
+         } else if (result instanceof ChunkDetailLodPlanResult.Failed failed) {
+            if (failed.retryable()) {
+               retryAfterTicks = Math.max(retryAfterTicks, 20);
+               pendingReasons.add(
+                  registration.identifier() + ": " + failed.reason()
+               );
+            } else {
+               LOGGER.error(
+                  "Chunk-detail contributor {} declined LOD exclusion planning: {}",
+                  registration.identifier(),
+                  failed.reason()
+               );
+            }
+         }
+      }
+
+      if (!pendingReasons.isEmpty()) {
+         throw new ChunkDetailLodPendingException(
+            retryAfterTicks, String.join("; ", pendingReasons)
+         );
+      }
+      if (plans.isEmpty()) {
+         return ChunkDetailLodPlan.none();
+      }
+      List<PreparedLodPlan> immutablePlans = List.copyOf(plans);
+      return (domain, worldX, worldZ, radius) -> {
+         if (domain != ChunkDetailDomain.MATURE_TREE_EXCLUSION
+            && domain != ChunkDetailDomain.UNDERSTORY_EXCLUSION) {
+            return false;
+         }
+         int checkedRadius = Math.max(0, radius);
+         for (PreparedLodPlan prepared : immutablePlans) {
+            if (prepared.suppresses(domain, worldX, worldZ, checkedRadius)) {
+               return true;
+            }
+         }
+         return false;
+      };
+   }
+
+   private static boolean usesLodExclusionDomain(
+      java.util.Set<ChunkDetailDomain> domains
+   ) {
+      return domains.contains(ChunkDetailDomain.MATURE_TREE_EXCLUSION)
+         || domains.contains(ChunkDetailDomain.UNDERSTORY_EXCLUSION);
    }
 
    private static PreparedPlan validate(
@@ -532,6 +648,40 @@ final class ChunkDetailContributors {
 
       PreparedPlan withGrantedSurface(ChunkDetailArea area) {
          return new PreparedPlan(this.registration, this.revision, this.plan, this.claims, area);
+      }
+   }
+
+   private static final class PreparedLodPlan {
+      private final ChunkDetailContributorRegistry.Entry registration;
+      private final ChunkDetailLodPlan plan;
+      private final AtomicBoolean failureLogged = new AtomicBoolean();
+
+      private PreparedLodPlan(
+         ChunkDetailContributorRegistry.Entry registration,
+         ChunkDetailLodPlan plan
+      ) {
+         this.registration = Objects.requireNonNull(registration, "registration");
+         this.plan = Objects.requireNonNull(plan, "plan");
+      }
+
+      private boolean suppresses(
+         ChunkDetailDomain domain, int worldX, int worldZ, int radius
+      ) {
+         if (!this.registration.contributor().domains().contains(domain)) {
+            return false;
+         }
+         try {
+            return this.plan.suppresses(domain, worldX, worldZ, radius);
+         } catch (RuntimeException error) {
+            if (this.failureLogged.compareAndSet(false, true)) {
+               LOGGER.error(
+                  "Chunk-detail contributor {} failed an LOD exclusion query; continuing with native LOD detail",
+                  this.registration.identifier(),
+                  error
+               );
+            }
+            return false;
+         }
       }
    }
 

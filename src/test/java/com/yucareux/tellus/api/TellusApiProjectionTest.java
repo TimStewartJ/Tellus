@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 class TellusApiProjectionTest {
    @Test
    void apiVersionIncludesChunkDetailContributors() throws Exception {
-      assertEquals(4, TellusApi.API_VERSION);
+      assertEquals(5, TellusApi.API_VERSION);
       assertEquals(
          boolean.class,
          TellusApi.class

@@ -27,7 +27,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
  */
 public final class TellusApi {
    /** Incremented whenever a method here changes signature or semantics. */
-   public static final int API_VERSION = 4;
+   public static final int API_VERSION = 5;
 
    private TellusApi() {
    }

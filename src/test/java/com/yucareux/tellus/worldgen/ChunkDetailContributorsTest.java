@@ -11,6 +11,10 @@ import com.yucareux.tellus.api.detail.ChunkDetailClaim;
 import com.yucareux.tellus.api.detail.ChunkDetailContributor;
 import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
 import com.yucareux.tellus.api.detail.ChunkDetailDomain;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlan;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlanContext;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPendingException;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlanResult;
 import com.yucareux.tellus.api.detail.ChunkDetailPlan;
 import com.yucareux.tellus.api.detail.ChunkDetailPlanContext;
 import com.yucareux.tellus.api.detail.ChunkDetailPlanResult;
@@ -109,6 +113,79 @@ class ChunkDetailContributorsTest {
                ChunkDetailContributorRegistry.global().snapshot(), context(), true
             ).plans().isEmpty()
          );
+      } finally {
+         registration.close();
+      }
+   }
+
+   @Test
+   void lodExclusionsUnionAdvertisedDomainsWithoutApplyingWorldWrites() {
+      AtomicInteger lodQueries = new AtomicInteger();
+      ChunkDetailContributorRegistry.Registration trees =
+         TellusApi.registerChunkDetailContributor(
+            "test:lod_trees",
+            lodContributor(
+               Set.of(ChunkDetailDomain.MATURE_TREE_EXCLUSION),
+               ChunkDetailLodPlanResult.ready(
+                  (domain, x, z, radius) -> {
+                     lodQueries.incrementAndGet();
+                     return x == 12 && z == 18 && radius == 8;
+                  }
+               )
+            )
+         );
+      ChunkDetailContributorRegistry.Registration understory =
+         TellusApi.registerChunkDetailContributor(
+            "test:lod_understory",
+            lodContributor(
+               Set.of(ChunkDetailDomain.UNDERSTORY_EXCLUSION),
+               ChunkDetailLodPlanResult.ready(
+                  (domain, x, z, radius) -> x == 20 && z == 24 && radius == 3
+               )
+            )
+         );
+      try {
+         ChunkDetailLodPlan plan = ChunkDetailContributors.prepareLodExclusions(
+            ChunkDetailContributorRegistry.global().snapshot(), lodContext()
+         );
+         assertTrue(
+            plan.suppresses(
+               ChunkDetailDomain.MATURE_TREE_EXCLUSION, 12, 18, 8
+            )
+         );
+         assertTrue(
+            plan.suppresses(
+               ChunkDetailDomain.UNDERSTORY_EXCLUSION, 20, 24, 3
+            )
+         );
+         assertFalse(
+            plan.suppresses(ChunkDetailDomain.SURFACE_WRITE, 12, 18, 8)
+         );
+         assertEquals(1, lodQueries.get());
+      } finally {
+         understory.close();
+         trees.close();
+      }
+   }
+
+   @Test
+   void pendingLodExclusionsRejectAnIncompleteTileForRetry() {
+      ChunkDetailContributorRegistry.Registration registration =
+         TellusApi.registerChunkDetailContributor(
+            "test:lod_pending",
+            lodContributor(
+               Set.of(ChunkDetailDomain.MATURE_TREE_EXCLUSION),
+               ChunkDetailLodPlanResult.pending(11, "route tiles warming")
+            )
+         );
+      try {
+         ChunkDetailLodPendingException pending = assertThrows(
+            ChunkDetailLodPendingException.class,
+            () -> ChunkDetailContributors.prepareLodExclusions(
+               ChunkDetailContributorRegistry.global().snapshot(), lodContext()
+            )
+         );
+         assertEquals(11, pending.retryAfterTicks());
       } finally {
          registration.close();
       }
@@ -283,6 +360,39 @@ class ChunkDetailContributorsTest {
       };
    }
 
+   private static ChunkDetailContributor lodContributor(
+      Set<ChunkDetailDomain> domains, ChunkDetailLodPlanResult result
+   ) {
+      return new ChunkDetailContributor() {
+         @Override
+         public long revision() {
+            return 1L;
+         }
+
+         @Override
+         public int haloBlocks() {
+            return 0;
+         }
+
+         @Override
+         public Set<ChunkDetailDomain> domains() {
+            return domains;
+         }
+
+         @Override
+         public ChunkDetailPlanResult plan(ChunkDetailPlanContext context) {
+            return ChunkDetailPlanResult.skipped("LOD-only test contributor");
+         }
+
+         @Override
+         public ChunkDetailLodPlanResult planLodExclusions(
+            ChunkDetailLodPlanContext context
+         ) {
+            return result;
+         }
+      };
+   }
+
    private static ChunkDetailPlanResult ready(ChunkDetailClaim claim) {
       ChunkDetailPlan plan = () -> List.of(claim);
       return ChunkDetailPlanResult.ready(plan);
@@ -317,8 +427,32 @@ class ChunkDetailContributorsTest {
       );
    }
 
+   private static ChunkDetailLodPlanContext lodContext() {
+      return new ChunkDetailLodPlanContext(
+         0,
+         0,
+         2,
+         16,
+         -64,
+         319,
+         42L,
+         WorldProjection.global(1.0),
+         false,
+         filled(4, 80),
+         filled(4, 80),
+         new boolean[4],
+         filled(4, 10)
+      );
+   }
+
    private static int[] filled(int value) {
       int[] values = new int[256];
+      java.util.Arrays.fill(values, value);
+      return values;
+   }
+
+   private static int[] filled(int length, int value) {
+      int[] values = new int[length];
       java.util.Arrays.fill(values, value);
       return values;
    }

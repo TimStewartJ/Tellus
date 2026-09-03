@@ -112,6 +112,11 @@ understory against the merged claims. Planning is nonblocking and retryable, app
 writer, unloads cancel stale work, and a five-minute source deadline fails open so an optional integration
 cannot permanently hold terrain readiness.
 
+API v5 extends that contract with immutable coarse-detail exclusion plans. Optional companions can reuse
+their own deterministic geometry to suppress mature-tree and understory LODs without exposing feature
+semantics to Tellus. Pending plans cause the incomplete LOD tile to be discarded and retried rather than
+cached, while very coarse tiles remain on the fast aggregate path.
+
 <details>
   <summary>Settings</summary>
 

@@ -10,6 +10,10 @@ import com.seibel.distanthorizons.api.interfaces.override.worldGenerator.IDhApiW
 import com.seibel.distanthorizons.api.interfaces.world.IDhApiLevelWrapper;
 import com.seibel.distanthorizons.api.objects.data.DhApiTerrainDataPoint;
 import com.seibel.distanthorizons.api.objects.data.IDhApiFullDataSource;
+import com.yucareux.tellus.api.detail.ChunkDetailDomain;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlan;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlanContext;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPendingException;
 import com.yucareux.tellus.world.data.osm.BridgeSupportLayout;
 import com.yucareux.tellus.world.data.osm.OsmBuildingFeature;
 import com.yucareux.tellus.world.data.osm.OsmPerf;
@@ -104,6 +108,16 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private static final int ULTRA_FAST_COARSE_SAMPLE_MAX_STRIDE = intProperty("tellus.dhUltraFastCoarseSampleMaxStride", 8, 1, 64);
    private static final int LOD_SURFACE_SHAPE_REFINE_MAX_DETAIL = intProperty("tellus.dhSurfaceShapeRefineMaxDetail", 6, 0, 24);
    private static final int LOD_OSM_SURFACE_MAX_DETAIL = intProperty("tellus.dhOsmSurfaceMaxDetail", 6, 0, 24);
+   private static final int LOD_DETAIL_EXCLUSION_MAX_DETAIL = intProperty(
+      "tellus.dhDetailExclusionMaxDetail", LOD_OSM_SURFACE_MAX_DETAIL, 0, 24
+   );
+   private static final int LOD_DETAIL_EXCLUSION_MAX_CELL_METERS = intProperty(
+      "tellus.dhDetailExclusionMaxCellMeters", 128, 1, 100_000
+   );
+   private static final long LOD_DETAIL_EXCLUSION_TIMEOUT_NANOS = TimeUnit.MINUTES.toNanos(
+      intProperty("tellus.dhDetailExclusionTimeoutMinutes", 5, 0, 60)
+   );
+   private static final int MAX_PENDING_DETAIL_EXCLUSION_TILES = 4_096;
    private static final boolean SHARED_TERRAIN_CACHE_ENABLED = Boolean.parseBoolean(
       System.getProperty("tellus.dhSharedTerrainCacheEnabled", "false")
    );
@@ -176,6 +190,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private final DhLodWaterResolver dhWaterResolver;
    private final ThreadLocal<TellusLodGenerator.WrapperCache> wrapperCache;
    private final LodPrefetchBatcher lodPrefetchBatcher;
+   private final Map<LodExclusionKey, PendingLodExclusionState> pendingLodExclusions =
+      new ConcurrentHashMap<>();
    private final String managedTerrainKey;
 
    public TellusLodGenerator(IDhApiLevelWrapper levelWrapper, EarthChunkGenerator generator) {
@@ -289,7 +305,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             });
          });
          generationFuture.attachCancellation(preparation);
-         generationFuture.attach(preparation.thenRunAsync(generationFuture.track(() -> {
+         CompletableFuture<Void> build = preparation.thenRunAsync(generationFuture.track(() -> {
             boolean handledCancellation = false;
             try (ManagedTerrainNetworkPolicy.Scope ignored = cacheOnly ? ManagedTerrainNetworkPolicy.cacheOnly() : null) {
                this.buildLod(pooledFullDataSource, chunkPosMinX, chunkPosMinZ, detailLevel, generatorMode, timingTrace);
@@ -299,6 +315,15 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                handledCancellation = isInterruptedLodGeneration(throwable);
                if (handledCancellation) {
                   timingTrace.logCancelled();
+               } else if (throwable instanceof ChunkDetailLodPendingException pending) {
+                  LOGGER.debug(
+                     "Tellus DH LOD detail exclusions are pending at chunk=[{}, {}], detail={}; retry after {} ticks: {}",
+                     chunkPosMinX,
+                     chunkPosMinZ,
+                     Byte.toUnsignedInt(detailLevel),
+                     pending.retryAfterTicks(),
+                     pending.getMessage()
+                  );
                } else {
                   LOGGER.warn(
                      "Tellus DH LOD generation failed at chunk=[{}, {}], lod=[{}, {}], detail={}; discarding partial output so DH can retry.",
@@ -317,7 +342,21 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   Thread.interrupted();
                }
             }
-         }), worldGeneratorThreadPool));
+         }), worldGeneratorThreadPool);
+         generationFuture.attachCancellation(build);
+         CompletableFuture<Void> pacedBuild = build.exceptionallyCompose(error -> {
+            Throwable cause = unwrapCompletionFailure(error);
+            if (!(cause instanceof ChunkDetailLodPendingException pending)) {
+               return CompletableFuture.failedFuture(cause);
+            }
+            CompletableFuture<Void> delayedFailure = new CompletableFuture<>();
+            generationFuture.attachCancellation(delayedFailure);
+            CompletableFuture.delayedExecutor(
+               (long)pending.retryAfterTicks() * 50L, TimeUnit.MILLISECONDS
+            ).execute(() -> delayedFailure.completeExceptionally(pending));
+            return delayedFailure;
+         });
+         generationFuture.attach(pacedBuild);
       } catch (Throwable error) {
          generationFuture.completeExceptionally(error);
       }
@@ -431,6 +470,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          trace.addPhase("detailedWater", 0L);
          trace.addPhase("biomeRelief", 0L);
          trace.addPhase("biomeResolve", 0L);
+         trace.addPhase("detailExclusions", 0L);
          trace.addPhase("buildingMask", 0L);
          trace.addPhase("roadMask", 0L);
          trace.addPhase("terrainMetrics", 0L);
@@ -648,6 +688,22 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             }
          }
          endTimingPhase(trace, "biomeResolve", phaseStart);
+
+         phaseStart = beginTimingPhase(trace);
+         ChunkDetailLodPlan detailExclusions = this.prepareLodVegetationExclusions(
+            detail,
+            baseX,
+            baseZ,
+            lodSizePoints,
+            cellSize,
+            minY,
+            maxY - 1,
+            surfaceYs,
+            waterSurfaces,
+            resolvedHasWater,
+            coverClasses
+         );
+         endTimingPhase(trace, "detailExclusions", phaseStart);
 
          phaseStart = beginTimingPhase(trace);
          TellusLodGenerator.LodBuildingMaskResult buildingMaskResult;
@@ -1039,7 +1095,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                         settings.worldScale(),
                         previewResolutionMeters,
                         this.generator.worldSeed(),
-                        canopyRequestCache
+                        canopyRequestCache,
+                        detailExclusions
                      )
                      : null;
                    if (canopyColumn == null
@@ -1059,7 +1116,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                         settings.worldScale(),
                         previewResolutionMeters,
                         this.generator.worldSeed(),
-                        canopyRequestCache
+                        canopyRequestCache,
+                        detailExclusions
                      );
                    }
                   if (canopyColumn != null) {
@@ -1312,6 +1370,101 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          : DhLodWaterResolver.ResolutionMode.EXACT;
    }
 
+   private ChunkDetailLodPlan prepareLodVegetationExclusions(
+      int detail,
+      int minBlockX,
+      int minBlockZ,
+      int columnsPerSide,
+      int cellSize,
+      int minY,
+      int maxY,
+      int[] terrainSurfaces,
+      int[] waterSurfaces,
+      boolean[] waterFlags,
+      int[] landCoverClasses
+   ) {
+      if (detail > LOD_DETAIL_EXCLUSION_MAX_DETAIL
+         || cellSize * this.generator.settings().worldScale()
+            > LOD_DETAIL_EXCLUSION_MAX_CELL_METERS
+         || !this.generator.hasLodVegetationExclusions()) {
+         return ChunkDetailLodPlan.none();
+      }
+      LodExclusionKey key = new LodExclusionKey(
+         minBlockX, minBlockZ, columnsPerSide, cellSize
+      );
+      try {
+         ChunkDetailLodPlan plan;
+         try (ManagedTerrainNetworkPolicy.Scope ignored =
+            ManagedTerrainNetworkPolicy.networkAllowed()) {
+            plan = this.generator.prepareLodVegetationExclusions(
+               new ChunkDetailLodPlanContext(
+                  minBlockX,
+                  minBlockZ,
+                  columnsPerSide,
+                  cellSize,
+                  minY,
+                  maxY,
+                  this.generator.worldSeed(),
+                  this.projection,
+                  this.generator.settings().enableRoads(),
+                  terrainSurfaces,
+                  waterSurfaces,
+                  waterFlags,
+                  landCoverClasses
+               )
+            );
+         }
+         this.pendingLodExclusions.remove(key);
+         return plan;
+      } catch (ChunkDetailLodPendingException pending) {
+         long now = System.nanoTime();
+         PendingLodExclusionState state = this.pendingLodExclusions.compute(
+            key,
+            (ignored, current) -> current == null
+               ? new PendingLodExclusionState(now)
+               : current.touch(now)
+         );
+         this.trimPendingLodExclusions(key);
+         if (LOD_DETAIL_EXCLUSION_TIMEOUT_NANOS == 0L
+            || state.timedOut(now)) {
+            if (state.markTimeoutLogged()) {
+               LOGGER.warn(
+                  "Tellus DH LOD detail exclusions timed out for [{},{}]-[{},{}]; failing open",
+                  minBlockX,
+                  minBlockZ,
+                  minBlockX + columnsPerSide * cellSize - 1,
+                  minBlockZ + columnsPerSide * cellSize - 1
+               );
+            }
+            return ChunkDetailLodPlan.none();
+         }
+         throw pending;
+      }
+   }
+
+   private void trimPendingLodExclusions(LodExclusionKey protectedKey) {
+      while (this.pendingLodExclusions.size()
+         > MAX_PENDING_DETAIL_EXCLUSION_TILES) {
+         Map.Entry<LodExclusionKey, PendingLodExclusionState> oldest = null;
+         for (Map.Entry<LodExclusionKey, PendingLodExclusionState> entry :
+            this.pendingLodExclusions.entrySet()) {
+            if (entry.getKey().equals(protectedKey)
+               || oldest != null
+                  && entry.getValue().lastAccessNs()
+                     >= oldest.getValue().lastAccessNs()) {
+               continue;
+            }
+            oldest = entry;
+         }
+         if (oldest == null
+            || !this.pendingLodExclusions.remove(
+               oldest.getKey(), oldest.getValue()
+            )) {
+            return;
+         }
+      }
+   }
+
    private void buildUltraFastLod(
       IDhApiFullDataSource output, int chunkPosMinX, int chunkPosMinZ, byte detailLevel, TellusLodGenerator.LodTimingTrace trace
    ) {
@@ -1369,6 +1522,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       trace.addPhase("waterProbe", 0L);
       trace.addPhase("detailedWater", 0L);
       trace.addPhase("biomeResolve", 0L);
+      trace.addPhase("detailExclusions", 0L);
       trace.addPhase("buildingMask", 0L);
       trace.addPhase("roadMask", 0L);
       trace.addPhase("terrainMetrics", 0L);
@@ -1541,6 +1695,22 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          }
       }
       endTimingPhase(trace, "biomeResolve", phaseStart);
+
+      phaseStart = beginTimingPhase(trace);
+      ChunkDetailLodPlan detailExclusions = this.prepareLodVegetationExclusions(
+         detail,
+         baseX,
+         baseZ,
+         lodSizePoints,
+         cellSize,
+         minY,
+         maxY - 1,
+         surfaceYs,
+         waterSurfaces,
+         resolvedHasWater,
+         coverClasses
+      );
+      endTimingPhase(trace, "detailExclusions", phaseStart);
 
       phaseStart = beginTimingPhase(trace);
       TellusLodGenerator.LodBuildingMaskResult buildingMaskResult;
@@ -1821,7 +1991,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   this.generator.settings().worldScale(),
                   previewResolutionMeters,
                   this.generator.worldSeed(),
-                  canopyRequestCache
+                  canopyRequestCache,
+                  detailExclusions
                )
                : null;
              if (canopyColumn == null
@@ -1840,7 +2011,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   this.generator.settings().worldScale(),
                   previewResolutionMeters,
                   this.generator.worldSeed(),
-                  canopyRequestCache
+                  canopyRequestCache,
+                  detailExclusions
                );
              }
             boolean deferMangroveCanopy = isMangrove && underwater;
@@ -4480,10 +4652,18 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       double worldScale,
       double previewResolutionMeters,
       long worldSeed,
-      TellusLodGenerator.CanopyRequestCache requestCache
+      TellusLodGenerator.CanopyRequestCache requestCache,
+      ChunkDetailLodPlan detailExclusions
    ) {
       if (!customTrees) {
-         return resolveMinecraftCanopyColumn(profile, worldX, worldZ, cellSize, hugeRedMushrooms);
+         return resolveMinecraftCanopyColumn(
+            profile,
+            worldX,
+            worldZ,
+            cellSize,
+            hugeRedMushrooms,
+            detailExclusions
+         );
       }
 
       int baseChance = canopyCenterChancePercent(profile);
@@ -4553,6 +4733,11 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          if (bestDist == Integer.MAX_VALUE) {
             return null;
          } else {
+            if (suppressesLodMatureTree(
+               detailExclusions, bestCenterX, bestCenterZ
+            )) {
+               return null;
+            }
             TellusCanopyHeightSource.CanopySample canopy = requestCache.canopy(
                bestCenterX, bestCenterZ, worldScale, previewResolutionMeters
             );
@@ -4620,7 +4805,12 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    }
 
    private static TellusLodGenerator.CanopyColumn resolveMinecraftCanopyColumn(
-      TellusLodGenerator.CanopyProfile profile, int worldX, int worldZ, int cellSize, boolean hugeRedMushrooms
+      TellusLodGenerator.CanopyProfile profile,
+      int worldX,
+      int worldZ,
+      int cellSize,
+      boolean hugeRedMushrooms,
+      ChunkDetailLodPlan detailExclusions
    ) {
       int baseChance = canopyCenterChancePercent(profile);
       int chance = boostCanopyChancePercent(baseChance);
@@ -4635,6 +4825,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       int bestRadius = 0;
       int bestHash = 0;
       boolean bestCenter = false;
+      int bestCenterX = 0;
+      int bestCenterZ = 0;
 
       for (int dz = -1; dz <= 1; dz++) {
          int testCellZ = cellZ + dz;
@@ -4653,12 +4845,19 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   bestRadius = radius;
                   bestHash = centerHash;
                   bestCenter = dist == 0;
+                  bestCenterX = centerX;
+                  bestCenterZ = centerZ;
                }
             }
          }
       }
 
       if (bestDist == Integer.MAX_VALUE) {
+         return null;
+      }
+      if (suppressesLodMatureTree(
+         detailExclusions, bestCenterX, bestCenterZ
+      )) {
          return null;
       }
 
@@ -4728,7 +4927,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       double worldScale,
       double previewResolutionMeters,
       long worldSeed,
-      TellusLodGenerator.CanopyRequestCache requestCache
+      TellusLodGenerator.CanopyRequestCache requestCache,
+      ChunkDetailLodPlan detailExclusions
    ) {
       TellusLodGenerator.CanopyColumn best = null;
       int bestHeight = 0;
@@ -4757,6 +4957,11 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             );
          }
          for (TellusVegetationPlanner.Anchor anchor : anchors) {
+            if (suppressesLodUnderstory(
+               detailExclusions, stratum, anchor.worldX(), anchor.worldZ()
+            )) {
+               continue;
+            }
             int offsetX = worldX - anchor.worldX();
             int offsetZ = worldZ - anchor.worldZ();
             int distance = Math.max(
@@ -4875,6 +5080,31 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          }
       }
       return best;
+   }
+
+   static boolean suppressesLodMatureTree(
+      ChunkDetailLodPlan exclusions, int worldX, int worldZ
+   ) {
+      return exclusions.suppresses(
+         ChunkDetailDomain.MATURE_TREE_EXCLUSION,
+         worldX,
+         worldZ,
+         TellusProceduralTreeGenerator.ROOT_EXCLUSION_RADIUS
+      );
+   }
+
+   static boolean suppressesLodUnderstory(
+      ChunkDetailLodPlan exclusions,
+      TellusVegetationPlanner.Stratum stratum,
+      int worldX,
+      int worldZ
+   ) {
+      return exclusions.suppresses(
+         ChunkDetailDomain.UNDERSTORY_EXCLUSION,
+         worldX,
+         worldZ,
+         TellusVegetationPlanner.exclusionRadius(stratum)
+      );
    }
 
    private static TellusLodGenerator.DataCanopyDimensions dataCanopyDimensions(
@@ -5569,6 +5799,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
    public void close() {
       this.lodPrefetchBatcher.close();
+      this.pendingLodExclusions.clear();
    }
 
    private static final class CancellableLodFuture extends CompletableFuture<Void> {
@@ -5637,6 +5868,44 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    }
 
    private record DataCanopyDimensions(int trunkHeight, int crownHeight, int leafLift) {
+   }
+
+   private record LodExclusionKey(
+      int minBlockX, int minBlockZ, int columnsPerSide, int cellSize
+   ) {
+   }
+
+   private static final class PendingLodExclusionState {
+      private final long firstPendingNs;
+      private volatile long lastAccessNs;
+      private boolean timeoutLogged;
+
+      private PendingLodExclusionState(long now) {
+         this.firstPendingNs = now;
+         this.lastAccessNs = now;
+      }
+
+      private PendingLodExclusionState touch(long now) {
+         this.lastAccessNs = now;
+         return this;
+      }
+
+      private long lastAccessNs() {
+         return this.lastAccessNs;
+      }
+
+      private boolean timedOut(long now) {
+         return now - this.firstPendingNs
+            >= LOD_DETAIL_EXCLUSION_TIMEOUT_NANOS;
+      }
+
+      private synchronized boolean markTimeoutLogged() {
+         if (this.timeoutLogged) {
+            return false;
+         }
+         this.timeoutLogged = true;
+         return true;
+      }
    }
 
    private static final class CanopyRequestCache {

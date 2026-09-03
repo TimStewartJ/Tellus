@@ -7,8 +7,18 @@ public final class ManagedTerrainNetworkPolicy {
    }
 
    public static Scope cacheOnly() {
-      CACHE_ONLY_DEPTH.set(CACHE_ONLY_DEPTH.get() + 1);
-      return new Scope();
+      int previousDepth = CACHE_ONLY_DEPTH.get();
+      CACHE_ONLY_DEPTH.set(previousDepth + 1);
+      return new Scope(previousDepth);
+   }
+
+   /**
+    * Temporarily lets a nonblocking companion planner enqueue its own inputs inside a cache-only LOD build.
+    */
+   public static Scope networkAllowed() {
+      int previousDepth = CACHE_ONLY_DEPTH.get();
+      CACHE_ONLY_DEPTH.remove();
+      return new Scope(previousDepth);
    }
 
    public static boolean isCacheOnly() {
@@ -16,20 +26,21 @@ public final class ManagedTerrainNetworkPolicy {
    }
 
    public static final class Scope implements AutoCloseable {
+      private final int restoreDepth;
       private boolean closed;
 
-      private Scope() {
+      private Scope(int restoreDepth) {
+         this.restoreDepth = restoreDepth;
       }
 
       @Override
       public void close() {
          if (!this.closed) {
             this.closed = true;
-            int next = Math.max(0, CACHE_ONLY_DEPTH.get() - 1);
-            if (next == 0) {
+            if (this.restoreDepth == 0) {
                CACHE_ONLY_DEPTH.remove();
             } else {
-               CACHE_ONLY_DEPTH.set(next);
+               CACHE_ONLY_DEPTH.set(this.restoreDepth);
             }
          }
       }

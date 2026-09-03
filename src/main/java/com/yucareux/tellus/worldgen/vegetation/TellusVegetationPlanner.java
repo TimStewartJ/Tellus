@@ -517,6 +517,14 @@ public final class TellusVegetationPlanner {
       return Math.max(0.0, Math.min(1.0, value));
    }
 
+   public static int exclusionRadius(Stratum stratum) {
+      return switch (Objects.requireNonNull(stratum, "stratum")) {
+         case SUBCANOPY -> 4;
+         case SHRUB, DEADWOOD -> 3;
+         case HERB, GROUND -> 0;
+      };
+   }
+
    public enum Stratum {
       SUBCANOPY(7, 16, 11, 48.0, 5, 0x13B579D2468ACE01L),
       SHRUB(4, 4, 7, 22.0, 8, 0x2C4E6081A3B5D7F9L),

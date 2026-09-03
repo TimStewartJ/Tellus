@@ -9,8 +9,11 @@ import com.yucareux.tellus.world.data.canopy.TellusCanopyHeightSource;
 import com.yucareux.tellus.world.data.resolve.ResolveBiome;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.ResolveRealm;
+import net.minecraft.SharedConstants;
+import net.minecraft.server.Bootstrap;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.biome.Biomes;
+import net.minecraft.world.level.block.Blocks;
 import org.junit.jupiter.api.Test;
 
 class TellusProceduralTreeGeneratorTest {
@@ -210,6 +213,98 @@ class TellusProceduralTreeGeneratorTest {
    }
 
    @Test
+   void rootsRecognizeMinecraftsNaturalForestSurfaces() {
+      assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla block registries");
+      SharedConstants.tryDetectVersion();
+      Bootstrap.bootStrap();
+      assertTrue(TellusProceduralTreeGenerator.supportsTreeRoot(Blocks.GRASS_BLOCK.defaultBlockState()));
+      assertTrue(TellusProceduralTreeGenerator.supportsTreeRoot(Blocks.PODZOL.defaultBlockState()));
+      assertTrue(TellusProceduralTreeGenerator.supportsTreeRoot(Blocks.MYCELIUM.defaultBlockState()));
+      assertFalse(TellusProceduralTreeGenerator.supportsTreeRoot(Blocks.WATER.defaultBlockState()));
+   }
+
+   @Test
+   void wideTrunksPlanCompleteGroundedBasesBeforePlacement() {
+      TellusProceduralTreeGenerator.TrunkPlacementPlan trunk =
+         TellusProceduralTreeGenerator.planTrunkPlacement(
+            0,
+            100,
+            0,
+            treePlan(40, 3),
+            (x, z) -> 100,
+            (x, y, z) -> true,
+            (x, y, z) -> true
+         );
+
+      assertTrue(trunk.valid());
+      assertTrue(trunk.supports().isEmpty());
+      assertTrue(
+         trunk.trunk().stream()
+            .filter(block -> block.worldY() == 101)
+            .allMatch(block -> block.worldY() == 101)
+      );
+      assertTrue(
+         trunk.trunk().stream()
+            .filter(block -> block.worldY() == 101)
+            .count() > 9
+      );
+   }
+
+   @Test
+   void wideTrunksFillShortDropsAndRejectUnsupportedCoreFootprints() {
+      TellusProceduralTreeGenerator.TrunkPlacementPlan supported =
+         TellusProceduralTreeGenerator.planTrunkPlacement(
+            0,
+            100,
+            0,
+            treePlan(52, 4),
+            (x, z) -> x == 2 ? 97 : 100,
+            (x, y, z) -> true,
+            (x, y, z) -> true
+         );
+      TellusProceduralTreeGenerator.TrunkPlacementPlan unsupported =
+         TellusProceduralTreeGenerator.planTrunkPlacement(
+            0,
+            100,
+            0,
+            treePlan(52, 4),
+            (x, z) -> x >= 1 ? Integer.MIN_VALUE : 100,
+            (x, y, z) -> true,
+            (x, y, z) -> true
+         );
+
+      assertTrue(supported.valid());
+      assertTrue(supported.supports().contains(
+         new TellusProceduralTreeGenerator.TrunkBlock(2, 98, 0)
+      ));
+      assertTrue(supported.supports().contains(
+         new TellusProceduralTreeGenerator.TrunkBlock(2, 100, 0)
+      ));
+      assertFalse(unsupported.valid());
+      assertTrue(unsupported.trunk().isEmpty());
+   }
+
+   @Test
+   void unsupportedPerimetersReturnOnlyAsOneBlockCantilevers() {
+      TellusProceduralTreeGenerator.TrunkPlacementPlan trunk =
+         TellusProceduralTreeGenerator.planTrunkPlacement(
+            0,
+            100,
+            0,
+            treePlan(52, 4),
+            (x, z) -> x >= 2 ? Integer.MIN_VALUE : 100,
+            (x, y, z) -> true,
+            (x, y, z) -> true
+         );
+
+      assertTrue(trunk.valid());
+      assertFalse(hasTrunkBlock(trunk, 2, 101, 0));
+      assertTrue(hasTrunkBlock(trunk, 2, 102, 0));
+      assertFalse(hasTrunkBlock(trunk, 3, 102, 0));
+      assertTrue(hasTrunkBlock(trunk, 3, 103, 0));
+   }
+
+   @Test
    void registryFreePreviewPlanningUsesTheFullDetailBiomeProfiles() {
       assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla biome registry keys");
       assertEquals(
@@ -346,6 +441,34 @@ class TellusProceduralTreeGeneratorTest {
          maximum,
          13,
          9
+      );
+   }
+
+   private static TellusProceduralTreeGenerator.TreePlan treePlan(
+      int height, int trunkRadius
+   ) {
+      return new TellusProceduralTreeGenerator.TreePlan(
+         TellusProceduralTreeGenerator.Profile.TALL_CONIFER,
+         height,
+         trunkRadius,
+         8,
+         height / 2,
+         height / 2 + 1,
+         0,
+         0,
+         false,
+         true
+      );
+   }
+
+   private static boolean hasTrunkBlock(
+      TellusProceduralTreeGenerator.TrunkPlacementPlan plan,
+      int worldX,
+      int worldY,
+      int worldZ
+   ) {
+      return plan.trunk().contains(
+         new TellusProceduralTreeGenerator.TrunkBlock(worldX, worldY, worldZ)
       );
    }
 }

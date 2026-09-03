@@ -8,6 +8,8 @@ import com.mojang.datafixers.util.Pair;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
 import com.yucareux.tellus.api.detail.ChunkDetailDomain;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlan;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlanContext;
 import com.yucareux.tellus.api.detail.ChunkDetailPlanContext;
 import com.yucareux.tellus.preload.TerrainPreloadPackage;
 import com.yucareux.tellus.preload.TerrainPreloadPackageRegistry;
@@ -538,6 +540,22 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
    public long worldSeed() {
       return this.worldSeed;
+   }
+
+   public boolean hasLodVegetationExclusions() {
+      return this.chunkDetailContributors.uses(
+         ChunkDetailDomain.MATURE_TREE_EXCLUSION
+      ) || this.chunkDetailContributors.uses(
+         ChunkDetailDomain.UNDERSTORY_EXCLUSION
+      );
+   }
+
+   public ChunkDetailLodPlan prepareLodVegetationExclusions(
+      ChunkDetailLodPlanContext context
+   ) {
+      return ChunkDetailContributors.prepareLodExclusions(
+         this.chunkDetailContributors, context
+      );
    }
 
    public int getUndergroundPlacementSurfaceY(int blockX, int blockZ) {
@@ -5627,7 +5645,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                && (buildings == null || !buildings.suppressesTrees(localX, localZ))
                && (contributors == null
                   || !contributors.suppressesUnderstory(
-                     worldX, worldZ, contributorUnderstoryRadius(stratum)
+                     worldX, worldZ, TellusVegetationPlanner.exclusionRadius(stratum)
                   ));
             return new TellusVegetationPlanner.Environment(
                coverClass,
@@ -5648,15 +5666,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
          }
       );
       return placements;
-   }
-
-   private static int contributorUnderstoryRadius(TellusVegetationPlanner.Stratum stratum) {
-      return switch (stratum) {
-         case SUBCANOPY -> 4;
-         case SHRUB -> 3;
-         case DEADWOOD -> 3;
-         case HERB, GROUND -> 0;
-      };
    }
 
    private double vegetationEdgeStrength(

@@ -36,6 +36,18 @@ public interface ChunkDetailContributor {
 
    ChunkDetailPlanResult plan(ChunkDetailPlanContext context);
 
+   /**
+    * Optional coarse-detail exclusion plan.
+    *
+    * <p>The result must be immutable, thread-safe, and non-blocking. A pending result prevents the
+    * incomplete coarse tile from being cached; the distant generator may retry it later.</p>
+    */
+   default ChunkDetailLodPlanResult planLodExclusions(
+      ChunkDetailLodPlanContext context
+   ) {
+      return ChunkDetailLodPlanResult.skipped("coarse-detail exclusions not provided");
+   }
+
    default void apply(ChunkDetailApplyContext context, ChunkDetailPlan plan) {
    }
 }

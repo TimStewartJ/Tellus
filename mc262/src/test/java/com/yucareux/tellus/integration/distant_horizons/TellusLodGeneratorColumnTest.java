@@ -6,8 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import com.seibel.distanthorizons.api.interfaces.block.IDhApiBiomeWrapper;
 import com.seibel.distanthorizons.api.interfaces.block.IDhApiBlockStateWrapper;
 import com.seibel.distanthorizons.api.objects.data.DhApiTerrainDataPoint;
+import com.yucareux.tellus.api.detail.ChunkDetailDomain;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPlan;
+import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
+import com.yucareux.tellus.worldgen.vegetation.TellusVegetationPlanner;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class TellusLodGeneratorColumnTest {
@@ -75,6 +80,34 @@ class TellusLodGeneratorColumnTest {
       assertEquals(0, dataPoints.size());
    }
 
+   @Test
+   void canopyExclusionsUseTheSameNativeTreeAndUnderstoryRadii() {
+      AtomicReference<Query> query = new AtomicReference<>();
+      ChunkDetailLodPlan exclusions = (domain, x, z, radius) -> {
+         query.set(new Query(domain, x, z, radius));
+         return true;
+      };
+
+      TellusLodGenerator.suppressesLodMatureTree(exclusions, 12, 18);
+      assertEquals(
+         new Query(
+            ChunkDetailDomain.MATURE_TREE_EXCLUSION,
+            12,
+            18,
+            TellusProceduralTreeGenerator.ROOT_EXCLUSION_RADIUS
+         ),
+         query.get()
+      );
+
+      TellusLodGenerator.suppressesLodUnderstory(
+         exclusions, TellusVegetationPlanner.Stratum.SHRUB, 20, 24
+      );
+      assertEquals(
+         new Query(ChunkDetailDomain.UNDERSTORY_EXCLUSION, 20, 24, 3),
+         query.get()
+      );
+   }
+
    private record TestBlockStateWrapper(String serialString) implements IDhApiBlockStateWrapper {
       @Override
       public Object getWrappedMcObject() {
@@ -122,5 +155,10 @@ class TellusLodGeneratorColumnTest {
       public String getName() {
          return this.name;
       }
+   }
+
+   private record Query(
+      ChunkDetailDomain domain, int worldX, int worldZ, int radius
+   ) {
    }
 }
