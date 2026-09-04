@@ -311,6 +311,7 @@ final class ChunkDetailContributors {
       List<PreparedLodPlan> immutablePlans = List.copyOf(plans);
       return (domain, worldX, worldZ, radius) -> {
          if (domain != ChunkDetailDomain.MATURE_TREE_EXCLUSION
+            && domain != ChunkDetailDomain.TREE_ANCHOR_EXCLUSION
             && domain != ChunkDetailDomain.UNDERSTORY_EXCLUSION) {
             return false;
          }
@@ -328,6 +329,7 @@ final class ChunkDetailContributors {
       java.util.Set<ChunkDetailDomain> domains
    ) {
       return domains.contains(ChunkDetailDomain.MATURE_TREE_EXCLUSION)
+         || domains.contains(ChunkDetailDomain.TREE_ANCHOR_EXCLUSION)
          || domains.contains(ChunkDetailDomain.UNDERSTORY_EXCLUSION);
    }
 
@@ -378,6 +380,8 @@ final class ChunkDetailContributors {
    ) {
       Map<Long, SurfaceWinner> surfaceWinners = new HashMap<>();
       ChunkDetailArea.Builder treeExclusions = ChunkDetailArea.builder();
+      ChunkDetailArea.Builder treeAnchorExclusions = ChunkDetailArea.builder();
+      ChunkDetailArea.Builder treeRootExclusions = ChunkDetailArea.builder();
       ChunkDetailArea.Builder understoryExclusions = ChunkDetailArea.builder();
       int ownerMinX = context.minBlockX();
       int ownerMinZ = context.minBlockZ();
@@ -388,6 +392,12 @@ final class ChunkDetailContributors {
          for (ChunkDetailClaim claim : prepared.claims()) {
             if (claim.domains().contains(ChunkDetailDomain.MATURE_TREE_EXCLUSION)) {
                treeExclusions.addAll(claim.area());
+            }
+            if (claim.domains().contains(ChunkDetailDomain.TREE_ANCHOR_EXCLUSION)) {
+               treeAnchorExclusions.addAll(claim.area());
+            }
+            if (claim.domains().contains(ChunkDetailDomain.TREE_ROOT_EXCLUSION)) {
+               treeRootExclusions.addAll(claim.area());
             }
             if (claim.domains().contains(ChunkDetailDomain.UNDERSTORY_EXCLUSION)) {
                understoryExclusions.addAll(claim.area());
@@ -425,6 +435,8 @@ final class ChunkDetailContributors {
          context,
          List.copyOf(resolved),
          treeExclusions.build(),
+         treeAnchorExclusions.build(),
+         treeRootExclusions.build(),
          understoryExclusions.build(),
          null,
          null
@@ -435,6 +447,8 @@ final class ChunkDetailContributors {
       ChunkDetailPlanContext context,
       List<PreparedPlan> plans,
       ChunkDetailArea treeExclusions,
+      ChunkDetailArea treeAnchorExclusions,
+      ChunkDetailArea treeRootExclusions,
       ChunkDetailArea understoryExclusions,
       ExclusionMask treeMask,
       ExclusionMask understoryMask
@@ -443,6 +457,8 @@ final class ChunkDetailContributors {
          Objects.requireNonNull(context, "context");
          plans = List.copyOf(plans);
          Objects.requireNonNull(treeExclusions, "treeExclusions");
+         Objects.requireNonNull(treeAnchorExclusions, "treeAnchorExclusions");
+         Objects.requireNonNull(treeRootExclusions, "treeRootExclusions");
          Objects.requireNonNull(understoryExclusions, "understoryExclusions");
          treeMask = treeMask == null
             ? ExclusionMask.create(context, treeExclusions, 8)
@@ -458,13 +474,20 @@ final class ChunkDetailContributors {
             List.of(),
             ChunkDetailArea.empty(),
             ChunkDetailArea.empty(),
+            ChunkDetailArea.empty(),
+            ChunkDetailArea.empty(),
             ExclusionMask.empty(context, 8),
             ExclusionMask.empty(context, 4)
          );
       }
 
       boolean suppressesTree(int worldX, int worldZ, int rootRadius) {
-         return this.treeMask.contains(worldX, worldZ, rootRadius);
+         return this.treeAnchorExclusions.contains(worldX, worldZ)
+            || this.treeMask.contains(worldX, worldZ, rootRadius);
+      }
+
+      boolean suppressesRoot(int worldX, int worldZ) {
+         return this.treeRootExclusions.contains(worldX, worldZ);
       }
 
       boolean suppressesUnderstory(int worldX, int worldZ, int radius) {

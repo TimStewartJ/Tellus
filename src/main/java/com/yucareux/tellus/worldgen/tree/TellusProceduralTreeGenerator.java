@@ -249,11 +249,50 @@ public final class TellusProceduralTreeGenerator {
       TellusCanopyHeightSource.CanopySample canopy,
       long seed
    ) {
-      return place(level, ground, plan(biome, ecoregion, canopy, seed), seed);
+      return place(
+         level,
+         ground,
+         biome,
+         ecoregion,
+         canopy,
+         seed,
+         (worldX, worldZ) -> false
+      );
+   }
+
+   public static boolean place(
+      WorldGenLevel level,
+      BlockPos ground,
+      Holder<Biome> biome,
+      ResolveEcoregion ecoregion,
+      TellusCanopyHeightSource.CanopySample canopy,
+      long seed,
+      RootColumnBlocker rootBlocker
+   ) {
+      return place(
+         level,
+         ground,
+         plan(biome, ecoregion, canopy, seed),
+         seed,
+         rootBlocker
+      );
    }
 
    public static boolean place(WorldGenLevel level, BlockPos ground, TreePlan initialPlan, long seed) {
+      return place(
+         level, ground, initialPlan, seed, (worldX, worldZ) -> false
+      );
+   }
+
+   public static boolean place(
+      WorldGenLevel level,
+      BlockPos ground,
+      TreePlan initialPlan,
+      long seed,
+      RootColumnBlocker rootBlocker
+   ) {
       TreePlan plan = Objects.requireNonNull(initialPlan, "initialPlan");
+      Objects.requireNonNull(rootBlocker, "rootBlocker");
       if (!plan.present()) {
          return false;
       }
@@ -290,7 +329,7 @@ public final class TellusProceduralTreeGenerator {
       BlockState log = palette.log().defaultBlockState();
       BlockState leaves = persistentLeaves(palette.leaves().defaultBlockState());
       growTrunk(level, trunk, log);
-      growRoots(level, ground, plan, log, seed);
+      growRoots(level, ground, plan, log, seed, rootBlocker);
       if (plan.height() <= 6) {
          int crownY = ground.getY() + plan.height() - 1;
          placeLeafBlob(
@@ -633,7 +672,12 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growRoots(
-      WorldGenLevel level, BlockPos ground, TreePlan plan, BlockState log, long seed
+      WorldGenLevel level,
+      BlockPos ground,
+      TreePlan plan,
+      BlockState log,
+      long seed,
+      RootColumnBlocker rootBlocker
    ) {
       if (plan.trunkRadius() < 2
          && plan.profile() != Profile.TROPICAL
@@ -664,7 +708,8 @@ public final class TellusProceduralTreeGenerator {
             baseHeight,
             (worldX, worldZ) -> findRootSurfaceY(
                level, worldX, worldZ, ground.getY()
-            )
+            ),
+            rootBlocker
          );
          Direction.Axis rootAxis = Math.abs(endX - ground.getX()) >= Math.abs(endZ - ground.getZ())
             ? Direction.Axis.X
@@ -703,7 +748,30 @@ public final class TellusProceduralTreeGenerator {
       int baseHeight,
       RootSurfaceSampler surfaces
    ) {
+      return planRootColumns(
+         startX,
+         anchorGroundY,
+         startZ,
+         endX,
+         endZ,
+         baseHeight,
+         surfaces,
+         (worldX, worldZ) -> false
+      );
+   }
+
+   static List<RootColumn> planRootColumns(
+      int startX,
+      int anchorGroundY,
+      int startZ,
+      int endX,
+      int endZ,
+      int baseHeight,
+      RootSurfaceSampler surfaces,
+      RootColumnBlocker rootBlocker
+   ) {
       Objects.requireNonNull(surfaces, "surfaces");
+      Objects.requireNonNull(rootBlocker, "rootBlocker");
       int dx = endX - startX;
       int dz = endZ - startZ;
       int steps = Math.max(1, Math.max(Math.abs(dx), Math.abs(dz)));
@@ -717,6 +785,9 @@ public final class TellusProceduralTreeGenerator {
          int worldZ = (int)Math.round(startZ + dz * progress);
          if (worldX == previousX && worldZ == previousZ) {
             continue;
+         }
+         if (rootBlocker.blocks(worldX, worldZ)) {
+            break;
          }
          int surfaceY = surfaces.surfaceY(worldX, worldZ);
          if (surfaceY == Integer.MIN_VALUE
@@ -1584,6 +1655,11 @@ public final class TellusProceduralTreeGenerator {
    @FunctionalInterface
    public interface BasalSurfaceSampler {
       int surfaceY(int worldX, int worldZ);
+   }
+
+   @FunctionalInterface
+   public interface RootColumnBlocker {
+      boolean blocks(int worldX, int worldZ);
    }
 
    @FunctionalInterface

@@ -14,6 +14,8 @@ import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
 import com.yucareux.tellus.worldgen.vegetation.TellusVegetationPlanner;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -84,29 +86,70 @@ class TellusLodGeneratorColumnTest {
 
    @Test
    void canopyExclusionsUseTheSameNativeTreeAndUnderstoryRadii() {
-      AtomicReference<Query> query = new AtomicReference<>();
+      List<Query> queries = new ArrayList<>();
       ChunkDetailLodPlan exclusions = (domain, x, z, radius) -> {
-         query.set(new Query(domain, x, z, radius));
-         return true;
+         queries.add(new Query(domain, x, z, radius));
+         return domain == ChunkDetailDomain.MATURE_TREE_EXCLUSION;
       };
 
       TellusLodGenerator.suppressesLodMatureTree(exclusions, 12, 18);
       assertEquals(
-         new Query(
+         List.of(
+            new Query(
+               ChunkDetailDomain.TREE_ANCHOR_EXCLUSION, 12, 18, 0
+            ),
+            new Query(
             ChunkDetailDomain.MATURE_TREE_EXCLUSION,
             12,
             18,
             TellusProceduralTreeGenerator.ROOT_EXCLUSION_RADIUS
+            )
          ),
-         query.get()
+         queries
       );
 
+      queries.clear();
       TellusLodGenerator.suppressesLodUnderstory(
          exclusions, TellusVegetationPlanner.Stratum.SHRUB, 20, 24
       );
       assertEquals(
-         new Query(ChunkDetailDomain.UNDERSTORY_EXCLUSION, 20, 24, 3),
-         query.get()
+         List.of(
+            new Query(
+               ChunkDetailDomain.UNDERSTORY_EXCLUSION, 20, 24, 3
+            )
+         ),
+         queries
+      );
+   }
+
+   @Test
+   void pendingLodInputsBecomeSilentRetryableRejections() {
+      var pending = new com.yucareux.tellus.api.detail.ChunkDetailLodPendingException(
+         20, "terrain elevation unavailable"
+      );
+
+      RejectedExecutionException retry =
+         TellusLodGenerator.retryablePendingRejection(pending);
+
+      assertSame(pending, retry.getCause());
+   }
+
+   @Test
+   void companionRetryHintsCannotOvershootTheFailOpenDeadline() {
+      var pending = new com.yucareux.tellus.api.detail.ChunkDetailLodPendingException(
+         1_200, "route data unavailable"
+      );
+
+      var clamped = TellusLodGenerator.clampPendingRetryToRemaining(
+         pending, TimeUnit.SECONDS.toNanos(30)
+      );
+
+      assertEquals(600, clamped.retryAfterTicks());
+      assertSame(
+         pending,
+         TellusLodGenerator.clampPendingRetryToRemaining(
+            pending, TimeUnit.SECONDS.toNanos(90)
+         )
       );
    }
 

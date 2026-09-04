@@ -117,6 +117,13 @@ their own deterministic geometry to suppress mature-tree and understory LODs wit
 semantics to Tellus. Pending plans cause the incomplete LOD tile to be discarded and retried rather than
 cached, while very coarse tiles remain on the fast aggregate path.
 
+API v6 adds explicit tree-anchor and tree-root exclusion domains. Companions can provide a final,
+style-aware anchor keepout without Tellus adding the mature tree's full root radius, while exact root
+barriers stop individual procedural root rays instead of rejecting nearby trees. Legacy
+`MATURE_TREE_EXCLUSION` claims retain their radius-expanded behavior. Direct DH generation uses the same
+explicit anchor keepouts; missing cache-only elevation now rejects the tile for a silent paced retry
+instead of publishing a synthetic sea-level surface.
+
 <details>
   <summary>Settings</summary>
 

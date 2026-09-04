@@ -77,11 +77,22 @@ public final class TellusVegetationGenerator {
    public static int placeAll(
       WorldGenLevel level, List<TellusVegetationPlanner.Placement> placements
    ) {
+      return placeAll(
+         level, placements, (worldX, worldZ) -> false
+      );
+   }
+
+   public static int placeAll(
+      WorldGenLevel level,
+      List<TellusVegetationPlanner.Placement> placements,
+      TellusProceduralTreeGenerator.RootColumnBlocker rootBlocker
+   ) {
       Objects.requireNonNull(level, "level");
       Objects.requireNonNull(placements, "placements");
+      Objects.requireNonNull(rootBlocker, "rootBlocker");
       int placed = 0;
       for (TellusVegetationPlanner.Placement placement : placements) {
-         if (place(level, placement)) {
+         if (place(level, placement, rootBlocker)) {
             placed++;
          }
       }
@@ -119,7 +130,9 @@ public final class TellusVegetationGenerator {
    }
 
    private static boolean place(
-      WorldGenLevel level, TellusVegetationPlanner.Placement placement
+      WorldGenLevel level,
+      TellusVegetationPlanner.Placement placement,
+      TellusProceduralTreeGenerator.RootColumnBlocker rootBlocker
    ) {
       int topY = level.getHeight(
          net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
@@ -139,7 +152,9 @@ public final class TellusVegetationGenerator {
          return false;
       }
       return switch (placement.stratum()) {
-         case SUBCANOPY -> placeSubcanopy(level, ground, placement);
+         case SUBCANOPY -> placeSubcanopy(
+            level, ground, placement, rootBlocker
+         );
          case SHRUB -> placeShrub(level, ground, placement);
          case HERB -> placeHerb(level, ground, placement);
          case GROUND -> placeGroundCover(level, ground, placement);
@@ -156,12 +171,15 @@ public final class TellusVegetationGenerator {
    private static boolean placeSubcanopy(
       WorldGenLevel level,
       BlockPos ground,
-      TellusVegetationPlanner.Placement placement
+      TellusVegetationPlanner.Placement placement,
+      TellusProceduralTreeGenerator.RootColumnBlocker rootBlocker
    ) {
       TellusProceduralTreeGenerator.TreePlan plan = TellusProceduralTreeGenerator
          .plan(placement.treeProfile(), null, placement.seed())
          .withHeight(placement.size());
-      return TellusProceduralTreeGenerator.place(level, ground, plan, placement.seed());
+      return TellusProceduralTreeGenerator.place(
+         level, ground, plan, placement.seed(), rootBlocker
+      );
    }
 
    private static boolean placeShrub(

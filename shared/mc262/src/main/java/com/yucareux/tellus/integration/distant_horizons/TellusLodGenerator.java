@@ -73,6 +73,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import net.minecraft.core.Direction;
@@ -114,9 +115,10 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private static final int LOD_DETAIL_EXCLUSION_MAX_CELL_METERS = intProperty(
       "tellus.dhDetailExclusionMaxCellMeters", 128, 1, 100_000
    );
-   private static final long LOD_DETAIL_EXCLUSION_TIMEOUT_NANOS = TimeUnit.MINUTES.toNanos(
-      intProperty("tellus.dhDetailExclusionTimeoutMinutes", 5, 0, 60)
+   private static final long LOD_DETAIL_EXCLUSION_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(
+      intProperty("tellus.dhDetailExclusionTimeoutSeconds", 30, 0, 3_600)
    );
+   private static final long LOD_RETRY_TICK_NANOS = TimeUnit.MILLISECONDS.toNanos(50L);
    private static final int MAX_PENDING_DETAIL_EXCLUSION_TILES = 4_096;
    private static final boolean SHARED_TERRAIN_CACHE_ENABLED = Boolean.parseBoolean(
       System.getProperty("tellus.dhSharedTerrainCacheEnabled", "false")
@@ -353,7 +355,11 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             generationFuture.attachCancellation(delayedFailure);
             CompletableFuture.delayedExecutor(
                (long)pending.retryAfterTicks() * 50L, TimeUnit.MILLISECONDS
-            ).execute(() -> delayedFailure.completeExceptionally(pending));
+            ).execute(
+               () -> delayedFailure.completeExceptionally(
+                  retryablePendingRejection(pending)
+               )
+            );
             return delayedFailure;
          });
          generationFuture.attach(pacedBuild);
@@ -369,6 +375,15 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          current = current.getCause();
       }
       return current;
+   }
+
+   static RejectedExecutionException retryablePendingRejection(
+      ChunkDetailLodPendingException pending
+   ) {
+      return new RejectedExecutionException(
+         "Tellus LOD inputs are pending; DH may retry this tile",
+         pending
+      );
    }
 
    private static boolean isInterruptedLodGeneration(Throwable throwable) {
@@ -1438,8 +1453,28 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             }
             return ChunkDetailLodPlan.none();
          }
-         throw pending;
+         throw clampPendingRetryToRemaining(
+            pending, state.remainingNanos(now)
+         );
       }
+   }
+
+   static ChunkDetailLodPendingException clampPendingRetryToRemaining(
+      ChunkDetailLodPendingException pending, long remainingNanos
+   ) {
+      long ticksRemaining = Math.max(
+         1L,
+         (Math.max(0L, remainingNanos) + LOD_RETRY_TICK_NANOS - 1L)
+            / LOD_RETRY_TICK_NANOS
+      );
+      int retryAfterTicks = (int)Math.min(
+         pending.retryAfterTicks(), ticksRemaining
+      );
+      return retryAfterTicks == pending.retryAfterTicks()
+         ? pending
+         : new ChunkDetailLodPendingException(
+            retryAfterTicks, pending.getMessage()
+         );
    }
 
    private void trimPendingLodExclusions(LodExclusionKey protectedKey) {
@@ -5097,11 +5132,17 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       ChunkDetailLodPlan exclusions, int worldX, int worldZ
    ) {
       return exclusions.suppresses(
-         ChunkDetailDomain.MATURE_TREE_EXCLUSION,
-         worldX,
-         worldZ,
-         TellusProceduralTreeGenerator.ROOT_EXCLUSION_RADIUS
-      );
+            ChunkDetailDomain.TREE_ANCHOR_EXCLUSION,
+            worldX,
+            worldZ,
+            0
+         )
+         || exclusions.suppresses(
+            ChunkDetailDomain.MATURE_TREE_EXCLUSION,
+            worldX,
+            worldZ,
+            TellusProceduralTreeGenerator.ROOT_EXCLUSION_RADIUS
+         );
    }
 
    static boolean acceptsLodTreeFootprint(
@@ -5921,6 +5962,11 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       private boolean timedOut(long now) {
          return now - this.firstPendingNs
             >= LOD_DETAIL_EXCLUSION_TIMEOUT_NANOS;
+      }
+
+      private long remainingNanos(long now) {
+         long elapsed = Math.max(0L, now - this.firstPendingNs);
+         return Math.max(0L, LOD_DETAIL_EXCLUSION_TIMEOUT_NANOS - elapsed);
       }
 
       private synchronized boolean markTimeoutLogged() {

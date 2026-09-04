@@ -92,6 +92,49 @@ class ChunkDetailContributorsTest {
    }
 
    @Test
+   void explicitTreeAnchorAndRootClaimsDoNotReceiveLegacyPadding() {
+      ChunkDetailContributorRegistry.Registration registration =
+         TellusApi.registerChunkDetailContributor(
+            "test:explicit_tree_geometry",
+            contributor(
+               Set.of(
+                  ChunkDetailDomain.TREE_ANCHOR_EXCLUSION,
+                  ChunkDetailDomain.TREE_ROOT_EXCLUSION
+               ),
+               ready(
+                  new ChunkDetailClaim(
+                     "tree-anchor",
+                     0,
+                     Set.of(ChunkDetailDomain.TREE_ANCHOR_EXCLUSION),
+                     ChunkDetailArea.of(5, 5)
+                  ),
+                  new ChunkDetailClaim(
+                     "tree-root",
+                     0,
+                     Set.of(ChunkDetailDomain.TREE_ROOT_EXCLUSION),
+                     ChunkDetailArea.of(7, 5)
+                  )
+               )
+            )
+         );
+      try {
+         ChunkDetailContributors.Preparation preparation =
+            ChunkDetailContributors.prepare(
+               ChunkDetailContributorRegistry.global().snapshot(),
+               context(),
+               false
+            );
+
+         assertTrue(preparation.suppressesTree(5, 5, 8));
+         assertFalse(preparation.suppressesTree(6, 5, 8));
+         assertTrue(preparation.suppressesRoot(7, 5));
+         assertFalse(preparation.suppressesRoot(6, 5));
+      } finally {
+         registration.close();
+      }
+   }
+
+   @Test
    void pendingPlansRetryThenCanExplicitlyFailOpen() {
       ChunkDetailContributorRegistry.Registration registration = TellusApi.registerChunkDetailContributor(
          "test:pending",
@@ -393,8 +436,8 @@ class ChunkDetailContributorsTest {
       };
    }
 
-   private static ChunkDetailPlanResult ready(ChunkDetailClaim claim) {
-      ChunkDetailPlan plan = () -> List.of(claim);
+   private static ChunkDetailPlanResult ready(ChunkDetailClaim... claims) {
+      ChunkDetailPlan plan = () -> List.of(claims);
       return ChunkDetailPlanResult.ready(plan);
    }
 

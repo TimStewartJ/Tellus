@@ -13,11 +13,11 @@ class TerrainHeightTransformTest {
    void nativeTerrainRejectsMissingElevationInsteadOfFlatteningItToSeaLevel() {
       assertEquals(742.5, TerrainHeightTransform.requireFiniteTerrainElevation(742.5, -3884, -1879));
       assertThrows(
-         IllegalStateException.class,
+         TerrainHeightTransform.MissingTerrainElevationException.class,
          () -> TerrainHeightTransform.requireFiniteTerrainElevation(Double.NaN, -3884, -1879)
       );
       assertThrows(
-         IllegalStateException.class,
+         TerrainHeightTransform.MissingTerrainElevationException.class,
          () -> TerrainHeightTransform.requireFiniteTerrainElevation(Double.POSITIVE_INFINITY, -3884, -1879)
       );
    }

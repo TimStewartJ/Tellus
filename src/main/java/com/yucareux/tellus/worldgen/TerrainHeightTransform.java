@@ -22,11 +22,21 @@ public final class TerrainHeightTransform {
 
    public static double requireFiniteTerrainElevation(double elevationMeters, int blockX, int blockZ) {
       if (!Double.isFinite(elevationMeters)) {
-         throw new IllegalStateException(
-            "Terrain elevation is unavailable at block " + blockX + "," + blockZ
-         );
+         throw new MissingTerrainElevationException(blockX, blockZ);
       }
       return elevationMeters;
+   }
+
+   public static final class MissingTerrainElevationException
+      extends IllegalStateException {
+      private MissingTerrainElevationException(int blockX, int blockZ) {
+         super(
+            "Terrain elevation is unavailable at block "
+               + blockX
+               + ","
+               + blockZ
+         );
+      }
    }
 
    public static double scaledElevationBlocks(

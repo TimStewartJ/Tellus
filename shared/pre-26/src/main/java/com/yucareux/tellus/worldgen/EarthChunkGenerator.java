@@ -8,6 +8,7 @@ import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
 import com.yucareux.tellus.api.detail.ChunkDetailDomain;
 import com.yucareux.tellus.api.detail.ChunkDetailLodPlan;
 import com.yucareux.tellus.api.detail.ChunkDetailLodPlanContext;
+import com.yucareux.tellus.api.detail.ChunkDetailLodPendingException;
 import com.yucareux.tellus.api.detail.ChunkDetailPlanContext;
 import com.yucareux.tellus.preload.TerrainPreloadPackage;
 import com.yucareux.tellus.preload.TerrainPreloadPackageRegistry;
@@ -543,6 +544,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return this.chunkDetailContributors.uses(
          ChunkDetailDomain.MATURE_TREE_EXCLUSION
       ) || this.chunkDetailContributors.uses(
+         ChunkDetailDomain.TREE_ANCHOR_EXCLUSION
+      ) || this.chunkDetailContributors.uses(
          ChunkDetailDomain.UNDERSTORY_EXCLUSION
       );
    }
@@ -857,6 +860,8 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
 
    private boolean shouldDeferTrees() {
       return this.chunkDetailContributors.uses(ChunkDetailDomain.MATURE_TREE_EXCLUSION)
+         || this.chunkDetailContributors.uses(ChunkDetailDomain.TREE_ANCHOR_EXCLUSION)
+         || this.chunkDetailContributors.uses(ChunkDetailDomain.TREE_ROOT_EXCLUSION)
          || !CHUNK_DETAIL_LEGACY_BLOCKING && CHUNK_DETAIL_DEFER_TREES;
    }
 
@@ -5432,13 +5437,22 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       return placements.isEmpty() ? List.of() : List.copyOf(placements);
    }
 
-   private void applyPreparedTreePlacements(WorldGenLevel level, ChunkAccess chunk, List<EarthChunkGenerator.PreparedTreePlacement> placements) {
+   private void applyPreparedTreePlacements(
+      WorldGenLevel level,
+      ChunkAccess chunk,
+      List<EarthChunkGenerator.PreparedTreePlacement> placements,
+      ChunkDetailContributors.Preparation contributors
+   ) {
       for (EarthChunkGenerator.PreparedTreePlacement placement : placements) {
-         this.applyPreparedTreePlacement(level, placement);
+         this.applyPreparedTreePlacement(level, placement, contributors);
       }
    }
 
-   private void applyPreparedTreePlacement(WorldGenLevel level, EarthChunkGenerator.PreparedTreePlacement placement) {
+   private void applyPreparedTreePlacement(
+      WorldGenLevel level,
+      EarthChunkGenerator.PreparedTreePlacement placement,
+      ChunkDetailContributors.Preparation contributors
+   ) {
       int worldX = placement.worldX();
       int worldZ = placement.worldZ();
       int topY = level.getHeight(Types.MOTION_BLOCKING_NO_LEAVES, worldX, worldZ) - 1;
@@ -5480,7 +5494,15 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
          ResolveEcoregion ecoregion = RESOLVE_SOURCE.sampleEcoregion(
             worldX, worldZ, this.projection
          );
-         TellusProceduralTreeGenerator.place(level, ground, biome, ecoregion, canopy, placement.seed());
+         TellusProceduralTreeGenerator.place(
+            level,
+            ground,
+            biome,
+            ecoregion,
+            canopy,
+            placement.seed(),
+            contributors::suppressesRoot
+         );
       } else {
          RandomSource random = RandomSource.create(placement.seed());
          ConfiguredFeature<?, ?> feature = features.get(random.nextInt(features.size()));
@@ -8775,14 +8797,18 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
       List<EarthChunkGenerator.PreparedTreePlacement> treePlacements = detail.treePlacements();
       if (!treePlacements.isEmpty()) {
          long treeApplyStartNs = beginFullChunkProfiling();
-         this.applyPreparedTreePlacements(level, chunk, treePlacements);
+         this.applyPreparedTreePlacements(
+            level, chunk, treePlacements, contributors
+         );
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_TREES_DEFER_APPLY, treeApplyStartNs);
       }
 
       List<TellusVegetationPlanner.Placement> ecologicalVegetation = detail.ecologicalVegetation();
       if (!ecologicalVegetation.isEmpty()) {
          long vegetationApplyStartNs = beginFullChunkProfiling();
-         TellusVegetationGenerator.placeAll(level, ecologicalVegetation);
+         TellusVegetationGenerator.placeAll(
+            level, ecologicalVegetation, contributors::suppressesRoot
+         );
          endFullChunkProfiling(
             EarthChunkGenerator.FullChunkPhase.DECORATION_VEGETATION_DEFER_APPLY,
             vegetationApplyStartNs
@@ -11868,8 +11894,18 @@ public final class EarthChunkGenerator extends EarthChunkGeneratorVersionCompat 
    }
 
    public int resolveLodTerrainSurface(int worldX, int worldZ, int coverClass, double previewResolutionMeters) {
-      int surface = this.sampleSurfaceHeight(worldX, worldZ, previewResolutionMeters);
-      return Mth.clamp(surface, this.minY, this.minY + this.height - 1);
+      try {
+         int surface = this.sampleRequiredSurfaceHeight(
+            worldX, worldZ, previewResolutionMeters, false
+         );
+         return Mth.clamp(surface, this.minY, this.minY + this.height - 1);
+      } catch (
+         TerrainHeightTransform.MissingTerrainElevationException unavailable
+      ) {
+         throw new ChunkDetailLodPendingException(
+            20, unavailable.getMessage()
+         );
+      }
    }
 
    public double sampleLodTerrainElevationMetersLocalOnly(int worldX, int worldZ, double previewResolutionMeters) {

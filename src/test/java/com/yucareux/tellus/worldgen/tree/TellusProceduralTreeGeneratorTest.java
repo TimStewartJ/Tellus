@@ -213,6 +213,23 @@ class TellusProceduralTreeGeneratorTest {
    }
 
    @Test
+   void rootsStopBeforeContributorBarriersWithoutRejectingTheTree() {
+      var columns = TellusProceduralTreeGenerator.planRootColumns(
+         0,
+         80,
+         0,
+         6,
+         0,
+         3,
+         (x, z) -> 80,
+         (x, z) -> x >= 3
+      );
+
+      assertEquals(3, columns.size());
+      assertEquals(2, columns.get(columns.size() - 1).worldX());
+   }
+
+   @Test
    void rootsRecognizeMinecraftsNaturalForestSurfaces() {
       assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla block registries");
       SharedConstants.tryDetectVersion();
