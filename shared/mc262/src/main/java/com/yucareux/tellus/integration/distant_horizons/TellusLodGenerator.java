@@ -194,6 +194,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private final LodPrefetchBatcher lodPrefetchBatcher;
    private final Map<LodExclusionKey, PendingLodExclusionState> pendingLodExclusions =
       new ConcurrentHashMap<>();
+   private final Map<LodInputRecoveryKey, CompletableFuture<Void>>
+      pendingLodInputRecoveries = new HashMap<>();
    private final String managedTerrainKey;
 
    public TellusLodGenerator(IDhApiLevelWrapper levelWrapper, EarthChunkGenerator generator) {
@@ -350,6 +352,21 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             Throwable cause = unwrapCompletionFailure(error);
             if (!(cause instanceof ChunkDetailLodPendingException pending)) {
                return CompletableFuture.failedFuture(cause);
+            }
+            if (managedDownloads) {
+               this.startLodInputRecovery(
+                  chunkPosMinX,
+                  chunkPosMinZ,
+                  detailLevel,
+                  pooledFullDataSource.getWidthInDataColumns()
+               );
+            }
+            if (
+               DistantHorizonsIntegration.supportsRejectedGenerationBackoff()
+            ) {
+               return CompletableFuture.failedFuture(
+                  retryablePendingRejection(pending)
+               );
             }
             CompletableFuture<Void> delayedFailure = new CompletableFuture<>();
             generationFuture.attachCancellation(delayedFailure);
@@ -2335,6 +2352,42 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       return settings.distantHorizonsRenderMode() == EarthGeneratorSettings.DistantHorizonsRenderMode.FAST
          ? this.lodPrefetchBatcher.submit(request)
          : this.lodPrefetchBatcher.submitImmediately(request);
+   }
+
+   private void startLodInputRecovery(
+      int chunkPosMinX,
+      int chunkPosMinZ,
+      byte detailLevel,
+      int lodSizePoints
+   ) {
+      LodInputRecoveryKey key = new LodInputRecoveryKey(
+         chunkPosMinX, chunkPosMinZ, detailLevel, lodSizePoints
+      );
+      final CompletableFuture<Void> recovery;
+      synchronized (this.pendingLodInputRecoveries) {
+         if (this.pendingLodInputRecoveries.containsKey(key)) {
+            return;
+         }
+         recovery = this.prefetchLodResources(
+            chunkPosMinX, chunkPosMinZ, detailLevel, lodSizePoints
+         ).future();
+         this.pendingLodInputRecoveries.put(key, recovery);
+      }
+
+      recovery.whenComplete((recoveryIgnored, recoveryError) -> {
+         synchronized (this.pendingLodInputRecoveries) {
+            this.pendingLodInputRecoveries.remove(key, recovery);
+         }
+         if (recoveryError != null) {
+            Throwable recoveryCause = unwrapCompletionFailure(recoveryError);
+            if (!isInterruptedLodGeneration(recoveryCause)) {
+               LOGGER.debug(
+                  "Tellus targeted LOD input recovery completed with an error.",
+                  recoveryCause
+               );
+            }
+         }
+      });
    }
 
    private CompletableFuture<Void> startLodPrefetch(LodPrefetchBatcher.Request request) {
@@ -5864,6 +5917,12 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
    public void close() {
       this.lodPrefetchBatcher.close();
+      synchronized (this.pendingLodInputRecoveries) {
+         this.pendingLodInputRecoveries.values().forEach(
+            future -> future.cancel(true)
+         );
+         this.pendingLodInputRecoveries.clear();
+      }
       this.pendingLodExclusions.clear();
    }
 
@@ -5937,6 +5996,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
    private record LodExclusionKey(
       int minBlockX, int minBlockZ, int columnsPerSide, int cellSize
+   ) {
+   }
+
+   private record LodInputRecoveryKey(
+      int chunkPosMinX,
+      int chunkPosMinZ,
+      byte detailLevel,
+      int lodSizePoints
    ) {
    }
 

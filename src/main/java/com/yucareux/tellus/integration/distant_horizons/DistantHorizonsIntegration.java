@@ -33,6 +33,10 @@ import org.slf4j.Logger;
 public final class DistantHorizonsIntegration {
    private static final Logger LOGGER = LogUtils.getLogger();
    private static final String VOXY_MOD_ID = "voxy";
+   private static final String WORLD_GENERATION_QUEUE_CLASS =
+      "com.seibel.distanthorizons.core.generation.queues.WorldGenerationQueue";
+   private static final String REJECTION_BACKOFF_FIELD =
+      "SUPPORTS_REJECTED_GENERATION_BACKOFF";
    private static final int DEFAULT_FOLIAGE_COLOR = 0x48B518;
    private static final int BIRCH_FOLIAGE_COLOR = 0x80A755;
    private static final int SPRUCE_FOLIAGE_COLOR = 0x619961;
@@ -53,6 +57,8 @@ public final class DistantHorizonsIntegration {
    private static final DistantHorizonsRuntimeConfigGuard DIRECT_LOD_CONFIG_GUARD = DistantHorizonsRuntimeConfigGuard.reflective(
       Boolean.parseBoolean(System.getProperty("tellus.dhForceNSizedGeneration", "true"))
    );
+   private static final boolean REJECTED_GENERATION_BACKOFF_SUPPORTED =
+      detectRejectedGenerationBackoff();
    private static volatile Integer dhMaxWorldYSize;
 
    private DistantHorizonsIntegration() {
@@ -120,6 +126,31 @@ public final class DistantHorizonsIntegration {
 
    static CompletableFuture<Void> distantGenerationReadyFuture() {
       return STARTUP_GATE.whenReady();
+   }
+
+   static boolean supportsRejectedGenerationBackoff() {
+      return REJECTED_GENERATION_BACKOFF_SUPPORTED;
+   }
+
+   private static boolean detectRejectedGenerationBackoff() {
+      try {
+         java.lang.reflect.Field marker = Class.forName(
+            WORLD_GENERATION_QUEUE_CLASS,
+            false,
+            DistantHorizonsIntegration.class.getClassLoader()
+         ).getField(REJECTION_BACKOFF_FIELD);
+         int modifiers = marker.getModifiers();
+         return marker.getType() == boolean.class
+            && java.lang.reflect.Modifier.isPublic(modifiers)
+            && java.lang.reflect.Modifier.isStatic(modifiers)
+            && java.lang.reflect.Modifier.isFinal(modifiers);
+      } catch (
+         ClassNotFoundException
+         | NoSuchFieldException
+         | LinkageError ignored
+      ) {
+         return false;
+      }
    }
 
    static void awaitDistantGenerationReady() {

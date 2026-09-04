@@ -4,6 +4,7 @@ import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 
 public final class TerrainStreamingPolicy {
    public static final int COARSE_FIRST_MIN_DETAIL = intProperty("tellus.streaming.coarseFirstMinDetail", 6, 0, 24);
+   public static final double MANAGED_LOD_FALLBACK_RESOLUTION_METERS = 16.0;
 
    private TerrainStreamingPolicy() {
    }

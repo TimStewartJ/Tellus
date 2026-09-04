@@ -448,6 +448,14 @@ public final class ManagedTerrainDownloadManager {
             generatorState.settings,
             progress::onUnitProgress
          );
+         TellusWorldgenSources.preloadManagedDhElevationFallback(
+            area.minBlockX(),
+            area.minBlockZ(),
+            area.maxBlockX(),
+            area.maxBlockZ(),
+            generatorState.settings,
+            progress::onUnitProgress
+         );
       }
    }
 

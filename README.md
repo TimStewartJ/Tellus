@@ -42,6 +42,11 @@ Tellus integrates with the Distant Horizons (DH) mod to render planet-scale terr
 - **Fast mode**: Tellus provides a custom LOD generator that samples its elevation, land-cover, climate, and water data directly to build distant terrain quickly and consistently with your world settings.
 - **Detailed mode**: Tellus delegates to DH's chunk-based generator for far terrain, which is more accurate but significantly heavier on performance.
 
+Automatic terrain streaming prepares a z12 elevation fallback before newly exposed managed cells become
+available to Fast LOD generation. Cache-only coarse requests may safely downsample that finer cached data, and a
+missing required sample starts a targeted tile prefetch before DH retries it. Missing elevation is never replaced
+with a synthetic sea-level surface.
+
 Because Tellus worlds are Earth-scale, DH is strongly recommended and is almost essential for comfortable exploration and long-distance views.
 
 ### Offline Fast LOD profiling

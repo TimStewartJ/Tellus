@@ -2,6 +2,7 @@ package com.yucareux.tellus.worldgen;
 
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
+import com.yucareux.tellus.integration.distant_horizons.managed.TerrainStreamingPolicy;
 import com.yucareux.tellus.preload.TerrainPreloadPackage;
 import com.yucareux.tellus.preload.TerrainPreloadPackageRegistry;
 import com.yucareux.tellus.compat.MinecraftVersionCompat;
@@ -455,6 +456,28 @@ public final class TellusWorldgenSources {
       BiConsumer<Integer, String> progressConsumer
    ) {
       preloadAreaInputs(minBlockX, minBlockZ, maxBlockX, maxBlockZ, settings, Double.NaN, progressConsumer);
+   }
+
+   public static void preloadManagedDhElevationFallback(
+      int minBlockX,
+      int minBlockZ,
+      int maxBlockX,
+      int maxBlockZ,
+      EarthGeneratorSettings settings,
+      BiConsumer<Integer, String> progressConsumer
+   ) {
+      Objects.requireNonNull(settings, "settings");
+      ELEVATION.preloadAreaInputs(
+         minBlockX,
+         minBlockZ,
+         maxBlockX,
+         maxBlockZ,
+         settings.projection(),
+         settings.demSelection(),
+         TerrainStreamingPolicy.MANAGED_LOD_FALLBACK_RESOLUTION_METERS,
+         0,
+         progressConsumer
+      );
    }
 
    public static void preloadAreaInputs(

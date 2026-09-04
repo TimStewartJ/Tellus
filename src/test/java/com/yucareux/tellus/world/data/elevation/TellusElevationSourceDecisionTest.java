@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TellusElevationSourceDecisionTest {
@@ -123,6 +124,22 @@ class TellusElevationSourceDecisionTest {
    }
 
    @Test
+   void cacheOnlySamplingMayUseTheCanonicalFinerFallback() {
+      assertArrayEquals(
+         new int[]{10, 11, 12},
+         TellusElevationSource.mapterhornLocalFallbackZooms(10)
+      );
+      assertArrayEquals(
+         new int[]{12},
+         TellusElevationSource.mapterhornLocalFallbackZooms(12)
+      );
+      assertArrayEquals(
+         new int[]{14, 13, 12},
+         TellusElevationSource.mapterhornLocalFallbackZooms(14)
+      );
+   }
+
+   @Test
    void treatsOnlyMissingGlobalMapterhornTilesAsZeroElevation() {
       assertTrue(TellusElevationSource.mapterhornMissingTileRepresentsZero(0));
       assertTrue(TellusElevationSource.mapterhornMissingTileRepresentsZero(12));
@@ -136,6 +153,18 @@ class TellusElevationSourceDecisionTest {
       assertEquals(12, TellusElevationSource.selectPreviewZoom(1.0, 16.0, 18));
       assertEquals(8, TellusElevationSource.selectPreviewZoom(1.0, 256.0, 18));
       assertEquals(4, TellusElevationSource.selectPreviewZoom(1.0, 4096.0, 18));
+      assertEquals(
+         10,
+         TellusElevationSource.selectPreviewZoom(
+            1.264130296599367, 64.0, 18
+         )
+      );
+      assertEquals(
+         9,
+         TellusElevationSource.selectPreviewZoom(
+            1.264130296599367, 128.0, 18
+         )
+      );
    }
 
    @Test

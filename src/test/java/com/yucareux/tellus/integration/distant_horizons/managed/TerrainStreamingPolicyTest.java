@@ -60,4 +60,12 @@ class TerrainStreamingPolicyTest {
       assertEquals(6, TerrainStreamingPolicy.generatedDetailForAvailability(256, (byte)0));
       assertEquals(8, TerrainStreamingPolicy.generatedDetailForAvailability(64, (byte)4));
    }
+
+   @Test
+   void managedFallbackResolutionCoversTheGlobalMapterhornLevel() {
+      assertEquals(
+         16.0,
+         TerrainStreamingPolicy.MANAGED_LOD_FALLBACK_RESOLUTION_METERS
+      );
+   }
 }
