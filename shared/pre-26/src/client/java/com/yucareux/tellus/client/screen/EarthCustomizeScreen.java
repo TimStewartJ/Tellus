@@ -1,11 +1,11 @@
 package com.yucareux.tellus.client.screen;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.serialization.Lifecycle;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.cache.TellusCacheManager;
 import com.yucareux.tellus.client.preview.TerrainPreview;
 import com.yucareux.tellus.client.preview.TerrainPreviewWidget;
+import com.yucareux.tellus.client.compat.AbstractTellusWidget;
 import com.yucareux.tellus.client.widget.CustomizationList;
 import com.yucareux.tellus.compat.ClientMinecraftCompat;
 import com.yucareux.tellus.platform.TellusPlatform;
@@ -51,11 +51,9 @@ import net.minecraft.core.RegistryAccess.ImmutableRegistryAccess;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.util.Mth;
-import net.minecraft.Util;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
@@ -73,12 +71,12 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       Component.translatable("tellus.customize.work_in_progress").withStyle(ChatFormatting.GRAY), "workInProgressLabel"
    );
    
-   private static final ResourceLocation DYNAMIC_DIMENSION_TYPE_ID = Objects.requireNonNull(
-      ClientMinecraftCompat.resourceLocation("tellus", "earth_dynamic"), "dynamicDimensionTypeId"
-   );
-   
    private static final ResourceKey<DimensionType> DYNAMIC_DIMENSION_TYPE_KEY = Objects.requireNonNull(
-      ResourceKey.create(Registries.DIMENSION_TYPE, DYNAMIC_DIMENSION_TYPE_ID), "dynamicDimensionTypeKey"
+      ResourceKey.create(
+         Registries.DIMENSION_TYPE,
+         Objects.requireNonNull(ClientMinecraftCompat.resourceLocation("tellus", "earth_dynamic"), "dynamicDimensionTypeId")
+      ),
+      "dynamicDimensionTypeKey"
    );
    private static final double OSM_ROADS_AND_BUILDINGS_MAX_WORLD_SCALE = 15.0;
    private static final String BIOME_TOGGLE_PREFIX = "random_biome.";
@@ -245,7 +243,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
                   limits.minY(),
                   limits.height(),
                   limits.logicalHeight(),
-                  overworldKey.location(),
+                  ClientMinecraftCompat.resourceKeyName(overworldKey),
                   describeDimensionType(updatedType),
                   describeDimensionType(registryType)
                }
@@ -262,13 +260,11 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       LayeredRegistryAccess<RegistryLayer> updatedRegistries = Objects.requireNonNull(
          updateWorldgenLevelStems(registriesWithTypes, updatedDatapackDimensions), "updatedRegistries"
       );
-      return new WorldCreationContext(
-         current.options(),
+      return ClientMinecraftCompat.createWorldCreationContext(
+         current,
          updatedDatapackDimensions,
          updatedDimensions,
-         updatedRegistries,
-         current.dataPackResources(),
-         current.dataConfiguration()
+         updatedRegistries
       );
    }
 
@@ -1400,7 +1396,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       for (RegistryLayer layer : RegistryLayer.values()) {
          Frozen layerAccess = updatedRegistries.getLayer(layer);
          if (!layerAccess.lookup(Registries.DIMENSION_TYPE).isEmpty()) {
-            Registry<DimensionType> source = layerAccess.registryOrThrow(Registries.DIMENSION_TYPE);
+            Registry<DimensionType> source = ClientMinecraftCompat.registryOrThrow(layerAccess, Registries.DIMENSION_TYPE);
             Lifecycle lifecycle = Objects.requireNonNull(
                source instanceof MappedRegistry<DimensionType> mapped ? mapped.registryLifecycle() : Lifecycle.experimental(), "dimensionTypeLifecycle"
             );
@@ -1793,8 +1789,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
    }
 
    private static boolean isShiftDown() {
-      long window = Minecraft.getInstance().getWindow().getWindow();
-      return InputConstants.isKeyDown(window, 340) || InputConstants.isKeyDown(window, 344);
+      return ClientMinecraftCompat.isShiftDown();
    }
 
    private final class AutoAdjustDefinition implements EarthCustomizeScreen.SettingDefinition {
@@ -1864,7 +1859,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       }
    }
 
-   private static final class CacheActionWidget extends AbstractWidget {
+   private static final class CacheActionWidget extends AbstractTellusWidget {
       private final Button button;
 
       private CacheActionWidget( Component label,  Runnable action) {
@@ -1884,23 +1879,23 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          this.button.render(graphics, mouseX, mouseY, delta);
       }
 
-      public void onClick(double mouseX, double mouseY) {
-         this.button.mouseClicked(mouseX, mouseY, 0);
+      protected void tellusOnClick(double mouseX, double mouseY) {
+         ClientMinecraftCompat.mouseClicked(this.button, mouseX, mouseY, 0);
       }
 
-      protected void onDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
-         this.button.mouseDragged(mouseX, mouseY, 0, deltaX, deltaY);
+      protected void tellusOnDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
+         ClientMinecraftCompat.mouseDragged(this.button, mouseX, mouseY, 0, deltaX, deltaY);
       }
 
-      public void onRelease(double mouseX, double mouseY) {
-         this.button.mouseReleased(mouseX, mouseY, 0);
+      protected void tellusOnRelease(double mouseX, double mouseY) {
+         ClientMinecraftCompat.mouseReleased(this.button, mouseX, mouseY, 0);
       }
 
       protected void updateWidgetNarration( NarrationElementOutput narration) {
       }
    }
 
-   private static final class CacheProgressWidget extends AbstractWidget {
+   private static final class CacheProgressWidget extends AbstractTellusWidget {
       private static final Component CANCEL_LABEL = Objects.requireNonNull(Component.translatable("gui.cancel"), "cancelLabel");
       private static final int TEXT_COLOR = 0xFFFFFFFF;
       private static final int READY_TEXT_COLOR = 0xFF80C080;
@@ -1972,23 +1967,23 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       }
 
       @Override
-      public void onClick(double mouseX, double mouseY) {
+      protected void tellusOnClick(double mouseX, double mouseY) {
          if (TellusCacheManager.snapshot().status() == TellusCacheManager.Status.DELETING) {
-            this.cancelButton.mouseClicked(mouseX, mouseY, 0);
+            ClientMinecraftCompat.mouseClicked(this.cancelButton, mouseX, mouseY, 0);
          }
       }
 
       @Override
-      protected void onDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
+      protected void tellusOnDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
          if (TellusCacheManager.snapshot().status() == TellusCacheManager.Status.DELETING) {
-            this.cancelButton.mouseDragged(mouseX, mouseY, 0, deltaX, deltaY);
+            ClientMinecraftCompat.mouseDragged(this.cancelButton, mouseX, mouseY, 0, deltaX, deltaY);
          }
       }
 
       @Override
-      public void onRelease(double mouseX, double mouseY) {
+      protected void tellusOnRelease(double mouseX, double mouseY) {
          if (TellusCacheManager.snapshot().status() == TellusCacheManager.Status.DELETING) {
-            this.cancelButton.mouseReleased(mouseX, mouseY, 0);
+            ClientMinecraftCompat.mouseReleased(this.cancelButton, mouseX, mouseY, 0);
          }
       }
 
@@ -2028,7 +2023,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       }
    }
 
-   private static final class CacheEntryWidget extends AbstractWidget {
+   private static final class CacheEntryWidget extends AbstractTellusWidget {
       
       private static final Component DELETE_LABEL = Objects.requireNonNull(Component.translatable("tellus.cache.delete"), "deleteLabel");
       private final TellusCacheManager.Metric metric;
@@ -2068,21 +2063,21 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          }
       }
 
-      public void onClick(double mouseX, double mouseY) {
+      protected void tellusOnClick(double mouseX, double mouseY) {
          if (this.allowDelete) {
-            this.deleteButton.mouseClicked(mouseX, mouseY, 0);
+            ClientMinecraftCompat.mouseClicked(this.deleteButton, mouseX, mouseY, 0);
          }
       }
 
-      protected void onDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
+      protected void tellusOnDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
          if (this.allowDelete) {
-            this.deleteButton.mouseDragged(mouseX, mouseY, 0, deltaX, deltaY);
+            ClientMinecraftCompat.mouseDragged(this.deleteButton, mouseX, mouseY, 0, deltaX, deltaY);
          }
       }
 
-      public void onRelease(double mouseX, double mouseY) {
+      protected void tellusOnRelease(double mouseX, double mouseY) {
          if (this.allowDelete) {
-            this.deleteButton.mouseReleased(mouseX, mouseY, 0);
+            ClientMinecraftCompat.mouseReleased(this.deleteButton, mouseX, mouseY, 0);
          }
       }
 
@@ -2175,7 +2170,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       }
    }
 
-   private static final class DualButtonWidget extends AbstractWidget {
+   private static final class DualButtonWidget extends AbstractTellusWidget {
       private final Button leftButton;
       private final Button rightButton;
 
@@ -2217,20 +2212,20 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          this.rightButton.render(graphics, mouseX, mouseY, delta);
       }
 
-      public boolean mouseClicked(double mouseX, double mouseY, int button) {
-         boolean leftClicked = this.leftButton.mouseClicked(mouseX, mouseY, button);
-         boolean rightClicked = this.rightButton.mouseClicked(mouseX, mouseY, button);
+      protected boolean tellusMouseClicked(double mouseX, double mouseY, int button) {
+         boolean leftClicked = ClientMinecraftCompat.mouseClicked(this.leftButton, mouseX, mouseY, button);
+         boolean rightClicked = ClientMinecraftCompat.mouseClicked(this.rightButton, mouseX, mouseY, button);
          return leftClicked || rightClicked;
       }
 
-      protected void onDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
-         this.leftButton.mouseDragged(mouseX, mouseY, 0, deltaX, deltaY);
-         this.rightButton.mouseDragged(mouseX, mouseY, 0, deltaX, deltaY);
+      protected void tellusOnDrag(double mouseX, double mouseY, double deltaX, double deltaY) {
+         ClientMinecraftCompat.mouseDragged(this.leftButton, mouseX, mouseY, 0, deltaX, deltaY);
+         ClientMinecraftCompat.mouseDragged(this.rightButton, mouseX, mouseY, 0, deltaX, deltaY);
       }
 
-      public void onRelease(double mouseX, double mouseY) {
-         this.leftButton.mouseReleased(mouseX, mouseY, 0);
-         this.rightButton.mouseReleased(mouseX, mouseY, 0);
+      protected void tellusOnRelease(double mouseX, double mouseY) {
+         ClientMinecraftCompat.mouseReleased(this.leftButton, mouseX, mouseY, 0);
+         ClientMinecraftCompat.mouseReleased(this.rightButton, mouseX, mouseY, 0);
       }
 
       protected void updateWidgetNarration( NarrationElementOutput narration) {
@@ -2351,7 +2346,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
             ? this.unavailableTooltip
             : (this.locked ? EarthCustomizeScreen.workInProgressTooltip(this.key) : EarthCustomizeScreen.settingTooltip(this.key));
          Builder<EarthGeneratorSettings.DistantHorizonsRenderMode> builder = configureCycleButton(
-            CycleButton.builder(EarthCustomizeScreen::formatRenderMode), this.value, MODES
+            EarthCustomizeScreen::formatRenderMode, this.value, MODES
          ).withTooltip(value -> Tooltip.create(tooltip));
          CycleButton<EarthGeneratorSettings.DistantHorizonsRenderMode> button = builder.create(0, 0, 0, 20, name, (btn, value) -> {
             this.value = value;
@@ -2380,7 +2375,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          Component name = EarthCustomizeScreen.settingName(this.key);
          Component tooltip = EarthCustomizeScreen.settingTooltip(this.key);
          Builder<EarthGeneratorSettings.TerrainStreamingStrategy> builder = configureCycleButton(
-            CycleButton.builder(EarthCustomizeScreen::formatTerrainStreamingStrategy), this.value, STRATEGIES
+            EarthCustomizeScreen::formatTerrainStreamingStrategy, this.value, STRATEGIES
          ).withTooltip(value -> Tooltip.create(tooltip));
          return builder.create(0, 0, 0, 20, name, (button, value) -> {
             this.value = value;
@@ -2497,7 +2492,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       }
    }
 
-   private static final class SpacerWidget extends AbstractWidget {
+   private static final class SpacerWidget extends AbstractTellusWidget {
       private SpacerWidget() {
          super(0, 0, 0, 20, Component.empty());
       }
@@ -2528,7 +2523,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       }
    }
 
-   private static final class TextLineWidget extends AbstractWidget {
+   private static final class TextLineWidget extends AbstractTellusWidget {
       
       private final Component text;
       private final int color;
@@ -2554,23 +2549,23 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
             float scaledHeight = 9.0F * scale;
             float textX = this.getX() + (this.width - scaledWidth) * 0.5F;
             float textY = this.getY() + (this.height - scaledHeight) * 0.5F;
-            graphics.pose().pushPose();
-            graphics.pose().translate(textX, textY, 0.0F);
-            graphics.pose().scale(scale, scale, 1.0F);
+            ClientMinecraftCompat.pushPose(graphics);
+            ClientMinecraftCompat.translatePose(graphics, textX, textY);
+            ClientMinecraftCompat.scalePose(graphics, scale, scale);
             graphics.drawString(font, this.text, 0, 0, drawColor, true);
             if (this.url != null) {
                int underlineY = 9;
                graphics.fill(0, underlineY, textWidth, underlineY + 1, drawColor);
             }
 
-            graphics.pose().popPose();
+            ClientMinecraftCompat.popPose(graphics);
          }
       }
 
-      public boolean mouseClicked(double mouseX, double mouseY, int button) {
+      protected boolean tellusMouseClicked(double mouseX, double mouseY, int button) {
          String url = this.url;
          if (url != null && button == 0 && this.isMouseOver(mouseX, mouseY)) {
-            Util.getPlatform().openUri(url);
+            ClientMinecraftCompat.openUri(url);
             return true;
          } else {
             return false;
@@ -2647,8 +2642,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
                      ? this.tooltipOverride
                      : (this.locked ? EarthCustomizeScreen.workInProgressTooltip(this.key) : EarthCustomizeScreen.settingTooltip(this.key))
                ));
-         Builder<Boolean> builder = CycleButton.booleanBuilder(EarthCustomizeScreen.YES, EarthCustomizeScreen.NO)
-            .withInitialValue(this.value)
+         Builder<Boolean> builder = configureBooleanCycleButton(EarthCustomizeScreen.YES, EarthCustomizeScreen.NO, this.value)
             .withTooltip(value -> Tooltip.create(tooltip));
          CycleButton<Boolean> button = builder.create(0, 0, 0, 20, name, (btn, value) -> {
             this.value = value;

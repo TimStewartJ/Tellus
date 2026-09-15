@@ -187,9 +187,9 @@ public final class TellusVegetationGenerator {
       BlockPos ground,
       TellusVegetationPlanner.Placement placement
    ) {
-      BlockState leaves = TellusProceduralTreeGenerator.leavesState(
+      BlockState leaves = persistentLeaves(TellusProceduralTreeGenerator.leavesState(
          placement.treeProfile(), placement.seed()
-      );
+      ));
       BlockState log = TellusProceduralTreeGenerator.logState(
          placement.treeProfile(), placement.seed()
       );
@@ -524,6 +524,13 @@ public final class TellusVegetationGenerator {
          || surface.is(Blocks.MOSS_BLOCK)
          || surface.is(Blocks.MUD)
          || surface.is(Blocks.PACKED_MUD);
+   }
+
+   // Shrub foliage lobes are not all connected to wood, so vanilla leaf decay would strip them.
+   private static BlockState persistentLeaves(BlockState leaves) {
+      return leaves.hasProperty(BlockStateProperties.PERSISTENT)
+         ? leaves.setValue(BlockStateProperties.PERSISTENT, Boolean.TRUE)
+         : leaves;
    }
 
    private static BlockState axis(BlockState state, Direction.Axis axis) {

@@ -405,6 +405,8 @@ class TellusProceduralTreeGeneratorTest {
    @Test
    void registryFreePreviewPlanningUsesTheFullDetailBiomeProfiles() {
       assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla biome registry keys");
+      SharedConstants.tryDetectVersion();
+      Bootstrap.bootStrap();
       assertEquals(
          TellusProceduralTreeGenerator.Profile.TROPICAL,
          TellusProceduralTreeGenerator.plan(

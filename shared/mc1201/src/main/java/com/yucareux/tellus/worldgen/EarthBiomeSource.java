@@ -124,6 +124,7 @@ public final class EarthBiomeSource extends BiomeSource {
    private final Holder<Biome> deepDark;
    
    private final WaterSurfaceResolver waterResolver;
+   private final AntarcticSnowPolicy antarcticSnowPolicy;
    private final RandomBiomeMixer randomBiomeMixer;
    private final ThreadLocal<Integer> structureBiomeQueryDepth = new ThreadLocal<>();
    private final ThreadLocal<EarthBiomeSource.RegionalReliefCache> badlandsReliefCache = ThreadLocal.withInitial(
@@ -158,6 +159,7 @@ public final class EarthBiomeSource extends BiomeSource {
       this.dripstoneCaves = this.resolveOptionalBiome(Biomes.DRIPSTONE_CAVES);
       this.deepDark = this.resolveOptionalBiome(Biomes.DEEP_DARK);
       this.waterResolver = TellusWorldgenSources.waterResolver(this.settings);
+      this.antarcticSnowPolicy = AntarcticSnowPolicy.forProjection(this.projection);
       this.randomBiomeMixer = new RandomBiomeMixer(this.biomeLookup, this.settings);
       this.possibleBiomes = this.buildPossibleBiomes();
    }
@@ -402,17 +404,20 @@ public final class EarthBiomeSource extends BiomeSource {
    private Holder<Biome> resolveFastSpawnSurfaceBiome(int blockX, int blockZ) {
       int rawCoverClass = LAND_COVER_SOURCE.sampleCoverClass(blockX, blockZ, this.projection);
       int visualCoverClass = this.sampleVisualCoverClass(blockX, blockZ, rawCoverClass);
+      boolean antarcticSnow = this.antarcticSnowPolicy.shouldUseSnowFallback(rawCoverClass, blockZ);
       if (rawCoverClass == ESA_MANGROVES) {
          return this.mangrove;
       } else if (this.settings.enableWater()) {
          WaterSurfaceResolver.WaterInfo waterInfo = this.waterResolver.resolveFastWaterInfo(blockX, blockZ, rawCoverClass);
          return waterInfo.isWater()
             ? (waterInfo.isOcean() ? this.ocean : this.river)
-            : (visualCoverClass == ESA_SNOW_ICE ? this.frozenPeaks : this.plains);
+            : (antarcticSnow || visualCoverClass == ESA_SNOW_ICE ? this.frozenPeaks : this.plains);
       } else if (rawCoverClass == ESA_WATER) {
          return this.ocean;
       } else {
-         return visualCoverClass == ESA_SNOW_ICE ? this.frozenPeaks : (rawCoverClass == ESA_NO_DATA ? this.ocean : this.plains);
+         return antarcticSnow || visualCoverClass == ESA_SNOW_ICE
+            ? this.frozenPeaks
+            : (rawCoverClass == ESA_NO_DATA ? this.ocean : this.plains);
       }
    }
 
@@ -437,7 +442,7 @@ public final class EarthBiomeSource extends BiomeSource {
             return waterColumn.isOcean() ? this.resolveOceanBiome(blockX, blockZ, waterColumn) : this.applyRandomRiverBiome(blockX, blockZ);
          }
       }
-      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, visualCoverClass, precomputedKoppen);
+      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, rawCoverClass, visualCoverClass, precomputedKoppen);
    }
 
    private Holder<Biome> resolveSurfaceBiomeAtBlock(
@@ -469,7 +474,7 @@ public final class EarthBiomeSource extends BiomeSource {
          visualCoverClass = this.resolveDryOsmVisualCoverClass(blockX, blockZ, rawCoverClass, visualCoverClass);
       }
       return this.resolveSurfaceBiomeAfterWater(
-         blockX, blockZ, visualCoverClass, precomputedKoppen, precomputedRegionalReliefMeters
+         blockX, blockZ, rawCoverClass, visualCoverClass, precomputedKoppen, precomputedRegionalReliefMeters
       );
    }
 
@@ -533,14 +538,21 @@ public final class EarthBiomeSource extends BiomeSource {
       }
    }
 
-   private Holder<Biome> resolveSurfaceBiomeAfterWater(int blockX, int blockZ, int visualCoverClass, String precomputedKoppen) {
-      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, visualCoverClass, precomputedKoppen, null);
+   private Holder<Biome> resolveSurfaceBiomeAfterWater(
+      int blockX, int blockZ, int rawCoverClass, int visualCoverClass, String precomputedKoppen
+   ) {
+      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, rawCoverClass, visualCoverClass, precomputedKoppen, null);
    }
 
    private Holder<Biome> resolveSurfaceBiomeAfterWater(
-      int blockX, int blockZ, int visualCoverClass, String precomputedKoppen, Double precomputedRegionalReliefMeters
+      int blockX,
+      int blockZ,
+      int rawCoverClass,
+      int visualCoverClass,
+      String precomputedKoppen,
+      Double precomputedRegionalReliefMeters
    ) {
-      if (visualCoverClass == ESA_SNOW_ICE) {
+      if (this.antarcticSnowPolicy.shouldUseSnowFallback(rawCoverClass, blockZ) || visualCoverClass == ESA_SNOW_ICE) {
          return this.applyRandomLandBiome(this.frozenPeaks, blockX, blockZ, null);
       }
 

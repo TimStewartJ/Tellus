@@ -41,7 +41,6 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
  * therefore remain 1:1 even when the horizontal map scale changes.</p>
  */
 public final class TellusProceduralTreeGenerator {
-   private static final int PLACEMENT_FLAGS = 260;
    private static final int MIN_TREE_HEIGHT = 4;
    private static final int BUSH_HEIGHT = 3;
    private static final int BUSH_CROWN_RADIUS = 2;
@@ -327,13 +326,14 @@ public final class TellusProceduralTreeGenerator {
 
       Palette palette = palette(plan.profile(), seed);
       BlockState log = palette.log().defaultBlockState();
-      BlockState leaves = persistentLeaves(palette.leaves().defaultBlockState());
-      growTrunk(level, trunk, log);
-      growRoots(level, ground, plan, log, seed, rootBlocker);
+      BlockState leaves = palette.leaves().defaultBlockState();
+      TreePlacement tree = new TreePlacement(level);
+      growTrunk(tree, trunk, log);
+      growRoots(tree, ground, plan, log, seed, rootBlocker);
       if (plan.height() <= 6) {
          int crownY = ground.getY() + plan.height() - 1;
          placeLeafBlob(
-            level,
+            tree,
             leanedX(ground, plan, plan.height() - 1),
             crownY,
             leanedZ(ground, plan, plan.height() - 1),
@@ -343,24 +343,26 @@ public final class TellusProceduralTreeGenerator {
             seed,
             0.82
          );
+         tree.finish();
          return true;
       }
       switch (plan.profile()) {
-         case COAST_REDWOOD -> growCoastRedwood(level, ground, plan, log, leaves, seed);
-         case CONIFER, TALL_CONIFER -> growConifer(level, ground, plan, log, leaves, seed);
-         case PINE -> growPine(level, ground, plan, log, leaves, seed);
-         case SAVANNA -> growSavanna(level, ground, plan, log, leaves, seed);
-         case TROPICAL -> growBroadleaf(level, ground, plan, log, leaves, seed, 0.78);
-         case DRY_BROADLEAF -> growBroadleaf(level, ground, plan, log, leaves, seed, 0.92);
-         case BIRCH -> growBroadleaf(level, ground, plan, log, leaves, seed, 0.58);
-         case SUBARCTIC_BIRCH -> growSubarcticBirch(level, ground, plan, log, leaves, seed);
-         case EUCALYPTUS -> growEucalyptus(level, ground, plan, log, leaves, seed);
-         case MALLEE -> growMallee(level, ground, plan, log, leaves, seed);
-         case MEDITERRANEAN -> growMediterranean(level, ground, plan, log, leaves, seed);
-         case CHERRY -> growBroadleaf(level, ground, plan, log, leaves, seed, 0.84);
-         case DARK_BROADLEAF, PALE_BROADLEAF -> growBroadleaf(level, ground, plan, log, leaves, seed, 1.0);
-         case SWAMP, TEMPERATE_BROADLEAF -> growBroadleaf(level, ground, plan, log, leaves, seed, 0.90);
+         case COAST_REDWOOD -> growCoastRedwood(tree, ground, plan, log, leaves, seed);
+         case CONIFER, TALL_CONIFER -> growConifer(tree, ground, plan, log, leaves, seed);
+         case PINE -> growPine(tree, ground, plan, log, leaves, seed);
+         case SAVANNA -> growSavanna(tree, ground, plan, log, leaves, seed);
+         case TROPICAL -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.78);
+         case DRY_BROADLEAF -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.92);
+         case BIRCH -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.58);
+         case SUBARCTIC_BIRCH -> growSubarcticBirch(tree, ground, plan, log, leaves, seed);
+         case EUCALYPTUS -> growEucalyptus(tree, ground, plan, log, leaves, seed);
+         case MALLEE -> growMallee(tree, ground, plan, log, leaves, seed);
+         case MEDITERRANEAN -> growMediterranean(tree, ground, plan, log, leaves, seed);
+         case CHERRY -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.84);
+         case DARK_BROADLEAF, PALE_BROADLEAF -> growBroadleaf(tree, ground, plan, log, leaves, seed, 1.0);
+         case SWAMP, TEMPERATE_BROADLEAF -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.90);
       }
+      tree.finish();
       return true;
    }
 
@@ -378,23 +380,25 @@ public final class TellusProceduralTreeGenerator {
 
       Palette palette = palette(plan.profile(), seed);
       BlockState log = axis(palette.log().defaultBlockState(), Direction.Axis.Y);
-      BlockState leaves = persistentLeaves(palette.leaves().defaultBlockState());
-      if (!level.setBlock(logPosition, log, PLACEMENT_FLAGS)) {
+      BlockState leaves = palette.leaves().defaultBlockState();
+      TreePlacement tree = new TreePlacement(level);
+      if (!tree.setLog(logPosition, log)) {
          return false;
       }
 
       long foliageSeed = seed ^ BUSH_FOLIAGE_SALT;
       placeNoisyLeafDisc(
-         level, logPosition.getX(), logPosition.getY(), logPosition.getZ(), 1, leaves, foliageSeed, 1.0
+         tree, logPosition.getX(), logPosition.getY(), logPosition.getZ(), 1, leaves, foliageSeed, 1.0
       );
       placeNoisyLeafDisc(
-         level, logPosition.getX(), logPosition.getY() + 1, logPosition.getZ(), 2, leaves, foliageSeed, 0.82
+         tree, logPosition.getX(), logPosition.getY() + 1, logPosition.getZ(), 2, leaves, foliageSeed, 0.82
       );
       placeNoisyLeafDisc(
-         level, logPosition.getX(), logPosition.getY() + 2, logPosition.getZ(), 1, leaves, foliageSeed, 0.78
+         tree, logPosition.getX(), logPosition.getY() + 2, logPosition.getZ(), 1, leaves, foliageSeed, 0.78
       );
-      setLeaves(level, logPosition.above(), leaves);
-      setLeaves(level, logPosition.above(2), leaves);
+      tree.setLeaves(logPosition.above(), leaves);
+      tree.setLeaves(logPosition.above(2), leaves);
+      tree.finish();
       return true;
    }
 
@@ -652,19 +656,17 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growTrunk(
-      WorldGenLevel level, TrunkPlacementPlan plan, BlockState log
+      TreePlacement tree, TrunkPlacementPlan plan, BlockState log
    ) {
       BlockState verticalLog = axis(log, Direction.Axis.Y);
       for (TrunkBlock support : plan.supports()) {
-         setRootLog(
-            level,
+         tree.setRootLog(
             new BlockPos(support.worldX(), support.worldY(), support.worldZ()),
             verticalLog
          );
       }
       for (TrunkBlock block : plan.trunk()) {
-         setLog(
-            level,
+         tree.setLog(
             new BlockPos(block.worldX(), block.worldY(), block.worldZ()),
             verticalLog
          );
@@ -672,7 +674,7 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growRoots(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -707,7 +709,7 @@ public final class TellusProceduralTreeGenerator {
             endZ,
             baseHeight,
             (worldX, worldZ) -> findRootSurfaceY(
-               level, worldX, worldZ, ground.getY()
+               tree.level(), worldX, worldZ, ground.getY()
             ),
             rootBlocker
          );
@@ -719,8 +721,7 @@ public final class TellusProceduralTreeGenerator {
          for (RootColumn column : columns) {
             boolean supported = true;
             for (int y = column.surfaceY() + 1; y < column.topY(); y++) {
-               if (!setRootLog(
-                  level,
+               if (!tree.setRootLog(
                   new BlockPos(column.worldX(), y, column.worldZ()),
                   verticalLog
                )) {
@@ -729,8 +730,7 @@ public final class TellusProceduralTreeGenerator {
                }
             }
             if (supported) {
-               setRootLog(
-                  level,
+               tree.setRootLog(
                   new BlockPos(column.worldX(), column.topY(), column.worldZ()),
                   horizontalLog
                );
@@ -856,7 +856,7 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growCoastRedwood(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -877,7 +877,7 @@ public final class TellusProceduralTreeGenerator {
          int centerZ = leanedZ(ground, plan, relativeY);
          int coreRadius = Math.max(1, Math.min(3, (reach + 1) / 2));
          placeLeafBlob(
-            level,
+            tree,
             centerX,
             ground.getY() + relativeY,
             centerZ,
@@ -904,7 +904,7 @@ public final class TellusProceduralTreeGenerator {
             int logEndRelativeY = relativeY
                + (int)Math.round((foliageRelativeY - relativeY) * woodyLength / (double)Math.max(1, length));
             placeLogLine(
-               level,
+               tree,
                centerX,
                ground.getY() + relativeY,
                centerZ,
@@ -917,7 +917,7 @@ public final class TellusProceduralTreeGenerator {
 
             int branchLeafRadius = Math.max(1, Math.min(3, 1 + reach / 3));
             placeLeafBlob(
-               level,
+               tree,
                foliageX,
                ground.getY() + foliageRelativeY,
                foliageZ,
@@ -932,7 +932,7 @@ public final class TellusProceduralTreeGenerator {
                int middleZ = (centerZ + foliageZ) >> 1;
                int middleY = ground.getY() + ((relativeY + foliageRelativeY) >> 1);
                placeLeafBlob(
-                  level,
+                  tree,
                   middleX,
                   middleY,
                   middleZ,
@@ -952,7 +952,7 @@ public final class TellusProceduralTreeGenerator {
       int leaderX = leanedX(ground, plan, plan.height() - 2);
       int leaderZ = leanedZ(ground, plan, plan.height() - 2);
       placeLeafBlob(
-         level,
+         tree,
          leaderX,
          ground.getY() + plan.height() - 2,
          leaderZ,
@@ -971,7 +971,7 @@ public final class TellusProceduralTreeGenerator {
          int forkX = leanedX(ground, plan, plan.height() - 4) + (int)Math.round(Math.cos(angle) * 2.0);
          int forkZ = leanedZ(ground, plan, plan.height() - 4) + (int)Math.round(Math.sin(angle) * 2.0);
          placeLogLine(
-            level,
+            tree,
             forkStartX,
             ground.getY() + forkStartY,
             forkStartZ,
@@ -982,7 +982,7 @@ public final class TellusProceduralTreeGenerator {
             0
          );
          placeLeafBlob(
-            level,
+            tree,
             forkX,
             ground.getY() + plan.height() - 3,
             forkZ,
@@ -996,7 +996,7 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growConifer(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1013,7 +1013,7 @@ public final class TellusProceduralTreeGenerator {
          double envelope = Math.pow(Math.max(0.0, 1.0 - vertical), 0.64);
          int radius = Math.max(1, (int)Math.round(plan.crownRadius() * envelope));
          if (((y - crownBase) & 1) == 0 || y >= plan.height() - 2) {
-            placeNoisyLeafDisc(level, centerX, ground.getY() + y, centerZ, radius, leaves, seed + y, 0.72);
+            placeNoisyLeafDisc(tree, centerX, ground.getY() + y, centerZ, radius, leaves, seed + y, 0.72);
          }
          if ((y - crownBase) % 3 == 0 && radius >= 2) {
             int branches = radius >= 6 ? 6 : 4;
@@ -1023,7 +1023,7 @@ public final class TellusProceduralTreeGenerator {
                int endX = centerX + (int)Math.round(Math.cos(angle) * length);
                int endZ = centerZ + (int)Math.round(Math.sin(angle) * length);
                placeLogLine(
-                  level,
+                  tree,
                   centerX,
                   ground.getY() + y,
                   centerZ,
@@ -1037,7 +1037,7 @@ public final class TellusProceduralTreeGenerator {
          }
       }
       placeLeafBlob(
-         level,
+         tree,
          leanedX(ground, plan, plan.height() - 1),
          ground.getY() + plan.height() - 1,
          leanedZ(ground, plan, plan.height() - 1),
@@ -1055,7 +1055,7 @@ public final class TellusProceduralTreeGenerator {
     * silhouette used for boreal and cool-temperate conifers.
     */
    private static void growPine(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1086,7 +1086,7 @@ public final class TellusProceduralTreeGenerator {
                plan.height() - 1
             );
             placeLogLine(
-               level,
+               tree,
                centerX,
                ground.getY() + relativeY,
                centerZ,
@@ -1097,7 +1097,7 @@ public final class TellusProceduralTreeGenerator {
                0
             );
             placeLeafBlob(
-               level,
+               tree,
                endX,
                ground.getY() + endRelativeY + 1,
                endZ,
@@ -1109,7 +1109,7 @@ public final class TellusProceduralTreeGenerator {
             );
          }
          placeLeafBlob(
-            level,
+            tree,
             centerX,
             ground.getY() + relativeY + 1,
             centerZ,
@@ -1123,7 +1123,7 @@ public final class TellusProceduralTreeGenerator {
       }
 
       placeLeafBlob(
-         level,
+         tree,
          leanedX(ground, plan, plan.height() - 1),
          ground.getY() + plan.height() - 1,
          leanedZ(ground, plan, plan.height() - 1),
@@ -1140,7 +1140,7 @@ public final class TellusProceduralTreeGenerator {
     * branches, and separated foliage clusters rather than an oak-like sphere.
     */
    private static void growEucalyptus(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1165,7 +1165,7 @@ public final class TellusProceduralTreeGenerator {
          int endX = startX + (int)Math.round(Math.cos(angle) * length);
          int endZ = startZ + (int)Math.round(Math.sin(angle) * length);
          placeLogLine(
-            level,
+            tree,
             startX,
             ground.getY() + startRelativeY,
             startZ,
@@ -1177,7 +1177,7 @@ public final class TellusProceduralTreeGenerator {
          );
          int clusterRadius = Math.max(2, Math.min(4, plan.crownRadius() / 2 + random.nextInt(2)));
          placeLeafBlob(
-            level,
+            tree,
             endX,
             ground.getY() + endRelativeY,
             endZ,
@@ -1189,7 +1189,7 @@ public final class TellusProceduralTreeGenerator {
          );
          if (length >= 4) {
             placeLeafBlob(
-               level,
+               tree,
                (startX + endX) >> 1,
                ground.getY() + ((startRelativeY + endRelativeY) >> 1),
                (startZ + endZ) >> 1,
@@ -1203,7 +1203,7 @@ public final class TellusProceduralTreeGenerator {
       }
 
       placeLeafBlob(
-         level,
+         tree,
          leanedX(ground, plan, plan.height() - 2),
          ground.getY() + plan.height() - 2,
          leanedZ(ground, plan, plan.height() - 2),
@@ -1217,7 +1217,7 @@ public final class TellusProceduralTreeGenerator {
 
    /** Multi-stemmed mallee growth form, branching from a woody basal hub. */
    private static void growMallee(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1238,7 +1238,7 @@ public final class TellusProceduralTreeGenerator {
          int endX = ground.getX() + (int)Math.round(Math.cos(angle) * outward);
          int endZ = ground.getZ() + (int)Math.round(Math.sin(angle) * outward);
          placeLogLine(
-            level,
+            tree,
             ground.getX(),
             ground.getY() + 1,
             ground.getZ(),
@@ -1250,7 +1250,7 @@ public final class TellusProceduralTreeGenerator {
          );
          int clusterRadius = Math.max(2, plan.crownRadius() / 2 + 1);
          placeLeafBlob(
-            level,
+            tree,
             endX,
             ground.getY() + endRelativeY,
             endZ,
@@ -1265,7 +1265,7 @@ public final class TellusProceduralTreeGenerator {
 
    /** Wind-shaped, often multi-stemmed birch at the boreal/tundra tree line. */
    private static void growSubarcticBirch(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1281,7 +1281,7 @@ public final class TellusProceduralTreeGenerator {
          int endX = ground.getX() + (int)Math.round(Math.cos(angle) * outward);
          int endZ = ground.getZ() + (int)Math.round(Math.sin(angle) * outward);
          placeLogLine(
-            level,
+            tree,
             ground.getX(),
             ground.getY() + 1,
             ground.getZ(),
@@ -1292,7 +1292,7 @@ public final class TellusProceduralTreeGenerator {
             0
          );
          placeLeafBlob(
-            level,
+            tree,
             endX,
             ground.getY() + endRelativeY - 1,
             endZ,
@@ -1307,7 +1307,7 @@ public final class TellusProceduralTreeGenerator {
 
    /** Open sclerophyll/stone-pine-like woodland crown with broad separated lobes. */
    private static void growMediterranean(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1330,7 +1330,7 @@ public final class TellusProceduralTreeGenerator {
             plan.height() - 1
          );
          placeLogLine(
-            level,
+            tree,
             centerX,
             ground.getY() + branchY,
             centerZ,
@@ -1341,7 +1341,7 @@ public final class TellusProceduralTreeGenerator {
             0
          );
          placeLeafBlob(
-            level,
+            tree,
             endX,
             ground.getY() + endRelativeY,
             endZ,
@@ -1353,7 +1353,7 @@ public final class TellusProceduralTreeGenerator {
          );
       }
       placeLeafBlob(
-         level,
+         tree,
          leanedX(ground, plan, plan.height() - 2),
          ground.getY() + plan.height() - 2,
          leanedZ(ground, plan, plan.height() - 2),
@@ -1366,7 +1366,7 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growSavanna(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1387,9 +1387,9 @@ public final class TellusProceduralTreeGenerator {
          int endZ = centerZ + (int)Math.round(Math.sin(angle) * length);
          int endY = ground.getY() + crownRelativeY + random.nextInt(3) - 1;
          endY = Math.min(ground.getY() + plan.height() - crownVerticalRadius, endY);
-         placeLogLine(level, centerX, ground.getY() + branchY, centerZ, endX, endY, endZ, log, plan.trunkRadius() >= 3 ? 1 : 0);
+         placeLogLine(tree, centerX, ground.getY() + branchY, centerZ, endX, endY, endZ, log, plan.trunkRadius() >= 3 ? 1 : 0);
          placeLeafBlob(
-            level,
+            tree,
             endX,
             endY + 1,
             endZ,
@@ -1402,7 +1402,7 @@ public final class TellusProceduralTreeGenerator {
       }
       int crownCenterY = ground.getY() + plan.height() - crownVerticalRadius;
       placeLeafBlob(
-         level,
+         tree,
          leanedX(ground, plan, plan.crownBase()),
          crownCenterY,
          leanedZ(ground, plan, plan.crownBase()),
@@ -1415,7 +1415,7 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void growBroadleaf(
-      WorldGenLevel level,
+      TreePlacement tree,
       BlockPos ground,
       TreePlan plan,
       BlockState log,
@@ -1436,7 +1436,7 @@ public final class TellusProceduralTreeGenerator {
          int endZ = startZ + (int)Math.round(Math.sin(angle) * length);
          int endY = ground.getY()
             + Math.min(plan.height() - 1, startY + 1 + random.nextInt(Math.max(2, plan.crownHeight() / 3 + 1)));
-         placeLogLine(level, startX, ground.getY() + startY, startZ, endX, endY, endZ, log, plan.trunkRadius() >= 3 ? 1 : 0);
+         placeLogLine(tree, startX, ground.getY() + startY, startZ, endX, endY, endZ, log, plan.trunkRadius() >= 3 ? 1 : 0);
       }
 
       int centerRelativeY = plan.crownBase() + Math.max(1, plan.crownHeight() / 2);
@@ -1448,7 +1448,7 @@ public final class TellusProceduralTreeGenerator {
          default -> 0.76;
       };
       placeLeafBlob(
-         level,
+         tree,
          leanedX(ground, plan, centerRelativeY),
          ground.getY() + centerRelativeY,
          leanedZ(ground, plan, centerRelativeY),
@@ -1473,7 +1473,7 @@ public final class TellusProceduralTreeGenerator {
             ground.getY() + plan.height() - lobeVerticalRadius
          );
          placeLeafBlob(
-            level,
+            tree,
             lobeX,
             lobeY,
             lobeZ,
@@ -1487,7 +1487,7 @@ public final class TellusProceduralTreeGenerator {
    }
 
    private static void placeLogLine(
-      WorldGenLevel level,
+      TreePlacement tree,
       int startX,
       int startY,
       int startZ,
@@ -1510,12 +1510,12 @@ public final class TellusProceduralTreeGenerator {
          int x = (int)Math.round(startX + dx * progress);
          int y = (int)Math.round(startY + dy * progress);
          int z = (int)Math.round(startZ + dz * progress);
-         placeLogDisc(level, x, y, z, radius, oriented);
+         placeLogDisc(tree, x, y, z, radius, oriented);
       }
    }
 
    private static void placeLogDisc(
-      WorldGenLevel level, int centerX, int y, int centerZ, int radius, BlockState log
+      TreePlacement tree, int centerX, int y, int centerZ, int radius, BlockState log
    ) {
       BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
       for (int dz = -radius; dz <= radius; dz++) {
@@ -1524,13 +1524,13 @@ public final class TellusProceduralTreeGenerator {
                continue;
             }
             cursor.set(centerX + dx, y, centerZ + dz);
-            setLog(level, cursor, log);
+            tree.setLog(cursor, log);
          }
       }
    }
 
    private static void placeNoisyLeafDisc(
-      WorldGenLevel level,
+      TreePlacement tree,
       int centerX,
       int y,
       int centerZ,
@@ -1548,13 +1548,13 @@ public final class TellusProceduralTreeGenerator {
                continue;
             }
             cursor.set(centerX + dx, y, centerZ + dz);
-            setLeaves(level, cursor, leaves);
+            tree.setLeaves(cursor, leaves);
          }
       }
    }
 
    private static void placeLeafBlob(
-      WorldGenLevel level,
+      TreePlacement tree,
       int centerX,
       int centerY,
       int centerZ,
@@ -1580,47 +1580,9 @@ public final class TellusProceduralTreeGenerator {
                   continue;
                }
                cursor.set(centerX + dx, centerY + dy, centerZ + dz);
-               setLeaves(level, cursor, leaves);
+               tree.setLeaves(cursor, leaves);
             }
          }
-      }
-   }
-
-   private static void setLog(WorldGenLevel level, BlockPos position, BlockState log) {
-      if (!MinecraftVersionCompat.isInsideBuildHeight(level, position) || !level.ensureCanWrite(position)) {
-         return;
-      }
-      BlockState current = level.getBlockState(position);
-      if (canReplaceTrunk(current)) {
-         level.setBlock(position, log, PLACEMENT_FLAGS);
-      }
-   }
-
-   private static boolean setRootLog(
-      WorldGenLevel level, BlockPos position, BlockState log
-   ) {
-      if (!MinecraftVersionCompat.isInsideBuildHeight(level, position)
-         || !level.ensureCanWrite(position)
-         || !level.getFluidState(position).isEmpty()) {
-         return false;
-      }
-      BlockState current = level.getBlockState(position);
-      if (current.is(BlockTags.LOGS)) {
-         return true;
-      }
-      if (!canReplaceTrunk(current) && !current.canBeReplaced()) {
-         return false;
-      }
-      return level.setBlock(position, log, PLACEMENT_FLAGS);
-   }
-
-   private static void setLeaves(WorldGenLevel level, BlockPos position, BlockState leaves) {
-      if (!MinecraftVersionCompat.isInsideBuildHeight(level, position) || !level.ensureCanWrite(position)) {
-         return;
-      }
-      BlockState current = level.getBlockState(position);
-      if (current.isAir() || current.is(BlockTags.LEAVES) || current.is(BlockTags.REPLACEABLE_BY_TREES)) {
-         level.setBlock(position, leaves, PLACEMENT_FLAGS);
       }
    }
 
@@ -1699,12 +1661,6 @@ public final class TellusProceduralTreeGenerator {
       static TrunkPlacementPlan invalid() {
          return new TrunkPlacementPlan(false, List.of(), List.of());
       }
-   }
-
-   private static BlockState persistentLeaves(BlockState leaves) {
-      return leaves.hasProperty(BlockStateProperties.PERSISTENT)
-         ? leaves.setValue(BlockStateProperties.PERSISTENT, Boolean.TRUE)
-         : leaves;
    }
 
    private static BlockState axis(BlockState log, Direction.Axis axis) {
@@ -1918,7 +1874,7 @@ public final class TellusProceduralTreeGenerator {
 
    /** Material state shared with coarse LOD columns for a planned tree. */
    public static BlockState leavesState(Profile profile, long seed) {
-      return persistentLeaves(palette(profile, seed).leaves().defaultBlockState());
+      return palette(profile, seed).leaves().defaultBlockState();
    }
 
    private static Palette palette(Profile profile, long seed) {

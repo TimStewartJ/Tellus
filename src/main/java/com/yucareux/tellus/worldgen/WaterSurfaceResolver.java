@@ -1046,7 +1046,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
             for (int dx = 0; dx < gridSize; dx++) {
                int index = row + dx;
                if (oceanRow[dx]) {
-                  // Overture ocean/sea polygons are definitive and override any
+                  // Overture ocean-surface polygons are definitive and override any
                   // overlapping inland-water geometry or DEM elevation.
                   baseWaterMask[index] = true;
                   noDataMask[index] = true;
