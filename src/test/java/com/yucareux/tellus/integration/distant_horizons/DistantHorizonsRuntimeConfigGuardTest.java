@@ -16,6 +16,7 @@ class DistantHorizonsRuntimeConfigGuardTest {
    private static final String WORLD_GEN_OWNER = "com.seibel.distanthorizons.core.config.Config$Common$WorldGenerator";
    private static final String PAUSE_SPEED_FIELD = "pauseGenerationAboveCameraSpeed";
    private static final String KEEP_LOWER_DETAIL_FIELD = "keepLowerDetailLodsUntilChildrenHaveData";
+   private static final String GENERATOR_PLAN_FIELD = "generatorPlan";
 
    @Test
    void disablesForkPauseSpeedAndRestoresIt() {
@@ -202,6 +203,44 @@ class DistantHorizonsRuntimeConfigGuardTest {
       assertEquals(0, upsampling.writeCount);
       guard.release("minecraft:overworld");
       assertEquals(Boolean.TRUE, upsampling.value);
+   }
+
+   @Test
+   void chunkPassPlansBecomeSurfaceOnlyAndAreRestored() {
+      for (FakeGeneratorPlan plan : new FakeGeneratorPlan[]{FakeGeneratorPlan.SURFACE_THEN_CHUNKS, FakeGeneratorPlan.CHUNKS_ONLY}) {
+         FakeResolver resolver = new FakeResolver();
+         FakeConfigEntry generatorPlan = resolver.add(WORLD_GEN_OWNER, GENERATOR_PLAN_FIELD, plan);
+         DistantHorizonsRuntimeConfigGuard guard = new DistantHorizonsRuntimeConfigGuard(false, resolver);
+
+         assertTrue(guard.acquire("minecraft:overworld"));
+         assertEquals(FakeGeneratorPlan.SURFACE_ONLY, generatorPlan.value);
+         assertEquals(1, generatorPlan.writeCount);
+
+         guard.release("minecraft:overworld");
+         assertEquals(plan, generatorPlan.value);
+         assertEquals(2, generatorPlan.writeCount);
+      }
+   }
+
+   @Test
+   void surfaceOnlyAndDisabledPlansAreLeftUntouched() {
+      for (FakeGeneratorPlan plan : new FakeGeneratorPlan[]{FakeGeneratorPlan.SURFACE_ONLY, FakeGeneratorPlan.DISABLED}) {
+         FakeResolver resolver = new FakeResolver();
+         FakeConfigEntry generatorPlan = resolver.add(WORLD_GEN_OWNER, GENERATOR_PLAN_FIELD, plan);
+         DistantHorizonsRuntimeConfigGuard guard = new DistantHorizonsRuntimeConfigGuard(false, resolver);
+
+         assertTrue(guard.acquire("minecraft:overworld"));
+         guard.release("minecraft:overworld");
+         assertEquals(plan, generatorPlan.value);
+         assertEquals(0, generatorPlan.writeCount);
+      }
+   }
+
+   private enum FakeGeneratorPlan {
+      SURFACE_THEN_CHUNKS,
+      SURFACE_ONLY,
+      CHUNKS_ONLY,
+      DISABLED
    }
 
    private static final class FakeResolver implements DistantHorizonsRuntimeConfigGuard.ConfigEntryResolver {

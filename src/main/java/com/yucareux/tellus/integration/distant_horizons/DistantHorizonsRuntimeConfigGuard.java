@@ -64,6 +64,18 @@ final class DistantHorizonsRuntimeConfigGuard {
          ? "Raised the Distant Horizons world-gen pause speed to " + WORLD_GEN_PAUSE_SPEED + " blocks/s so Tellus LODs keep generating while flying"
          : "Disabled the Distant Horizons world-gen camera-speed pause so Tellus LODs keep generating while flying"
    );
+   /**
+    * Distant Horizons 3.2.1 plans with a chunk pass require block-detail LOD columns to reach the FEATURES generation
+    * step, but Tellus records its LOD columns as SURFACE. Those plans regenerate finished Tellus sections and schedule
+    * a chunk regeneration pass over the whole render distance, so Tellus runs DH with the surface-only plan. A disabled
+    * plan is left alone.
+    */
+   private static final ConfigKey SURFACE_ONLY_GENERATOR_PLAN = new ConfigKey(
+      "com.seibel.distanthorizons.core.config.Config$Common$WorldGenerator",
+      "generatorPlan",
+      new EnumConstantOverride("SURFACE_ONLY", Set.of("SURFACE_THEN_CHUNKS", "CHUNKS_ONLY")),
+      "Set the Distant Horizons generator plan to SURFACE_ONLY so finished Tellus LODs are not regenerated"
+   );
    private final Object lock = new Object();
    private final boolean forceNSizedGeneration;
    private final ConfigEntryResolver configEntryResolver;
@@ -71,6 +83,7 @@ final class DistantHorizonsRuntimeConfigGuard {
    private RuntimeOverride nSizedGenerationOverride;
    private RuntimeOverride upsampleOverride;
    private RuntimeOverride worldGenPauseSpeedOverride;
+   private RuntimeOverride generatorPlanOverride;
 
    static DistantHorizonsRuntimeConfigGuard reflective(boolean forceNSizedGeneration) {
       return new DistantHorizonsRuntimeConfigGuard(forceNSizedGeneration, ReflectiveConfigEntryResolver.INSTANCE);
@@ -103,6 +116,7 @@ final class DistantHorizonsRuntimeConfigGuard {
             if (WORLD_GEN_PAUSE_SPEED >= 0.0) {
                this.worldGenPauseSpeedOverride = this.tryApply(WORLD_GEN_PAUSE_SPEED_KEY);
             }
+            this.generatorPlanOverride = this.tryApply(SURFACE_ONLY_GENERATOR_PLAN);
          }
          return true;
       }
@@ -135,6 +149,8 @@ final class DistantHorizonsRuntimeConfigGuard {
             return;
          }
 
+         this.restore(this.generatorPlanOverride);
+         this.generatorPlanOverride = null;
          this.restore(this.worldGenPauseSpeedOverride);
          this.worldGenPauseSpeedOverride = null;
          this.restore(this.upsampleOverride);
@@ -154,17 +170,18 @@ final class DistantHorizonsRuntimeConfigGuard {
       try {
          ConfigEntryHandle configEntry = this.configEntryResolver.resolve(configKey.ownerClassName(), configKey.fieldName());
          Object previousValue = configEntry.get();
-         if (Objects.equals(previousValue, configKey.overrideValue())) {
+         Object overrideValue = configKey.overrideFor(previousValue);
+         if (overrideValue == null || Objects.equals(previousValue, overrideValue)) {
             return null;
          }
-         if (previousValue != null && previousValue.getClass() != configKey.overrideValue().getClass()) {
+         if (previousValue != null && previousValue.getClass() != overrideValue.getClass()) {
             throw new IllegalStateException(
                "Distant Horizons config entry holds " + previousValue.getClass().getSimpleName()
-                  + ", expected " + configKey.overrideValue().getClass().getSimpleName()
+                  + ", expected " + overrideValue.getClass().getSimpleName()
             );
          }
 
-         configEntry.setWithoutSaving(configKey.overrideValue());
+         configEntry.setWithoutSaving(overrideValue);
          LOGGER.info("{} (runtime only; config unchanged)", configKey.appliedLogMessage());
          return new RuntimeOverride(configKey, configEntry, previousValue);
       } catch (ClassNotFoundException | NoSuchFieldException | NoSuchMethodException error) {
@@ -193,12 +210,10 @@ final class DistantHorizonsRuntimeConfigGuard {
 
       try {
          runtimeOverride.configEntry().setWithoutSaving(runtimeOverride.previousValue());
-         if (!Objects.equals(runtimeOverride.previousValue(), runtimeOverride.configKey().overrideValue())) {
-            LOGGER.info(
-               "Restored Distant Horizons {} after unloading the last Tellus direct LOD generator",
-               runtimeOverride.configKey().fieldName()
-            );
-         }
+         LOGGER.info(
+            "Restored Distant Horizons {} after unloading the last Tellus direct LOD generator",
+            runtimeOverride.configKey().fieldName()
+         );
       } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
          LOGGER.warn(
             "Failed to restore Distant Horizons config entry {}.{}",
@@ -259,6 +274,33 @@ final class DistantHorizonsRuntimeConfigGuard {
    }
 
    private record ConfigKey(String ownerClassName, String fieldName, Object overrideValue, String appliedLogMessage) {
+      /** @return the value to apply over {@code currentValue}, or null to leave the entry alone */
+      Object overrideFor(Object currentValue) {
+         return this.overrideValue instanceof EnumConstantOverride enumOverride
+            ? enumOverride.resolve(currentValue)
+            : this.overrideValue;
+      }
+   }
+
+   /** Resolves a constant of the entry's own enum class, which Tellus does not compile against. */
+   private record EnumConstantOverride(String constantName, Set<String> replacedConstantNames) {
+      Object resolve(Object currentValue) {
+         if (!(currentValue instanceof Enum<?> current)) {
+            throw new IllegalStateException(
+               "Distant Horizons config entry holds " + (currentValue == null ? "null" : currentValue.getClass().getSimpleName())
+                  + ", expected an enum"
+            );
+         }
+         if (!this.replacedConstantNames.contains(current.name())) {
+            return null;
+         }
+         return enumConstant(current.getDeclaringClass(), this.constantName);
+      }
+
+      @SuppressWarnings({"unchecked", "rawtypes"})
+      private static Object enumConstant(Class<?> enumClass, String name) {
+         return Enum.valueOf((Class) enumClass, name);
+      }
    }
 
    private record RuntimeOverride(ConfigKey configKey, ConfigEntryHandle configEntry, Object previousValue) {
