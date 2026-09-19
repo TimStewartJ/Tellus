@@ -2,6 +2,7 @@ package com.yucareux.tellus.worldgen.caves;
 
 import com.yucareux.tellus.compat.MinecraftVersionCompat;
 import com.yucareux.tellus.worldgen.UndergroundStructureExclusion;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.IntBinaryOperator;
@@ -10,7 +11,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
-import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.biome.BiomeManager;
@@ -185,9 +185,8 @@ public final class TellusVanillaCarverRunner {
          );
          int protectedBlocksOnTop = chunk.isUpgrading() ? 0 : 7;
          int maskMaxY = carvingContext.getMinGenY() + carvingContext.getGenDepth() - 1 - protectedBlocksOnTop;
-         CarvingMask carvingMask = new CarvingMask(carvingContext.getMinGenY() + 1, maskMaxY);
          TellusCarverOutput carvingOutput = new TellusCarverOutput(
-            carvingMask,
+            new CarvingMask(carvingContext.getMinGenY() + 1, maskMaxY),
             getCarvingGuard(
                chunk,
                cavesReachSurface,
@@ -223,10 +222,10 @@ public final class TellusVanillaCarverRunner {
             }
          }
 
-         if (!carvingMask.isEmpty()) {
+         if (!carvingOutput.mask.isEmpty()) {
             applyCarvingMask(
                chunk,
-               carvingMask,
+               carvingOutput,
                safeRandomState,
                safeNoiseSettings.materialRule().value(),
                carvingContext,
@@ -234,9 +233,6 @@ public final class TellusVanillaCarverRunner {
                carvedBiomeManager,
                aquifer
             );
-            if (carvingOutput.lavaMask != null) {
-               applyLavaMask(chunk, carvingOutput.lavaMask, aquifer);
-            }
          }
       }
    }
@@ -272,9 +268,14 @@ public final class TellusVanillaCarverRunner {
       }
    }
 
+   /**
+    * Minecraft 26.3's NoiseBasedChunkGenerator.applyCarvingMask with the two things 26.2 carvers did themselves:
+    * they only replaced the carver replaceables, and they filled cells at or below their lava level with lava
+    * before consulting the aquifer.
+    */
    private static void applyCarvingMask(
       ChunkAccess chunk,
-      CarvingMask carvingMask,
+      TellusCarverOutput carved,
       RandomState randomState,
       MaterialRule materialRule,
       WorldGenerationContext context,
@@ -285,7 +286,8 @@ public final class TellusVanillaCarverRunner {
       ChunkPos chunkPos = chunk.getPos();
       BlockPos.MutableBlockPos blockPos = new BlockPos.MutableBlockPos();
       BlockPos.MutableBlockPos helperPos = new BlockPos.MutableBlockPos();
-      carvingMask.visit((x, z, bottomY, topY) -> {
+      BlockState lava = Blocks.LAVA.defaultBlockState();
+      carved.mask.visit((x, z, bottomY, topY) -> {
          boolean hasGrass = false;
          int worldX = chunkPos.getBlockX(x);
          int worldZ = chunkPos.getBlockZ(z);
@@ -293,15 +295,15 @@ public final class TellusVanillaCarverRunner {
          for (int worldY = topY; worldY >= bottomY; worldY--) {
             blockPos.set(worldX, worldY, worldZ);
             BlockState current = chunk.getBlockState(blockPos);
-            if (current.is(BlockTags.UNCARVABLE)) {
-               continue;
-            }
-
             if (current.is(Blocks.GRASS_BLOCK) || current.is(Blocks.MYCELIUM)) {
                hasGrass = true;
             }
 
-            BlockState state = aquifer.computeSubstance(worldX, worldY, worldZ, 0.0);
+            if (!MinecraftVersionCompat.isOverworldCarverReplaceable(current)) {
+               continue;
+            }
+
+            BlockState state = carved.isLava(x, worldY, z) ? lava : aquifer.computeSubstance(worldX, worldY, worldZ, 0.0);
             if (state == null) {
                continue;
             }
@@ -337,29 +339,6 @@ public final class TellusVanillaCarverRunner {
       });
    }
 
-   /**
-    * Minecraft 26.2 carvers filled everything at or below their configured lava level with lava before
-    * consulting the aquifer. Minecraft 26.3 carvers only report what they carve, so that fill happens here.
-    */
-   private static void applyLavaMask(ChunkAccess chunk, CarvingMask lavaMask, Aquifer aquifer) {
-      ChunkPos chunkPos = chunk.getPos();
-      BlockPos.MutableBlockPos blockPos = new BlockPos.MutableBlockPos();
-      BlockState lava = Blocks.LAVA.defaultBlockState();
-      lavaMask.visit((x, z, bottomY, topY) -> {
-         for (int worldY = topY; worldY >= bottomY; worldY--) {
-            blockPos.set(chunkPos.getBlockX(x), worldY, chunkPos.getBlockZ(z));
-            if (chunk.getBlockState(blockPos).is(BlockTags.UNCARVABLE)) {
-               continue;
-            }
-
-            chunk.setBlockState(blockPos, lava);
-            if (aquifer.shouldScheduleFluidUpdate()) {
-               MinecraftVersionCompat.markPosForPostProcessing(chunk, blockPos);
-            }
-         }
-      });
-   }
-
    
    private static FluidPicker createFluidPicker(int lavaLevel, int seaLevel) {
       FluidStatus lava = new FluidStatus(lavaLevel, Blocks.LAVA.defaultBlockState());
@@ -377,15 +356,24 @@ public final class TellusVanillaCarverRunner {
       boolean blocks(int x, int y, int z);
    }
 
+   /**
+    * Collects what the carvers cut out of the chunk. As in Minecraft 26.2, the first carver to reach a cell
+    * decides it, so that carver's lava level says whether the cell fills with lava. CarvingMask cannot be read
+    * back, hence the second bit set for the claimed cells.
+    */
    private static final class TellusCarverOutput implements CarverOutput {
       private final CarvingMask mask;
       private final CarvingGuard guard;
-      private CarvingMask lavaMask;
+      private final int height;
+      private final BitSet claimed;
+      private final BitSet lava = new BitSet();
       private int lavaLevelY;
 
       private TellusCarverOutput(CarvingMask mask, CarvingGuard guard) {
          this.mask = mask;
          this.guard = guard;
+         this.height = mask.maxY() - mask.minY() + 1;
+         this.claimed = new BitSet(256 * this.height);
       }
 
       @Override
@@ -394,13 +382,24 @@ public final class TellusVanillaCarverRunner {
             return;
          }
 
+         int index = this.index(x, y, z);
+         if (this.claimed.get(index)) {
+            return;
+         }
+
+         this.claimed.set(index);
          this.mask.carve(x, y, z);
          if (y <= this.lavaLevelY) {
-            if (this.lavaMask == null) {
-               this.lavaMask = new CarvingMask(this.mask.minY(), this.mask.maxY());
-            }
-            this.lavaMask.carve(x, y, z);
+            this.lava.set(index);
          }
+      }
+
+      private boolean isLava(int x, int y, int z) {
+         return this.lava.get(this.index(x, y, z));
+      }
+
+      private int index(int x, int y, int z) {
+         return y - this.mask.minY() + (z << 4 | x) * this.height;
       }
 
       @Override

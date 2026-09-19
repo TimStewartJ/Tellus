@@ -10,6 +10,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Util;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
@@ -20,6 +21,7 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.levelgen.Beardifier;
@@ -60,6 +62,37 @@ public final class MinecraftVersionCompat {
          base.timelines(),
          base.defaultClock()
       );
+   }
+
+   /**
+    * The blocks of Minecraft 26.2's overworld carver replaceables tag. Minecraft 26.3 removed the tag and lets
+    * carvers replace everything but bedrock, which is safe there because carving follows the noise fill at once.
+    * Tellus carves into terrain that already holds structure clearances, so it keeps the list.
+    */
+   public static boolean isOverworldCarverReplaceable(BlockState state) {
+      if (state.isAir()) {
+         return false;
+      }
+
+      return state.is(BlockTags.BASE_STONE_OVERWORLD)
+         || state.is(BlockTags.SUBSTRATE_OVERWORLD)
+         || state.is(BlockTags.SAND)
+         || state.is(BlockTags.TERRACOTTA)
+         || state.is(BlockTags.IRON_ORES)
+         || state.is(BlockTags.COPPER_ORES)
+         || state.is(BlockTags.SNOW)
+         || state.is(Blocks.WATER)
+         || state.is(Blocks.GRAVEL)
+         || state.is(Blocks.SUSPICIOUS_GRAVEL)
+         || state.is(Blocks.SANDSTONE)
+         || state.is(Blocks.RED_SANDSTONE)
+         || state.is(Blocks.CALCITE)
+         || state.is(Blocks.PACKED_ICE)
+         || state.is(Blocks.RAW_IRON_BLOCK)
+         || state.is(Blocks.RAW_COPPER_BLOCK)
+         || state.is(Blocks.CINNABAR)
+         || state.is(Blocks.SULFUR)
+         || state.is(Blocks.POTENT_SULFUR);
    }
 
    public static Beardifier emptyBeardifier() {

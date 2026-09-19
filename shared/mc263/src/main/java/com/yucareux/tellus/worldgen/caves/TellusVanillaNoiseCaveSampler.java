@@ -1,6 +1,7 @@
 package com.yucareux.tellus.worldgen.caves;
 
 import com.google.common.base.Preconditions;
+import com.yucareux.tellus.compat.MinecraftVersionCompat;
 import com.yucareux.tellus.worldgen.GeologicalStonePlacementPolicy;
 import com.yucareux.tellus.worldgen.UndergroundSurfaceGrid;
 import com.yucareux.tellus.worldgen.UndergroundStructureExclusion;
@@ -27,6 +28,7 @@ import net.minecraft.world.level.levelgen.NoiseSettings;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.blending.Blender;
+import net.minecraft.world.level.levelgen.densityfunction.DensityFunction;
 import net.minecraft.world.level.levelgen.densityfunction.DensitySampler;
 import net.minecraft.world.level.levelgen.densityfunction.DensitySamplerSet;
 import net.minecraft.world.level.levelgen.densityfunction.DensityVolume;
@@ -78,11 +80,16 @@ public final class TellusVanillaNoiseCaveSampler {
 
    private final NoiseGeneratorSettings vanillaSettings;
    private final List<OreVeinRule> oreVeinRules = new ArrayList<>();
+   private final DensityFunction preliminarySurfaceLevel;
    private volatile SeededRandomState cachedRandomState;
 
    public TellusVanillaNoiseCaveSampler(NoiseGeneratorSettings vanillaSettings) {
       this.vanillaSettings = vanillaSettings;
       collectOreVeinRules(vanillaSettings.materialRule().value(), this.oreVeinRules);
+      // The router only exposes this level interpolated between chunk corners; the aquifer holds the raw function.
+      this.preliminarySurfaceLevel = vanillaSettings.aquifers()
+         .map(Aquifer.Config::surfaceLevel)
+         .orElse(vanillaSettings.noiseRouter().chunkSurfaceLevel());
    }
 
    /**
@@ -223,7 +230,7 @@ public final class TellusVanillaNoiseCaveSampler {
          BlockState current = chunk.getBlockState(cursor);
          boolean replaceable = noiseFeature
             ? current.is(BlockTags.BASE_STONE_OVERWORLD)
-            : !current.is(BlockTags.UNCARVABLE);
+            : MinecraftVersionCompat.isOverworldCarverReplaceable(current);
          if (!replaceable) {
             continue;
          }
@@ -265,7 +272,7 @@ public final class TellusVanillaNoiseCaveSampler {
          DensityVolume surfaceVolume = new DensityVolume(
             QUARTS_PER_CHUNK_SIDE, 1, QUARTS_PER_CHUNK_SIDE, chunkMinX, 0, chunkMinZ, QUART_SIDE, 1, QUART_SIDE
          );
-         try (ScopedDensityBuffer surfaceBuffer = samplers.get(this.vanillaSettings.noiseRouter().chunkSurfaceLevel()).sampleVolume(surfaceVolume)) {
+         try (ScopedDensityBuffer surfaceBuffer = samplers.get(this.preliminarySurfaceLevel).sampleVolume(surfaceVolume)) {
             for (int localZ = 0; localZ < CHUNK_SIDE; localZ++) {
                for (int localX = 0; localX < CHUNK_SIDE; localX++) {
                   float surfaceLevel = surfaceBuffer.get(surfaceVolume.indexUnchecked(localX / QUART_SIDE, 0, localZ / QUART_SIDE));
