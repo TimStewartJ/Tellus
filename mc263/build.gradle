@@ -1,0 +1,38 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version '1.16.1'
+	id 'maven-publish'
+}
+
+// Minecraft 26.3 builds on the 26.2 sources: it compiles the mc262 layer and project, and replaces the
+// files listed below with the versions in shared/mc263 and mc263/src.
+ext.tellus = [
+	minecraftVersion: '26.3',
+	loaderVersion: '0.19.5',
+	fabricVersion: '0.160.7+26.3',
+	fabricDependencyConfiguration: 'implementation',
+	javaVersion: 25,
+	distantHorizonsRuntimeProperty: 'mc263_distant_horizons_runtime_path',
+	sharedSourceLayers: ['post-1201', 'mc262', 'mc263', 'fabric'],
+	inheritedJavaProjects: ['mc262'],
+	overriddenSharedMainSources: [
+		'com/yucareux/tellus/compat/TellusMinecraftCompat.java',
+		'com/yucareux/tellus/world/realtime/RealtimeVersionCompat.java',
+	],
+	overriddenSharedClientSources: [
+		'com/yucareux/tellus/client/preview/TerrainPreviewPipelines.java',
+		'com/yucareux/tellus/compat/ClientMinecraftCompat.java',
+	],
+	overriddenInheritedMainSources: [
+		'com/yucareux/tellus/mixin/MinecraftServerInitialSpawnMixin.java',
+		'com/yucareux/tellus/mixin/SerializableChunkDataHighYMixin.java',
+	],
+	overriddenInheritedClientSources: [
+	],
+	overriddenInheritedMainResources: ['fabric.mod.json'],
+	mapboxVersion: '24.1.1',
+	protobufVersion: '4.28.2',
+	officialMappings: false,
+	testDistantHorizonsRuntime: true,
+]
+
+apply from: rootProject.file('gradle/tellus-fabric.gradle')

@@ -1,11 +1,5 @@
 package com.yucareux.tellus.client.preview;
 
-import com.mojang.blaze3d.PrimitiveTopology;
-import com.mojang.blaze3d.pipeline.BlendFunction;
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.DepthStencilState;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.platform.CompareOp;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.yucareux.tellus.Tellus;
@@ -177,29 +171,6 @@ public final class TerrainPreview implements AutoCloseable {
    private static final float PREVIEW_VERTICAL_CELL_RATIO = 0.7F;
    private static final int PREVIEW_SHADOW_STEPS = 28;
    private static final Vector3f LIGHT_DIR = new Vector3f(-0.48F, 0.78F, -0.4F).normalize();
-   private static final RenderPipeline PREVIEW_SUN_PIPELINE = RenderPipeline.builder()
-      .withLocation("pipeline/tellus_preview_sun")
-      .withBindGroupLayout(BindGroupLayouts.GLOBALS)
-      .withBindGroupLayout(BindGroupLayouts.MATRICES_PROJECTION)
-      .withVertexShader("core/position_tex_color")
-      .withFragmentShader("core/position_tex_color")
-      .withBindGroupLayout(BindGroupLayouts.SAMPLER0)
-      .withColorTargetState(new ColorTargetState(BlendFunction.OVERLAY))
-      .withVertexBinding(0, DefaultVertexFormat.POSITION_TEX_COLOR)
-      .withPrimitiveTopology(PrimitiveTopology.QUADS)
-      .build();
-   private static final RenderPipeline PREVIEW_PIPELINE = RenderPipeline.builder()
-      .withLocation("pipeline/tellus_terrain_preview")
-      .withBindGroupLayout(BindGroupLayouts.GLOBALS)
-      .withBindGroupLayout(BindGroupLayouts.MATRICES_PROJECTION)
-      .withVertexShader("core/gui")
-      .withFragmentShader("core/gui")
-      .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
-      .withVertexBinding(0, DefaultVertexFormat.POSITION_COLOR)
-      .withPrimitiveTopology(PrimitiveTopology.QUADS)
-      .withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true))
-      .withCull(false)
-      .build();
    private final TellusElevationSource elevationSource = new TellusElevationSource();
    private final TellusLandCoverSource landCoverSource = new TellusLandCoverSource();
    private final TellusCanopyHeightSource canopyHeightSource = TellusWorldgenSources.canopyHeight();
@@ -341,7 +312,7 @@ public final class TerrainPreview implements AutoCloseable {
       }
 
       graphics.enableScissor(x, y, x + width, y + height);
-      graphics.blit(PREVIEW_SUN_PIPELINE, PREVIEW_SUN_TEXTURE, sunX, sunY, 0.0F, 0.0F, sunSize, sunSize, 32, 32);
+      graphics.blit(TerrainPreviewPipelines.SUN, PREVIEW_SUN_TEXTURE, sunX, sunY, 0.0F, 0.0F, sunSize, sunSize, 32, 32);
       graphics.disableScissor();
    }
 
@@ -5949,7 +5920,7 @@ public final class TerrainPreview implements AutoCloseable {
          );
       }
    }
-   private static final class TerrainPreviewRenderState implements GuiElementRenderState {
+   private static final class TerrainPreviewRenderState implements TerrainPreviewPipelines.TerrainState {
       private final TerrainPreview.PreviewMesh mesh;
       private final TerrainPreviewWidget.RenderMode renderMode;
       private final boolean cloudsVisible;
@@ -5979,10 +5950,6 @@ public final class TerrainPreview implements AutoCloseable {
          this.rawBounds = Objects.requireNonNull(rawBounds, "rawBounds");
          this.bounds = Objects.requireNonNull(bounds, "bounds");
          this.scissor = this.bounds;
-      }
-
-      public RenderPipeline pipeline() {
-         return PREVIEW_PIPELINE;
       }
 
       public TextureSetup textureSetup() {

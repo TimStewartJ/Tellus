@@ -1,12 +1,12 @@
 package com.yucareux.tellus.client.screen;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.serialization.Lifecycle;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.cache.TellusCacheManager;
 import com.yucareux.tellus.client.preview.TerrainPreview;
 import com.yucareux.tellus.client.preview.TerrainPreviewWidget;
 import com.yucareux.tellus.client.widget.CustomizationList;
+import com.yucareux.tellus.compat.ClientMinecraftCompat;
 import com.yucareux.tellus.platform.TellusPlatform;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
@@ -59,7 +59,6 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.server.packs.repository.KnownPack;
 import net.minecraft.util.Mth;
-import net.minecraft.util.Util;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
@@ -1845,7 +1844,7 @@ public class EarthCustomizeScreen extends Screen {
    }
 
    private static boolean isShiftDown() {
-      return InputConstants.isKeyDown(Minecraft.getInstance().getWindow(), 340) || InputConstants.isKeyDown(Minecraft.getInstance().getWindow(), 344);
+      return Minecraft.getInstance().hasShiftDown();
    }
 
    private final class AutoAdjustDefinition implements EarthCustomizeScreen.SettingDefinition {
@@ -2648,7 +2647,7 @@ public class EarthCustomizeScreen extends Screen {
       public boolean mouseClicked( MouseButtonEvent event, boolean isPrimary) {
          String url = this.url;
          if (url != null && event.button() == 0 && this.isMouseOver(event.x(), event.y())) {
-            Util.getPlatform().openUri(url);
+            ClientMinecraftCompat.openUri(url);
             return true;
          } else {
             return false;

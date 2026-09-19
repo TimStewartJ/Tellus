@@ -14,7 +14,7 @@ def inheritedClientResourceProjects = (config.inheritedClientResourceProjects ?:
 def distantHorizonsApiVersion = '7.0.0'
 def twelveMonkeysImageioVersion = '3.13.1'
 def distantHorizonsRuntimePath = providers.gradleProperty(config.distantHorizonsRuntimeProperty).orNull
-def usesLocalRuntimeMods = minecraftVersion == '26.2'
+def usesLocalRuntimeMods = minecraftVersion.startsWith('26.')
 def overriddenSharedMainSources = (config.overriddenSharedMainSources ?: []) as Set
 def overriddenSharedClientSources = (config.overriddenSharedClientSources ?: []) as Set
 def inheritedMainJavaDirs = inheritedMainJavaProjects.collect { inheritedProject ->
