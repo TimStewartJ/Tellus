@@ -3,6 +3,7 @@ package com.yucareux.tellus.worldgen.road;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
+import com.yucareux.tellus.compat.TestRegistries;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
 import com.yucareux.tellus.world.data.osm.RoadMode;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
@@ -21,7 +22,6 @@ import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.data.registries.VanillaRegistries;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.biome.Biomes;
@@ -57,7 +57,7 @@ class StreetLightRenderingTest {
             values[i] = components[i].getName().equals("worldScale") ? 1.0 : components[i].getAccessor().invoke(EarthGeneratorSettings.DEFAULT);
          }
          var settings = EarthGeneratorSettings.class.getDeclaredConstructor(types).newInstance(values);
-         var biome = VanillaRegistries.createLookup().lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS);
+         var biome = TestRegistries.vanilla().lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS);
          try (var ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
             generator = new EarthChunkGenerator(new FixedBiomeSource(biome), settings);
          }

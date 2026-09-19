@@ -25,6 +25,9 @@ def inheritedClientJavaDirs = inheritedClientJavaProjects.collect { inheritedPro
 }
 def overriddenInheritedMainSources = (config.overriddenInheritedMainSources ?: []) as Set
 def overriddenInheritedClientSources = (config.overriddenInheritedClientSources ?: []) as Set
+def inheritedTestJavaProjects = (config.inheritedTestJavaProjects ?: []) as List
+def overriddenSharedTestSources = (config.overriddenSharedTestSources ?: []) as Set
+def overriddenInheritedTestSources = (config.overriddenInheritedTestSources ?: []) as Set
 def inheritedMainResourceDirs = inheritedMainResourceProjects.collect { inheritedProject ->
 	rootProject.file("${inheritedProject}/src/main/resources")
 }
@@ -41,6 +44,9 @@ def sharedMainResourceDirs = rootProject.ext.tellusSharedSourceDirs(sharedMainSo
 def sharedClientResourceDirs = rootProject.ext.tellusSharedSourceDirs(sharedClientSourceLayers, 'client/resources')
 def mainJavaDirs = sharedMainJavaDirs + inheritedMainJavaDirs + [project.file('src/main/java')]
 def clientJavaDirs = sharedClientJavaDirs + inheritedClientJavaDirs + [project.file('src/client/java')]
+def testJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + inheritedTestJavaProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/test/java")
+} + [project.file('src/test/java')]
 def mainResourceDirs = sharedMainResourceDirs + inheritedMainResourceDirs + [project.file('src/main/resources')]
 def clientResourceDirs = sharedClientResourceDirs + inheritedClientResourceDirs + [project.file('src/client/resources')]
 def isShadowed = { element, Set<String> overriddenPaths, List<File> sourceDirs ->
@@ -133,7 +139,12 @@ sourceSets {
 		}
 	}
 	test {
-		java.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + [project.file('src/test/java')])
+		java {
+			setSrcDirs(testJavaDirs)
+			exclude { element ->
+				isShadowed(element, overriddenSharedTestSources + overriddenInheritedTestSources, testJavaDirs)
+			}
+		}
 		resources.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/resources') + [project.file('src/test/resources')])
 	}
 }

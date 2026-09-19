@@ -15,8 +15,20 @@ ext.tellus = [
 	sharedSourceLayers: ['post-1201', 'mc262', 'mc263', 'fabric'],
 	inheritedJavaProjects: ['mc262'],
 	overriddenSharedMainSources: [
+		'com/yucareux/tellus/compat/MinecraftVersionCompat.java',
 		'com/yucareux/tellus/compat/TellusMinecraftCompat.java',
+		'com/yucareux/tellus/mixin/HeightRangePlacementMixin.java',
 		'com/yucareux/tellus/world/realtime/RealtimeVersionCompat.java',
+		'com/yucareux/tellus/worldgen/EarthBiomeSourceBase.java',
+		'com/yucareux/tellus/worldgen/EarthChunkGenerator.java',
+		'com/yucareux/tellus/worldgen/UndergroundFeatureClassifier.java',
+		'com/yucareux/tellus/worldgen/caves/TellusCaveCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusConfiguredCarvers.java',
+		'com/yucareux/tellus/worldgen/caves/TellusEmptyBeardifier.java',
+		'com/yucareux/tellus/worldgen/caves/TellusNoiseSettingsAdapter.java',
+		'com/yucareux/tellus/worldgen/caves/TellusRavineCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusVanillaCarverRunner.java',
+		'com/yucareux/tellus/worldgen/caves/TellusVanillaNoiseCaveSampler.java',
 	],
 	overriddenSharedClientSources: [
 		'com/yucareux/tellus/client/preview/TerrainPreviewPipelines.java',
@@ -29,6 +41,16 @@ ext.tellus = [
 	overriddenInheritedClientSources: [
 	],
 	overriddenInheritedMainResources: ['fabric.mod.json'],
+	inheritedTestJavaProjects: ['mc262'],
+	overriddenSharedTestSources: [
+		'com/yucareux/tellus/compat/TestRegistries.java',
+		'com/yucareux/tellus/worldgen/UndergroundFeatureClassifierTest.java',
+		'com/yucareux/tellus/worldgen/caves/TellusEmptyBeardifierTest.java',
+	],
+	overriddenInheritedTestSources: [
+		'com/yucareux/tellus/worldgen/CarverPreparationBenchmark.java',
+		'com/yucareux/tellus/worldgen/ChunkGenerationBenchmark.java',
+	],
 	mapboxVersion: '24.1.1',
 	protobufVersion: '4.28.2',
 	officialMappings: false,
