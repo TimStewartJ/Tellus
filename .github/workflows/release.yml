@@ -64,7 +64,7 @@ jobs:
           cp mc*/build/libs/Tellus-*-"$VERSION".jar dist/
           cd dist
           sha256sum *.jar | tee SHA256SUMS.txt
-          test "$(ls *.jar | wc -l)" -eq 8 || { echo "::error::expected 8 jars"; exit 1; }
+          test "$(ls *.jar | wc -l)" -eq 10 || { echo "::error::expected 10 jars"; exit 1; }
 
       - name: Write release notes
         run: |
@@ -86,6 +86,7 @@ jobs:
             echo "| 1.21.1 | Fabric, NeoForge | 21 |"
             echo "| 1.21.11 | Fabric, NeoForge | 21 |"
             echo "| 26.2 | Fabric, NeoForge | 25 |"
+            echo "| 26.3 | Fabric, NeoForge | 25 |"
             echo
             echo '```'
             cat dist/SHA256SUMS.txt
