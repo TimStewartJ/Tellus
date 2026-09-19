@@ -36,6 +36,7 @@ def overriddenInheritedMainResources = (config.overriddenInheritedMainResources 
 def overriddenInheritedClientResources = (config.overriddenInheritedClientResources ?: []) as Set
 def overriddenSharedMainResources = (config.overriddenSharedMainResources ?: []) as Set
 def overriddenSharedClientResources = (config.overriddenSharedClientResources ?: []) as Set
+def overriddenSharedTestSources = (config.overriddenSharedTestSources ?: []) as Set
 def sharedMainJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedMainSourceLayers, 'main/java')
 def sharedClientJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedClientSourceLayers, 'client/java')
 def sharedMainResourceDirs = rootProject.ext.tellusSharedSourceDirs(sharedMainSourceLayers, 'main/resources')
@@ -44,6 +45,7 @@ def mainJavaDirs = (sharedMainJavaDirs + sharedClientJavaDirs + inheritedMainJav
 	+ [project.file('src/main/java'), project.file('src/client/java')])
 def mainResourceDirs = (sharedMainResourceDirs + sharedClientResourceDirs + inheritedMainResourceDirs + inheritedClientResourceDirs
 	+ [project.file('src/main/resources'), project.file('src/client/resources')])
+def testJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + [project.file('src/test/java')]
 def isShadowed = { element, Set<String> overriddenPaths, List<File> sourceDirs ->
 	def relativePath = element.relativePath.pathString
 	if (!overriddenPaths.contains(relativePath)) {
@@ -98,7 +100,12 @@ sourceSets {
 		}
 	}
 	test {
-		java.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + [project.file('src/test/java')])
+		java {
+			setSrcDirs(testJavaDirs)
+			exclude { element ->
+				isShadowed(element, overriddenSharedTestSources, testJavaDirs)
+			}
+		}
 		resources.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/resources') + [project.file('src/test/resources')])
 	}
 }

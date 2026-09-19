@@ -1,0 +1,49 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+	id 'net.neoforged.moddev' version '2.0.147'
+	id 'com.gradleup.shadow' version '9.0.0'
+}
+
+// Minecraft 26.3 builds on the 26.2 sources: it compiles the mc262 layer and the mc262-neoforge project, and
+// replaces the files listed below with the versions in shared/mc263 and mc263-neoforge/src.
+ext.tellus = [
+	minecraftVersion: '26.3',
+	neoForgeVersion: '26.3.0.6-beta',
+	javaVersion: 25,
+	distantHorizonsRuntimeProperty: 'mc263_distant_horizons_runtime_path',
+	sharedSourceLayers: ['post-1201', 'mc262', 'mc263', 'forge-family', 'neoforge'],
+	inheritedJavaProjects: ['mc262-neoforge'],
+	overriddenSharedMainSources: [
+		'com/yucareux/tellus/compat/MinecraftVersionCompat.java',
+		'com/yucareux/tellus/compat/TellusMinecraftCompat.java',
+		'com/yucareux/tellus/mixin/HeightRangePlacementMixin.java',
+		'com/yucareux/tellus/world/realtime/RealtimeVersionCompat.java',
+		'com/yucareux/tellus/worldgen/EarthBiomeSourceBase.java',
+		'com/yucareux/tellus/worldgen/EarthChunkGenerator.java',
+		'com/yucareux/tellus/worldgen/UndergroundFeatureClassifier.java',
+		'com/yucareux/tellus/worldgen/caves/TellusCaveCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusConfiguredCarvers.java',
+		'com/yucareux/tellus/worldgen/caves/TellusEmptyBeardifier.java',
+		'com/yucareux/tellus/worldgen/caves/TellusNoiseSettingsAdapter.java',
+		'com/yucareux/tellus/worldgen/caves/TellusRavineCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusVanillaCarverRunner.java',
+		'com/yucareux/tellus/worldgen/caves/TellusVanillaNoiseCaveSampler.java',
+	],
+	overriddenSharedClientSources: [
+		'com/yucareux/tellus/client/preview/TerrainPreviewPipelines.java',
+		'com/yucareux/tellus/compat/ClientMinecraftCompat.java',
+	],
+	overriddenInheritedMainSources: [
+		'com/yucareux/tellus/mixin/MinecraftServerInitialSpawnMixin.java',
+	],
+	overriddenInheritedClientSources: [
+	],
+	overriddenSharedTestSources: [
+		'com/yucareux/tellus/compat/TestRegistries.java',
+		'com/yucareux/tellus/worldgen/UndergroundFeatureClassifierTest.java',
+		'com/yucareux/tellus/worldgen/caves/TellusEmptyBeardifierTest.java',
+	],
+]
+
+apply from: rootProject.file('gradle/tellus-neoforge.gradle')
