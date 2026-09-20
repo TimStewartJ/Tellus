@@ -2,6 +2,7 @@ package com.yucareux.tellus.api;
 
 import com.yucareux.tellus.api.detail.ChunkDetailContributor;
 import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
+import com.yucareux.tellus.world.data.osm.OsmWaterKind;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.TellusResolveSource;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
@@ -9,6 +10,7 @@ import com.yucareux.tellus.world.realtime.TemperatureGrid;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.TellusWorldgenSources;
+import com.yucareux.tellus.worldgen.WatercourseLocator;
 import com.yucareux.tellus.worldgen.WorldProjection;
 import java.util.Objects;
 import java.util.Optional;
@@ -27,7 +29,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
  */
 public final class TellusApi {
    /** Incremented whenever a method here changes signature or semantics. */
-   public static final int API_VERSION = 6;
+   public static final int API_VERSION = 7;
 
    private TellusApi() {
    }
@@ -97,6 +99,28 @@ public final class TellusApi {
    /** Terrain slope in degrees from already cached elevation tiles only, or {@code NaN} when not cached yet. */
    public static double slopeDegreesLocalOnly(double blockX, double blockZ, WorldProjection projection) {
       return TellusWorldgenSources.elevation().sampleTerrainSlopeDegreesLocalOnly(blockX, blockZ, projection);
+   }
+
+   /**
+    * Mapped local flow direction for a nearby OSM watercourse, using only water tiles already in memory.
+    * Returns empty when OSM water is not loaded for the area, when the nearest mapped feature is not a
+    * flowing centreline, or when the column is more than half the mapped channel width plus three blocks
+    * from that centreline.
+    */
+   public static Optional<WaterFlow> waterFlowLocalOnly(EarthChunkGenerator generator, int blockX, int blockZ) {
+      Objects.requireNonNull(generator, "generator");
+      int radius = OsmWaterKind.MAX_CENTERLINE_WIDTH_BLOCKS / 2 + 3;
+      WatercourseLocator.Result result = WatercourseLocator.nearestLocalOnly(
+         TellusWorldgenSources.osmWater(), generator.settings().projection(), blockX, blockZ, radius
+      );
+      if (result == null || !result.kind().flowing()) {
+         return Optional.empty();
+      }
+      double allowedDistance = result.widthBlocks() / 2.0 + 3.0;
+      if (result.distanceBlocks() > allowedDistance) {
+         return Optional.empty();
+      }
+      return Optional.of(new WaterFlow(result.kind(), result.headingX(), result.headingZ(), result.distanceBlocks(), result.widthBlocks()));
    }
 
    /** ESA WorldCover class code (10 tree cover .. 100 moss/lichen, 0 no data) at a block column. */

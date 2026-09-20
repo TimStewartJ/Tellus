@@ -135,6 +135,10 @@ barriers stop individual procedural root rays instead of rejecting nearby trees.
 explicit anchor keepouts; missing cache-only elevation now rejects the tile for a silent paced retry
 instead of publishing a synthetic sea-level surface.
 
+API v7 adds read-only companion access to named Overture land/water point features via
+`TellusWorldgenSources.osmPlaces()` and a local-only `TellusApi.waterFlowLocalOnly(...)` probe for mapped
+flow direction of already-cached watercourse centrelines.
+
 <details>
   <summary>Settings</summary>
 

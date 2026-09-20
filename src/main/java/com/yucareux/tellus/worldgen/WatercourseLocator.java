@@ -82,8 +82,26 @@ public final class WatercourseLocator {
       TellusOsmWaterSource.WaterQueryResult query = source.waterForAreaWithStatus(
          blockX - radius, blockZ - radius, blockX + radius, blockZ + radius, projection, 0, OsmQueryMode.BLOCKING
       );
+      return nearest(query.features(), projection, blockX, blockZ, radius);
+   }
+
+   /**
+    * The nearest mapped centreline using only water tiles already in memory, or {@code null}. It never
+    * asks the OSM source to read from disk or the network.
+    */
+   public static Result nearestLocalOnly(
+      TellusOsmWaterSource source, WorldProjection projection, int blockX, int blockZ, int radiusBlocks
+   ) {
+      int radius = Math.max(1, radiusBlocks);
+      TellusOsmWaterSource.WaterQueryResult query = source.waterForAreaLocalOnly(
+         blockX - radius, blockZ - radius, blockX + radius, blockZ + radius, projection, 0
+      );
+      return query.complete() ? nearest(query.features(), projection, blockX, blockZ, radius) : null;
+   }
+
+   static Result nearest(List<OsmWaterFeature> features, WorldProjection projection, int blockX, int blockZ, int radius) {
       Result best = null;
-      for (OsmWaterFeature feature : query.features()) {
+      for (OsmWaterFeature feature : features) {
          if (!feature.lineGeometry() || feature.oceanHint() || feature.crossesWorldSeam(projection)) {
             continue;
          }

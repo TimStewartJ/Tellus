@@ -14,6 +14,7 @@ import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.world.data.ocean.OisstOceanClimateSource;
 import com.yucareux.tellus.world.data.osm.TellusOsmBuildingSource;
 import com.yucareux.tellus.world.data.osm.TellusOsmInfrastructureSource;
+import com.yucareux.tellus.world.data.osm.TellusOsmPlaceSource;
 import com.yucareux.tellus.world.data.osm.TellusOsmRoadSource;
 import com.yucareux.tellus.world.data.osm.TellusOsmSandSource;
 import com.yucareux.tellus.world.data.osm.TellusOsmWaterSource;
@@ -50,6 +51,7 @@ public final class TellusWorldgenSources {
    private static final TellusOsmBuildingSource OSM_BUILDINGS = new TellusOsmBuildingSource();
    private static final TellusOsmWaterSource OSM_WATER = new TellusOsmWaterSource();
    private static final TellusOsmSandSource OSM_SAND = new TellusOsmSandSource();
+   private static final TellusOsmPlaceSource OSM_PLACES = new TellusOsmPlaceSource();
    private static final boolean PREFETCH_ENABLED = Boolean.parseBoolean(System.getProperty("tellus.prefetch.enabled", "true"));
    private static final int LAND_COVER_PREFETCH_RADIUS = intProperty("tellus.prefetch.landcover.radius", 1);
    private static final int CANOPY_HEIGHT_PREFETCH_RADIUS = intProperty("tellus.prefetch.canopyHeight.radius", 1);
@@ -132,6 +134,10 @@ public final class TellusWorldgenSources {
 
    public static TellusOsmSandSource osmSand() {
       return OSM_SAND;
+   }
+
+   public static TellusOsmPlaceSource osmPlaces() {
+      return OSM_PLACES;
    }
 
    static WaterSurfaceResolver waterResolver(EarthGeneratorSettings settings) {

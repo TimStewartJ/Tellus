@@ -16,6 +16,7 @@ final class ParsedTileCodec {
    private static final int MAGIC_WATER = 1465349234;
    private static final int MAGIC_BUILDING = 1112428356;
    private static final int MAGIC_SAND = 1396787524;
+   private static final int MAGIC_PLACE = 1347179596;
    private static final int MAGIC_STREET_LIGHT = 1280461908;
    private static final int ROAD_VERSION = 7;
    // Version 3 retained physical label polygons without their source subtype.
@@ -23,6 +24,7 @@ final class ParsedTileCodec {
    private static final int WATER_VERSION = 4;
    private static final int BUILDING_VERSION = 4;
    private static final int SAND_VERSION = 1;
+   private static final int PLACE_VERSION = 1;
    private static final int STREET_LIGHT_VERSION = 2;
    private static final int MAX_FEATURES = 100000;
    private static final int MAX_POINTS_PER_FEATURE = 100000;
@@ -477,6 +479,65 @@ final class ParsedTileCodec {
                   output.writeDouble(feature.latAt(part, point));
                }
             }
+         }
+      }
+
+      TellusCacheFiles.moveIntoPlace(tempPath, path);
+   }
+
+   static OsmPlaceTile readPlaceTile(Path path) throws IOException {
+      validateFileSize(path);
+      try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
+         int magic = input.readInt();
+         if (magic != MAGIC_PLACE) {
+            throw new IOException("Invalid place tile magic");
+         }
+
+         int version = input.readInt();
+         if (version != PLACE_VERSION) {
+            throw new IOException("Unsupported place tile version " + version);
+         }
+
+         int featureCount = boundedCount(input.readInt(), MAX_FEATURES, "place feature");
+         List<OsmPlaceFeature> features = new ArrayList<>(featureCount);
+
+         for (int i = 0; i < featureCount; i++) {
+            String id = input.readUTF();
+            String name = input.readUTF();
+            String layer = input.readUTF();
+            String subtype = readOptionalUtf(input);
+            String placeClass = readOptionalUtf(input);
+            double latitude = input.readDouble();
+            double longitude = input.readDouble();
+            double elevationMeters = input.readDouble();
+            String wikidata = readOptionalUtf(input);
+            features.add(new OsmPlaceFeature(id, name, layer, subtype, placeClass, latitude, longitude, elevationMeters, wikidata));
+         }
+
+         return features.isEmpty() ? OsmPlaceTile.empty() : new OsmPlaceTile(features);
+      }
+   }
+
+   static void writePlaceTile(Path path, OsmPlaceTile tile) throws IOException {
+      createParentDirectories(path);
+      Path tempPath = TellusCacheFiles.createTempSibling(path);
+
+      try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(tempPath)))) {
+         output.writeInt(MAGIC_PLACE);
+         output.writeInt(PLACE_VERSION);
+         List<OsmPlaceFeature> features = tile.features();
+         output.writeInt(features.size());
+
+         for (OsmPlaceFeature feature : features) {
+            output.writeUTF(feature.id());
+            output.writeUTF(feature.name());
+            output.writeUTF(feature.layer());
+            writeOptionalUtf(output, feature.subtype());
+            writeOptionalUtf(output, feature.placeClass());
+            output.writeDouble(feature.latitude());
+            output.writeDouble(feature.longitude());
+            output.writeDouble(feature.elevationMeters());
+            writeOptionalUtf(output, feature.wikidata());
          }
       }
 

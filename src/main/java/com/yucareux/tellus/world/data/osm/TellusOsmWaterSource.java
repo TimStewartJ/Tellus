@@ -154,6 +154,43 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
       return this.waterForAreaWithStatus(minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, marginBlocks, OsmQueryMode.BLOCKING).features();
    }
 
+   public WaterQueryResult waterForAreaLocalOnly(
+      int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ, WorldProjection projection, int marginBlocks
+   ) {
+      if (!this.initialized || !this.available || projection.worldScale() <= 0.0) {
+         return new WaterQueryResult(List.of(), CoverageStatus.FAILED, 0);
+      }
+
+      TellusOsmWaterSource.GeoBounds bounds = geoBoundsForBlockArea(minBlockX, minBlockZ, maxBlockX, maxBlockZ, marginBlocks, projection);
+      if (bounds == null) {
+         return new WaterQueryResult(List.of(), CoverageStatus.COMPLETE, 0);
+      }
+
+      int zoom = selectQueryZoomForScale(projection.worldScale(), this.minZoom, this.maxZoom, MIN_TILE_WIDTH_BLOCKS);
+      List<TellusOsmWaterSource.TileKey> keys = tileKeysForBounds(bounds, zoom);
+      if (keys.isEmpty()) {
+         return new WaterQueryResult(List.of(), CoverageStatus.COMPLETE, zoom);
+      }
+
+      List<OsmWaterFeature> features = new ArrayList<>();
+      for (TellusOsmWaterSource.TileKey key : keys) {
+         OsmWaterTile tile = this.cache.getIfPresent(key);
+         if (tile == null) {
+            return new WaterQueryResult(List.of(), CoverageStatus.PENDING, zoom);
+         }
+         if (!tile.isEmpty()) {
+            if (bounds.wrapsLongitude()) {
+               features.addAll(tile.featuresInBounds(bounds.south(), bounds.west(), bounds.north(), 180.0));
+               features.addAll(tile.featuresInBounds(bounds.south(), -180.0, bounds.north(), bounds.east()));
+            } else {
+               features.addAll(tile.featuresInBounds(bounds.south(), bounds.west(), bounds.north(), bounds.east()));
+            }
+         }
+      }
+
+      return new WaterQueryResult(features, CoverageStatus.COMPLETE, zoom);
+   }
+
    public int downloadAreaTaskCount(int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ, WorldProjection projection, int marginBlocks) {
       return Math.max(1, this.downloadAreaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, marginBlocks).size());
    }

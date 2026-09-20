@@ -281,6 +281,7 @@ public final class OsmPerf {
       OSM_WATER("osmWater"),
       OSM_BUILDINGS("osmBuildings"),
       OSM_SAND("osmSand"),
+      OSM_PLACES("osmPlaces"),
       OSM_STREET_LIGHTS("osmStreetLights");
 
       private final String logId;
