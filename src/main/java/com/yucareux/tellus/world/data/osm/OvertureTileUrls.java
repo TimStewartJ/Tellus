@@ -21,7 +21,7 @@ import org.xml.sax.SAXException;
 public final class OvertureTileUrls {
    private static final String EXTRAS_BUCKET_URL = "https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com";
    private static final String RELEASE_PROPERTY = "tellus.overture.release";
-   private static final String FALLBACK_RELEASE = "2026-06-17.0";
+   private static final String FALLBACK_RELEASE = "2026-08-19.0";
    private static final int MAX_RELEASE_LISTING_BYTES = 4 * 1024 * 1024;
    private static final Pattern RELEASE_PREFIX_PATTERN = Pattern.compile("tiles/(\\d{4}-\\d{2}-\\d{2}\\.\\d+)/");
    private static final Pattern RELEASE_ID_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}\\.\\d+");
