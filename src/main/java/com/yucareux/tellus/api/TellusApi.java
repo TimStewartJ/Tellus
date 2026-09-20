@@ -2,7 +2,6 @@ package com.yucareux.tellus.api;
 
 import com.yucareux.tellus.api.detail.ChunkDetailContributor;
 import com.yucareux.tellus.api.detail.ChunkDetailContributorRegistry;
-import com.yucareux.tellus.world.data.osm.OsmWaterKind;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.TellusResolveSource;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
@@ -103,24 +102,54 @@ public final class TellusApi {
 
    /**
     * Mapped local flow direction for a nearby OSM watercourse, using only water tiles already in memory.
-    * Returns empty when OSM water is not loaded for the area, when the nearest mapped feature is not a
-    * flowing centreline, or when the column is more than half the mapped channel width plus three blocks
-    * from that centreline.
+    * Returns empty when OSM water is not loaded for the searched area or when the nearest mapped feature
+    * within the clamped search radius is not a flowing centreline.
     */
-   public static Optional<WaterFlow> waterFlowLocalOnly(EarthChunkGenerator generator, int blockX, int blockZ) {
+   public static Optional<WaterFlow> waterFlowLocalOnly(
+      EarthChunkGenerator generator, int blockX, int blockZ, int searchRadiusBlocks
+   ) {
       Objects.requireNonNull(generator, "generator");
-      int radius = OsmWaterKind.MAX_CENTERLINE_WIDTH_BLOCKS / 2 + 3;
+      WorldProjection projection = generator.settings().projection();
+      int radius = clampSearchRadius(searchRadiusBlocks);
       WatercourseLocator.Result result = WatercourseLocator.nearestLocalOnly(
-         TellusWorldgenSources.osmWater(), generator.settings().projection(), blockX, blockZ, radius
+         TellusWorldgenSources.osmWater(), projection, blockX, blockZ, radius
       );
       if (result == null || !result.kind().flowing()) {
          return Optional.empty();
       }
-      double allowedDistance = result.widthBlocks() / 2.0 + 3.0;
-      if (result.distanceBlocks() > allowedDistance) {
-         return Optional.empty();
+      double firstElevation = elevationMetersLocalOnly(result.partStartX(), result.partStartZ(), projection);
+      double lastElevation = elevationMetersLocalOnly(result.partEndX(), result.partEndZ(), projection);
+      FlowDirection direction = flowDirectionFromTerrain(firstElevation, lastElevation);
+      return Optional.of(
+         new WaterFlow(
+            result.kind(),
+            result.headingX() * direction.sign(),
+            result.headingZ() * direction.sign(),
+            result.distanceBlocks(),
+            result.widthBlocks(),
+            direction.terrainConfirmed()
+         )
+      );
+   }
+
+   private static int clampSearchRadius(int searchRadiusBlocks) {
+      return Math.max(1, Math.min(256, searchRadiusBlocks));
+   }
+
+   static FlowDirection flowDirectionFromTerrain(double firstElevationMeters, double lastElevationMeters) {
+      if (Double.isFinite(firstElevationMeters) && Double.isFinite(lastElevationMeters)) {
+         double delta = lastElevationMeters - firstElevationMeters;
+         if (delta > 1.0) {
+            return new FlowDirection(-1.0, true);
+         }
+         if (delta < -1.0) {
+            return new FlowDirection(1.0, true);
+         }
       }
-      return Optional.of(new WaterFlow(result.kind(), result.headingX(), result.headingZ(), result.distanceBlocks(), result.widthBlocks()));
+      return new FlowDirection(1.0, false);
+   }
+
+   record FlowDirection(double sign, boolean terrainConfirmed) {
    }
 
    /** ESA WorldCover class code (10 tree cover .. 100 moss/lichen, 0 no data) at a block column. */

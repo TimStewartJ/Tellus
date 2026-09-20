@@ -136,8 +136,8 @@ explicit anchor keepouts; missing cache-only elevation now rejects the tile for 
 instead of publishing a synthetic sea-level surface.
 
 API v7 adds read-only companion access to named Overture land/water point features via
-`TellusWorldgenSources.osmPlaces()` and a local-only `TellusApi.waterFlowLocalOnly(...)` probe for mapped
-flow direction of already-cached watercourse centrelines.
+`TellusWorldgenSources.osmPlaces()` and a local-only `TellusApi.waterFlowLocalOnly(...)` probe for
+terrain-confirmed flow direction of already-cached watercourse centrelines.
 
 <details>
   <summary>Settings</summary>

@@ -7,6 +7,7 @@ public record WaterFlow(
    double headingX,
    double headingZ,
    double distanceBlocks,
-   int widthBlocks
+   int widthBlocks,
+   boolean terrainConfirmed
 ) {
 }

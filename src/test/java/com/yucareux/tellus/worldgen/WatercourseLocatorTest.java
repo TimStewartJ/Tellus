@@ -23,6 +23,10 @@ class WatercourseLocatorTest {
       assertEquals(0.0, result.headingZ(), 1.0E-9);
       assertEquals(0.0, result.distanceBlocks(), 1.0E-9);
       assertEquals(3, result.widthBlocks());
+      assertEquals(0.0, result.partStartX(), 1.0E-9);
+      assertEquals(0.0, result.partStartZ(), 1.0E-9);
+      assertEquals(100.0, result.partEndX(), 1.0E-9);
+      assertEquals(0.0, result.partEndZ(), 1.0E-9);
    }
 
    @Test

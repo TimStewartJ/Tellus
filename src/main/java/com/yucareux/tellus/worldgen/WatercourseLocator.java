@@ -32,6 +32,10 @@ public final class WatercourseLocator {
     * @param headingX source-order unit direction at the nearest point, X component
     * @param headingZ source-order unit direction at the nearest point, Z component
     * @param lengthBlocks total length of the line part within the query
+    * @param partStartX block X of the line part's first source-order vertex
+    * @param partStartZ block Z of the line part's first source-order vertex
+    * @param partEndX block X of the line part's last source-order vertex
+    * @param partEndZ block Z of the line part's last source-order vertex
     * @param downstream block positions of subsequent source-order vertices; this is not a flow claim
     */
    public record Result(
@@ -44,6 +48,10 @@ public final class WatercourseLocator {
       double headingX,
       double headingZ,
       double lengthBlocks,
+      double partStartX,
+      double partStartZ,
+      double partEndX,
+      double partEndZ,
       List<int[]> downstream
    ) {
       public String describe() {
@@ -151,6 +159,10 @@ public final class WatercourseLocator {
                   headingX,
                   headingZ,
                   length,
+                  xs[0],
+                  zs[0],
+                  xs[points - 1],
+                  zs[points - 1],
                   List.copyOf(downstream)
                );
             }
