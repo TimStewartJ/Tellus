@@ -1,5 +1,6 @@
 package com.yucareux.tellus.client.screen;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.serialization.Lifecycle;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.cache.TellusCacheManager;
@@ -2646,7 +2647,7 @@ public class EarthCustomizeScreen extends Screen {
 
       public boolean mouseClicked( MouseButtonEvent event, boolean isPrimary) {
          String url = this.url;
-         if (url != null && event.button() == 0 && this.isMouseOver(event.x(), event.y())) {
+         if (url != null && event.button() == InputConstants.MOUSE_BUTTON_LEFT && this.isMouseOver(event.x(), event.y())) {
             ClientMinecraftCompat.openUri(url);
             return true;
          } else {
