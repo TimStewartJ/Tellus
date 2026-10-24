@@ -128,8 +128,10 @@ This section lets you toggle vanilla structures and world features on or off, su
 - **ESA WorldCover land cover**: Official 10 m categorical COG pixels and internal overview levels, fetched and cached by compressed byte range for biome and vegetation lookups.
 - **ETH canopy height**: On-demand 10 m canopy-height tiles used to keep procedural tree dimensions at a real-world 1:1 vertical scale.
 - **Koppen climate**: Cached climate raster used for biome climate classification.
-- **Mapterhorn terrain**: Cached elevation tiles used for terrain height sampling.
+- **Mapterhorn terrain**: Cached elevation and source-coverage tiles used for terrain height sampling.
 - **OpenWaters bathymetry**: Cached bathymetry tiles used for ocean and underwater terrain.
+- **NOAA OISST v2.1**: Cached sea-surface temperature and sea-ice blocks used for ocean climate.
+- **Preloaded terrain**: Terrain areas prepared with Preload Terrain. Deleting removes them; preload the area again to restore fast generation.
 - **Total**: Combined size of all Tellus caches (read-only).
 - **Delete cache / Delete all cache**: Removes cached data to free disk space; data will be re-downloaded or rebuilt as needed.
 </details>
