@@ -61,7 +61,7 @@ public final class ManagedTerrainAvailability {
 
    public static byte availability(String key, int minChunkX, int minChunkZ, int widthChunks) {
       Coverage coverage = COVERAGE.get(key);
-      if (coverage == null) {
+      if (coverage == null || coverage.ready.isEmpty()) {
          return WAIT;
       }
       int safeWidth = Math.max(1, widthChunks);
@@ -71,23 +71,45 @@ public final class ManagedTerrainAvailability {
       int maxChunkZ = (int)Math.min(Integer.MAX_VALUE, maxZLong);
       ManagedTerrainCell min = ManagedTerrainCell.containingChunk(minChunkX, minChunkZ);
       ManagedTerrainCell max = ManagedTerrainCell.containingChunk(maxChunkX, maxChunkZ);
-      int ready = 0;
-      int total = 0;
+      long total = ((long)max.x() - min.x() + 1L) * ((long)max.z() - min.z() + 1L);
+      boolean canSplit = safeWidth > coverage.progressiveBatchWidthChunks;
+      // Large, mostly undownloaded regions should cost at most the number of cached
+      // cells, not their entire area. Counts are only used to prove incompleteness;
+      // READY still requires checking every requested cell.
+      if (total > coverage.ready.size()) {
+         if (canSplit) {
+            for (ManagedTerrainCell cell : coverage.ready) {
+               if (cell.x() >= min.x() && cell.x() <= max.x() && cell.z() >= min.z() && cell.z() <= max.z()) {
+                  return SPLIT;
+               }
+            }
+         }
+         return WAIT;
+      }
+      boolean anyReady = false;
+      boolean anyMissing = false;
       for (int z = min.z(); z <= max.z(); z++) {
          for (int x = min.x(); x <= max.x(); x++) {
-            total++;
             if (coverage.ready.contains(new ManagedTerrainCell(x, z))) {
-               ready++;
+               anyReady = true;
+            } else {
+               anyMissing = true;
+               if (!canSplit) {
+                  return WAIT;
+               }
+            }
+            if (anyReady && anyMissing) {
+               return SPLIT;
             }
          }
       }
-      if (ready == total && total > 0) {
+      if (!anyMissing) {
          return READY;
       }
       // Splitting below the current adaptive download-batch size while that batch is still
       // arriving permanently expands DH's quadtree into thousands of fine requests.
       // Keep the request queued instead; it becomes ready as soon as the rest of its batch lands.
-      return ready > 0 && safeWidth > coverage.progressiveBatchWidthChunks ? SPLIT : WAIT;
+      return WAIT;
    }
 
    public static void clear(String key) {

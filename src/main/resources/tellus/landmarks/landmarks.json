@@ -1,0 +1,38 @@
+{
+  "landmarks": [
+    {
+      "id": "eiffel_tower",
+      "name": "Eiffel Tower",
+      "latitude": 48.858261,
+      "longitude": 2.294498,
+      "rotation_degrees": 45.8,
+      "mesh": "eiffel_tower.tlm",
+      "model_credit": "\"Eiffel Tower\" by Newcandle (https://www.thingiverse.com/thing:912478, via https://commons.wikimedia.org/wiki/File:EiffelTower_fixed.stl), CC BY-SA 3.0. Converted to a Tellus mesh and scaled to a 124.9 m base and 330 m height.",
+      "materials": [
+        {"below": 0.35, "block": "mud_bricks"},
+        {"below": 0.65, "block": "packed_mud"},
+        {"block": "dripstone_block"}
+      ],
+      "suppress_overture_buildings": ["930b868b-1163-4f10-b7ee-d3e3bf82bf7a"],
+      "suppress_margin_meters": 2.0,
+      "flatten_ground": true
+    },
+    {
+      "id": "golden_gate_bridge",
+      "name": "Golden Gate Bridge",
+      "latitude": 37.8200668,
+      "longitude": -122.4783550,
+      "rotation_degrees": 0,
+      "mesh": "golden_gate_bridge.tlm",
+      "conversion": "java tools/landmark-convert/LandmarkConvert.java Golden_Gate.skp golden_gate_bridge.tlm --exclude-material 'ggbground#3' --exclude-box 460,-1610,500,-1575 --lift 600=0,1005=19,1400=44.5 --piers 1120,1197,1253,1309 --block 'P1060909a#1=light_gray_concrete' --block 'P1060909a|Picturea1=gray_concrete' --block 'P1060905#([369]|1[0-9]|2[0-2])|P1060912#(1[6-9]|20)=bricks' --block 'ggbground.*=smooth_stone' --block 'P1060906#11|P1060915#.*|Material.*|_FireBrick_|png.*=red_concrete' --block 'P1060906#[0-9]+|P1060912#.*|P1060905#.*|littletower|IMG_6040c|\\(default\\)|jean blue=light_gray_concrete' --detail 'png4=0.2'",
+      "model_credit": "\"Golden Gate Bridge\" SketchUp model from the Google 3D Warehouse (Golden_Gate.skp, contributors Google / Google 3D Warehouse), used under the 3D Warehouse General Model License. Converted with tools/landmark-convert: placed from its own UTM georeference, the Marin side raised where its deck sank below the real road (up to 44.5 m at Vista Point) and its approach viaduct stood on four towers like the real one's, see-through textures cut to their opaque texels, materials mapped to blocks.",
+      "anchor": "sea_level",
+      "base_elevation_meters": -39.33,
+      "suppress_overture_buildings": ["ae5b43e7-c025-4bbe-994c-1f018f56e141", "d79d767d-007f-45d8-8918-2cfe17ebbf64"],
+      "suppress_area": "footprint",
+      "suppress_margin_meters": 3.0,
+      "replace_bridge_roads": true,
+      "flatten_ground": false
+    }
+  ]
+}

@@ -111,26 +111,7 @@ public abstract class SerializableChunkDataHighYMixin {
       }
 
       cir.setReturnValue(
-         new SerializableChunkData(
-            original.containerFactory(),
-            original.chunkPos(),
-            original.minSectionY(),
-            original.lastUpdateTime(),
-            original.inhabitedTime(),
-            original.chunkStatus(),
-            original.blendingData(),
-            original.belowZeroRetrogen(),
-            original.upgradeData(),
-            original.carvingMask(),
-            original.heightmaps(),
-            original.packedTicks(),
-            original.postProcessingSections(),
-            original.lightCorrect(),
-            repairedSections,
-            original.entities(),
-            original.blockEntities(),
-            original.structureData()
-         )
+         com.yucareux.tellus.compat.ChunkSerializationCompat.withSections(original, repairedSections)
       );
    }
 

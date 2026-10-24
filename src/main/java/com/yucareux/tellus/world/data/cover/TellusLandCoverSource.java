@@ -755,18 +755,24 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
          return centerClass;
       }
 
-      double blendX = center.globalPixelCoordinateX() - 0.5;
-      double blendY = center.globalPixelCoordinateY() - 0.5;
+      double cellBlocks = sourceResolutionMeters / Math.max(worldScale, Double.MIN_NORMAL);
+      double warpedX = center.globalPixelCoordinateX() + LandCoverTransition.warpPixelsX(blockX, blockZ, cellBlocks, transitionStrength);
+      double warpedY = center.globalPixelCoordinateY() + LandCoverTransition.warpPixelsZ(blockX, blockZ, cellBlocks, transitionStrength);
+      // As for WorldCover: hydrology keeps following the unwarped raster.
+      int warpedClass = visualSampleOrCenter(zoom, (int)Math.floor(warpedX), (int)Math.floor(warpedY), lookupMode, centerClass);
+      int baseClass = LandCoverTransition.isHardClass(warpedClass) ? centerClass : warpedClass;
+      double blendX = warpedX - 0.5;
+      double blendY = warpedY - 0.5;
       int x0 = (int)Math.floor(blendX);
       int y0 = (int)Math.floor(blendY);
       int x1 = x0 + 1;
       int y1 = y0 + 1;
-      int value00 = visualSampleOrCenter(zoom, x0, y0, lookupMode, centerClass);
-      int value10 = visualSampleOrCenter(zoom, x1, y0, lookupMode, centerClass);
-      int value01 = visualSampleOrCenter(zoom, x0, y1, lookupMode, centerClass);
-      int value11 = visualSampleOrCenter(zoom, x1, y1, lookupMode, centerClass);
+      int value00 = visualSampleOrCenter(zoom, x0, y0, lookupMode, baseClass);
+      int value10 = visualSampleOrCenter(zoom, x1, y0, lookupMode, baseClass);
+      int value01 = visualSampleOrCenter(zoom, x0, y1, lookupMode, baseClass);
+      int value11 = visualSampleOrCenter(zoom, x1, y1, lookupMode, baseClass);
       return LandCoverTransition.selectVisualClass(
-         centerClass,
+         baseClass,
          value00,
          value10,
          value01,
@@ -776,7 +782,7 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
          transitionStrength,
          blockX,
          blockZ,
-         sourceResolutionMeters / Math.max(worldScale, Double.MIN_NORMAL)
+         cellBlocks
       );
    }
 

@@ -38,7 +38,7 @@ public class WaterSourceConversionMixin {
          && current.getType().isSame(Fluids.WATER)
          && level instanceof ServerLevel serverLevel
          && serverLevel.getChunkSource().getGenerator() instanceof EarthChunkGenerator generator
-         && generator.shouldSuppressWaterSourceConversion(pos.getX(), pos.getZ())) {
+         && generator.shouldSuppressWaterSourceConversion(pos.getX(), pos.getY(), pos.getZ())) {
          // Returning the existing flowing state blocks only this attempted
          // conversion. The next vanilla tick still updates and spreads it.
          cir.setReturnValue(current);

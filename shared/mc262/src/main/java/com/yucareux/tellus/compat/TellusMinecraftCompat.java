@@ -1,7 +1,6 @@
 package com.yucareux.tellus.compat;
 
 import com.google.gson.JsonObject;
-import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.ExperimentalHeightSupport;
 import java.util.Optional;
@@ -23,7 +22,6 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biome.Precipitation;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
-import net.minecraft.world.level.storage.LevelData.RespawnData;
 
 /** Minecraft 26.2 server API bridge for the shared Tellus bootstrap. */
 public final class TellusMinecraftCompat {
@@ -34,18 +32,13 @@ public final class TellusMinecraftCompat {
       return source.permissions().hasPermission(new HasCommandLevel(PermissionLevel.GAMEMASTERS));
    }
 
-   public static void configureInitialSpawn(ServerLevel level, EarthChunkGenerator generator) {
-      BlockPos spawn = generator.getInitialSpawnPosition(level);
-      level.setRespawnData(RespawnData.of(level.dimension(), spawn, 0.0F, 0.0F));
-   }
-
    public static boolean vanillaPrecipitationIsSnow(Biome biome, BlockPos position, ServerLevel level) {
       return biome.getPrecipitationAt(position, level.getSeaLevel()) == Precipitation.SNOW;
    }
 
    public static long dayTime(ServerLevel level) {
       Optional<Holder<WorldClock>> defaultClock = level.dimensionTypeRegistration().value().defaultClock();
-      return Math.floorMod(defaultClock.map(clock -> level.clockManager().getTotalTicks(clock)).orElse(level.getGameTime()), 24_000L);
+      return Math.floorMod(defaultClock.map(clock -> com.yucareux.tellus.compat.MinecraftClockAccess.totalTicks(level, clock)).orElse(level.getGameTime()), 24_000L);
    }
 
    public static LevelStem overworldStem(MinecraftServer server) {

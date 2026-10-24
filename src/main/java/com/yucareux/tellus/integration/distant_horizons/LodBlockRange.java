@@ -21,6 +21,13 @@ record LodBlockRange(int minX, int minZ, int maxX, int maxZ) {
       );
    }
 
+   /** The same bounds grown by {@code blocks} on every side. */
+   LodBlockRange expandedBy(int blocks) {
+      return new LodBlockRange(
+         clampToInt((long)this.minX - blocks), clampToInt((long)this.minZ - blocks), clampToInt((long)this.maxX + blocks), clampToInt((long)this.maxZ + blocks)
+      );
+   }
+
    private static int clampToInt(long value) {
       return (int)Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, value));
    }

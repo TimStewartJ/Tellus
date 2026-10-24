@@ -14,6 +14,20 @@ Server support note: Tellus must be installed on the server, but is not required
 
 *Note: generative AI was used during the creation of this mod.*
 
+## Supported Minecraft versions
+
+| Minecraft Java Edition | Loaders | Java runtime |
+| --- | --- | --- |
+| 1.20.1 | Fabric, Forge | 17 |
+| 1.21.1 | Fabric, NeoForge | 21 |
+| 1.21.11 | Fabric, NeoForge | 21 |
+| 26.2 | Fabric, NeoForge | 25 |
+| 26.3 | Fabric, NeoForge beta | 25 |
+
+For 26.3, use Fabric Loader 0.19.5 or later with Fabric API 0.160.5+26.3 or later, or NeoForge 26.3.0.3-beta or later for Minecraft 26.3. Distant Horizons 3.3.1 is supported, including the Tellus fork for extended-height worlds and managed terrain downloads.
+
+Build all targets with `./gradlew build`, or only the new targets with `./gradlew -PtellusTargets=mc263,mc263-neoforge build`. See [26.3 compatibility notes](docs/minecraft-26.3.md) for the shared-source layout, validation, and possible follow-up features.
+
 ## Features
 
 - Earth-scale terrain generated from geographic elevation data
@@ -43,12 +57,14 @@ Source: https://github.com/louis-e/arnis
 
 ## Distant Horizons Integration
 
-Tellus integrates with the Distant Horizons (DH) mod to render planet-scale terrain far beyond vanilla view distance. When DH is installed, Tellus registers a DH world-generation override for Tellus worlds (DH API v4+), so distant terrain is built using Tellus data and settings instead of generic vanilla sampling.
+Tellus integrates with Distant Horizons (DH) 3.3 or later using API 7.1. When DH is installed, Tellus registers a world-generation override for Tellus worlds, so distant terrain is built using Tellus data and settings instead of generic vanilla sampling.
 
 - **Fast mode**: Tellus provides a custom LOD generator that samples its elevation, land-cover, climate, and water data directly to build distant terrain quickly and consistently with your world settings.
 - **Detailed mode**: Tellus delegates to DH's chunk-based generator for far terrain, which is more accurate but significantly heavier on performance.
 
 Because Tellus worlds are Earth-scale, DH is strongly recommended and is almost essential for comfortable exploration and long-distance views.
+
+The `3.3.1-tellus.1` fork preserves extended-height LODs and Iris compatibility, adds download-aware generation scheduling, and includes DH's 3.3 rendering improvements and 3.3.1 NeoForge translation fix. Use the matching updated Tellus jar with it. See [compatibility and build notes](docs/distant-horizons-3.3.1.md).
 
 ## Commands
 

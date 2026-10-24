@@ -1,7 +1,6 @@
 package com.yucareux.tellus.compat;
 
 import com.google.gson.JsonObject;
-import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import java.util.Optional;
 import net.minecraft.SharedConstants;
@@ -20,7 +19,6 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biome.Precipitation;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
-import net.minecraft.world.level.storage.LevelData.RespawnData;
 
 /** Minecraft 1.21.11 server API bridge for the shared Tellus bootstrap. */
 public final class TellusMinecraftCompat {
@@ -29,11 +27,6 @@ public final class TellusMinecraftCompat {
 
    public static boolean hasGamemasterPermission(CommandSourceStack source) {
       return source.permissions().hasPermission(new HasCommandLevel(PermissionLevel.GAMEMASTERS));
-   }
-
-   public static void configureInitialSpawn(ServerLevel level, EarthChunkGenerator generator) {
-      BlockPos spawn = generator.getInitialSpawnPosition(level);
-      level.setRespawnData(RespawnData.of(level.dimension(), spawn, 0.0F, 0.0F));
    }
 
    public static boolean vanillaPrecipitationIsSnow(Biome biome, BlockPos position, ServerLevel level) {

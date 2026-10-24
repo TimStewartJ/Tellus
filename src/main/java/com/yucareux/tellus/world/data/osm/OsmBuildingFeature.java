@@ -243,6 +243,11 @@ public final class OsmBuildingFeature {
       return copy;
    }
 
+   /**
+    * Area-weighted centroid of the parts. Coordinates are taken relative to each part's first point: the shoelace
+    * products of raw longitudes and latitudes (thousands) cancel down to a building's area (around 1e-8 square
+    * degrees), which in doubles moved small buildings' centroids by tens of metres far from longitude 0.
+    */
    private static double[] computeCentroid(double[][] longitudes, double[][] latitudes) {
       double centroidLon = 0.0;
       double centroidLat = 0.0;
@@ -251,6 +256,8 @@ public final class OsmBuildingFeature {
       for (int part = 0; part < longitudes.length; part++) {
          double[] lonPart = longitudes[part];
          double[] latPart = latitudes[part];
+         double originLon = lonPart[0];
+         double originLat = latPart[0];
          double signedArea = polygonSignedArea(lonPart, latPart);
          double weight = Math.abs(signedArea);
          if (weight <= 1.0E-12) {
@@ -265,15 +272,19 @@ public final class OsmBuildingFeature {
             double cy = 0.0;
 
             for (int i = 0, j = lonPart.length - 1; i < lonPart.length; j = i++) {
-               double cross = lonPart[j] * latPart[i] - lonPart[i] * latPart[j];
+               double lonJ = lonPart[j] - originLon;
+               double latJ = latPart[j] - originLat;
+               double lonI = lonPart[i] - originLon;
+               double latI = latPart[i] - originLat;
+               double cross = lonJ * latI - lonI * latJ;
                factor += cross;
-               cx += (lonPart[j] + lonPart[i]) * cross;
-               cy += (latPart[j] + latPart[i]) * cross;
+               cx += (lonJ + lonI) * cross;
+               cy += (latJ + latI) * cross;
             }
 
             if (Math.abs(factor) > 1.0E-12) {
-               centroidLon += cx / (3.0 * factor) * weight;
-               centroidLat += cy / (3.0 * factor) * weight;
+               centroidLon += (originLon + cx / (3.0 * factor)) * weight;
+               centroidLat += (originLat + cy / (3.0 * factor)) * weight;
                totalWeight += weight;
             }
          }
@@ -296,10 +307,10 @@ public final class OsmBuildingFeature {
          double area = 0.0;
 
          for (int i = 0, j = lonPart.length - 1; i < lonPart.length; j = i++) {
-            double x1 = lonPart[j] * metersPerLon;
-            double y1 = latPart[j] * 111319.49166666667;
-            double x2 = lonPart[i] * metersPerLon;
-            double y2 = latPart[i] * 111319.49166666667;
+            double x1 = (lonPart[j] - lonPart[0]) * metersPerLon;
+            double y1 = (latPart[j] - latPart[0]) * 111319.49166666667;
+            double x2 = (lonPart[i] - lonPart[0]) * metersPerLon;
+            double y2 = (latPart[i] - latPart[0]) * 111319.49166666667;
             area += x1 * y2 - x2 * y1;
          }
 
@@ -311,9 +322,11 @@ public final class OsmBuildingFeature {
 
    private static double polygonSignedArea(double[] lonPart, double[] latPart) {
       double area = 0.0;
+      double originLon = lonPart[0];
+      double originLat = latPart[0];
 
       for (int i = 0, j = lonPart.length - 1; i < lonPart.length; j = i++) {
-         area += lonPart[j] * latPart[i] - lonPart[i] * latPart[j];
+         area += (lonPart[j] - originLon) * (latPart[i] - originLat) - (lonPart[i] - originLon) * (latPart[j] - originLat);
       }
 
       return area * 0.5;

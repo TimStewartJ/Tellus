@@ -133,7 +133,7 @@ final class PreviewWaterFlowResolver {
             touchesEdge |= x == 0 || z == 0 || x == gridSize - 1 || z == gridSize - 1;
             lineCellCount += previewLineWater[cell] ? 1 : 0;
             flowingCellCount += previewFlowingWater[cell] ? 1 : 0;
-            if (previewAreaWater[cell] && !explicitNoCarve[cell]) {
+            if (!explicitNoCarve[cell]) {
                polygonCells.add(cell);
             }
             componentHeights.add(rawTerrain[cell]);
@@ -184,8 +184,7 @@ final class PreviewWaterFlowResolver {
 
          for (int cursor = 0; cursor < componentCells.size(); cursor++) {
             int cell = componentCells.getInt(cursor);
-            if (explicitNoCarve[cell]
-               || WaterSurfaceResolver.shouldUseDirectLineWaterCell(previewLineWater[cell], previewAreaWater[cell])) {
+            if (explicitNoCarve[cell]) {
                directLineWater[cell] = true;
                waterSurface[cell] = WaterSurfaceResolver.directLineRiverWaterSurface(rawTerrain[cell]);
             }
@@ -274,7 +273,8 @@ final class PreviewWaterFlowResolver {
          int localX = index % gridSize;
          int localZ = index / gridSize;
          int depth = river
-            ? WaterSurfaceResolver.computeRiverDepth(distanceBlocks)
+            ? WaterSurfaceResolver.riverDepth(distanceBlocks,
+               baseWorldX + localX * cellSizeBlocks, baseWorldZ + localZ * cellSizeBlocks)
             : LakeBedProfile.depth(
                distanceBlocks,
                baseWorldX + localX * cellSizeBlocks,
@@ -287,7 +287,7 @@ final class PreviewWaterFlowResolver {
          terrainSurface[index] = floor;
 
          int cut = Math.max(0, rawTerrain[index] - waterSurface[index]);
-         if (cut > 0) {
+         if (flowParameters.baseBlendBlocks() > 0 || cut > 0) {
             correctionRequired[index] = true;
             int blendCut = river ? Math.min(cut, flowParameters.maxProfileCut()) : cut;
             int localSlope = localComponentSlope(index, gridSize, rawTerrain, componentIds, componentId);
@@ -317,8 +317,12 @@ final class PreviewWaterFlowResolver {
          adaptiveBlendRadius,
          waterfallProtection,
          cliffSlopeThreshold,
-         limitCliffSlope
+         limitCliffSlope,
+         baseWorldX,
+         baseWorldZ
       );
+      InlandWaterProfile.finishColumns(terrainSurface, waterSurface, activeInlandWater, oceanWater, gridSize,
+         InlandWaterProfile.coastalLand(oceanWater, gridSize, Math.max(1, 48 / Math.max(1, cellSizeBlocks))));
 
       return new Result(terrainSurface, waterSurface, activeInlandWater, waterfallDrop, waterfallProtection);
    }
@@ -488,33 +492,16 @@ final class PreviewWaterFlowResolver {
       int[] adaptiveBlendRadius,
       boolean[] waterfallProtection,
       int cliffSlopeThreshold,
-      boolean limitCliffSlope
+      boolean limitCliffSlope,
+      int baseWorldX,
+      int baseWorldZ
    ) {
       int area = gridSize * gridSize;
       boolean[] blockedLand = new boolean[area];
-      boolean[] cliffLand = new boolean[area];
+      boolean[] cliffLand = InlandWaterProfile.coastalLand(oceanWater, gridSize,
+         Math.max(1, 48 / Math.max(1, cellSizeBlocks)));
       for (int index = 0; index < area; index++) {
          blockedLand[index] = mappedInlandWater[index] && !inlandWater[index] && !waterfallDrop[index];
-      }
-      for (int index = 0; index < area; index++) {
-         if (!inlandWater[index]) {
-            continue;
-         }
-         int x = index % gridSize;
-         int z = index / gridSize;
-         for (int offset = 0; offset < CARDINAL_OFFSETS.length; offset += 2) {
-            int nx = x + CARDINAL_OFFSETS[offset];
-            int nz = z + CARDINAL_OFFSETS[offset + 1];
-            if (nx < 0 || nz < 0 || nx >= gridSize || nz >= gridSize) {
-               continue;
-            }
-            int neighbor = nz * gridSize + nx;
-            if (!inlandWater[neighbor]
-               && !oceanWater[neighbor]
-               && rawTerrain[neighbor] - rawTerrain[index] >= cliffSlopeThreshold) {
-               cliffLand[neighbor] = true;
-            }
-         }
       }
 
       int[] remainingInfluence = new int[area];
@@ -596,12 +583,9 @@ final class PreviewWaterFlowResolver {
             continue;
          }
          int distanceCost = radius * DIST_COST_CARDINAL - remainingInfluence[index];
-         int naturalized = WaterSurfaceResolver.naturalizedInlandBankSurface(
-            rawTerrain[index],
-            nearestSurface[index],
-            distanceCost,
-            radius,
-            limitCliffSlope
+         int naturalized = InlandWaterProfile.bankSurface(
+            rawTerrain[index], nearestSurface[index], distanceCost / 10.0, radius, limitCliffSlope,
+            baseWorldX + index % gridSize * cellSizeBlocks, baseWorldZ + index / gridSize * cellSizeBlocks
          );
          terrainSurface[index] = Math.min(terrainSurface[index], naturalized);
       }

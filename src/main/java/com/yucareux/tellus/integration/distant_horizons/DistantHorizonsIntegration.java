@@ -2,7 +2,11 @@ package com.yucareux.tellus.integration.distant_horizons;
 
 import com.mojang.logging.LogUtils;
 import com.seibel.distanthorizons.api.DhApi;
+import com.seibel.distanthorizons.api.enums.config.EDhApiGrassSideRendering;
+import com.seibel.distanthorizons.api.enums.rendering.EDhApiBlockMaterial;
 import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiDistantGeneratorMode;
+import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiGeneratorPlan;
+import com.seibel.distanthorizons.api.interfaces.block.IDhApiBiomeWrapper;
 import com.seibel.distanthorizons.api.interfaces.block.IDhApiBlockStateWrapper;
 import com.seibel.distanthorizons.api.interfaces.override.worldGenerator.IDhApiWorldGenerator;
 import com.seibel.distanthorizons.api.interfaces.world.IDhApiLevelWrapper;
@@ -19,7 +23,11 @@ import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainCo
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.core.Holder;
@@ -48,11 +56,12 @@ public final class DistantHorizonsIntegration {
    private static final int AZALEA_LEAVES_TEXTURE_COLOR = 0x5A732C;
    private static final int FLOWERING_AZALEA_LEAVES_TEXTURE_COLOR = 0x646F3D;
    private static final Block PALE_OAK_LEAVES_BLOCK = blockByField("PALE_OAK_LEAVES");
+   private static final String DH_QUALITY_CONFIG_CLASS = "com.seibel.distanthorizons.core.config.Config$Client$Advanced$Graphics$Quality";
+   private static final String DH_WORLD_GENERATOR_CONFIG_CLASS = "com.seibel.distanthorizons.core.config.Config$Common$WorldGenerator";
    private static final Map<String, EarthChunkGenerator> TELLUS_GENERATORS_BY_DIMENSION = new ConcurrentHashMap<>();
+   private static final Set<String> DIRECT_LOD_DIMENSIONS = new HashSet<>();
+   private static final List<RuntimeConfigOverride> ACTIVE_RUNTIME_OVERRIDES = new ArrayList<>();
    private static final DistantHorizonsStartupGate STARTUP_GATE = new DistantHorizonsStartupGate();
-   private static final DistantHorizonsRuntimeConfigGuard DIRECT_LOD_CONFIG_GUARD = DistantHorizonsRuntimeConfigGuard.reflective(
-      Boolean.parseBoolean(System.getProperty("tellus.dhForceNSizedGeneration", "true"))
-   );
    private static volatile Integer dhMaxWorldYSize;
 
    private DistantHorizonsIntegration() {
@@ -62,7 +71,7 @@ public final class DistantHorizonsIntegration {
       int apiMajor = DhApi.getApiMajorVersion();
       int apiMinor = DhApi.getApiMinorVersion();
       int apiPatch = DhApi.getApiPatchVersion();
-      if (apiMajor < 7) {
+      if (apiMajor < 7 || apiMajor == 7 && apiMinor < 1) {
          LOGGER.warn(
             "Detected Distant Horizons {}, but API {}.{}.{} is too old - won't enable integration with Tellus",
             new Object[]{DhApi.getModVersion(), apiMajor, apiMinor, apiPatch}
@@ -181,30 +190,159 @@ public final class DistantHorizonsIntegration {
             return;
          }
 
-         String dimensionName = levelWrapper.getDimensionName();
-         boolean acquiredRuntimeConfig = DIRECT_LOD_CONFIG_GUARD.acquire(dimensionName);
-         boolean registered = false;
-         try {
-            TellusLodGenerator lodGenerator = new TellusLodGenerator(levelWrapper, generator);
-            DhApiResult<Void> result = DhApi.worldGenOverrides.registerWorldGeneratorOverride(levelWrapper, lodGenerator);
-            registered = result.success;
-            if (!registered) {
-               LOGGER.warn("Failed to register Tellus LOD generator: {}", result.message);
-            } else {
-               LOGGER.info("Registered Tellus DH LOD generator path=direct timingEnabled={}", TellusLodGenerator.isTimingEnabled());
-            }
-         } finally {
-            if (!registered && acquiredRuntimeConfig) {
-               DIRECT_LOD_CONFIG_GUARD.release(dimensionName);
-            }
+         // DH 3.3 supports N-sized requests directly; the old experimental override no longer exists.
+         TellusLodGenerator lodGenerator = new TellusLodGenerator(levelWrapper, generator);
+         DhApiResult<Void> result = DhApi.worldGenOverrides.registerWorldGeneratorOverride(levelWrapper, lodGenerator);
+         if (!result.success) {
+            lodGenerator.close();
+            LOGGER.warn("Failed to register Tellus LOD generator: {}", result.message);
+         } else {
+            LOGGER.info("Registered Tellus DH LOD generator path=direct timingEnabled={}", TellusLodGenerator.isTimingEnabled());
+            acquireDirectLodOverrides(levelWrapper.getDimensionName());
          }
       }
    }
 
    private static void onLevelUnload(IDhApiLevelWrapper levelWrapper) {
       String dimensionName = levelWrapper.getDimensionName();
-      DIRECT_LOD_CONFIG_GUARD.release(dimensionName);
       TELLUS_GENERATORS_BY_DIMENSION.remove(dimensionName);
+      if (levelWrapper.getWrappedMcObject() instanceof ServerLevel) {
+         releaseDirectLodOverrides(dimensionName);
+      }
+   }
+
+   /**
+    * DH settings that the direct generator changes at runtime (DH's API value) while it generates LODs in
+    * this game. Each saved setting is untouched, and a player's explicit non-default choice is left alone.
+    */
+   private static List<RuntimeConfigOverride> directLodOverrides() {
+      return List.of(
+         // Grass-capped direct LOD columns are grass all the way down, but DH fades the sides of grass LODs
+         // to dirt by default, which turns distant grassy slopes brown again.
+         new RuntimeConfigOverride(
+            DH_QUALITY_CONFIG_CLASS, "grassSideRendering", EDhApiGrassSideRendering.FADE_TO_DIRT, EDhApiGrassSideRendering.AS_GRASS,
+            "grass LOD sides render as grass"
+         ),
+         // DH pauses world generation while the integrated server's average tick over the last 100 ticks is
+         // 10 ms or more (or two ticks reach 30 ms), so vanilla chunk generation cannot lag the server. The
+         // direct generator never touches the server thread, but a loaded 1:1 Tellus world ticks at about
+         // 10-12 ms by itself, and the gate kept LOD generation paused nearly all the time in game.
+         new RuntimeConfigOverride(
+            DH_WORLD_GENERATOR_CONFIG_CLASS, "limitIfServerUnhealthy", Boolean.TRUE, Boolean.FALSE,
+            "world generation no longer pauses for a busy integrated server"
+         ),
+         // DH also pauses world generation and the update propagator while the camera averages more than
+         // 20 blocks/s (rocket-elytra flight is 30 or more), leaving the CPU to loading LODs that already
+         // exist. Direct Tellus LODs only exist once generated, so during a flight nothing ahead gained
+         // detail and areas left behind lost their coarser LODs.
+         new RuntimeConfigOverride(
+            DH_WORLD_GENERATOR_CONFIG_CLASS, "pauseIfMovingQuickly", Boolean.TRUE, Boolean.FALSE,
+            "world generation no longer pauses for fast camera movement"
+         ),
+         // DH's default plan follows its fast surface pass with a second pass that regenerates every
+         // section at full block detail across the whole render distance, meant to add the trees and
+         // structures a rough surface lacks. Direct Tellus LODs already have them at every detail, so the
+         // second pass only redid the finished render distance at 1x1 blocks (about 3 million sections at a
+         // 4096-chunk radius) and replaced the fitted coarse LODs with down-sampled ones.
+         new RuntimeConfigOverride(
+            DH_WORLD_GENERATOR_CONFIG_CLASS, "generatorPlan", EDhApiGeneratorPlan.SURFACE_THEN_CHUNKS, EDhApiGeneratorPlan.SURFACE_ONLY,
+            "LODs are generated once at their own detail (no full-detail second pass)"
+         )
+      );
+   }
+
+   private static void acquireDirectLodOverrides(String dimensionName) {
+      synchronized (DIRECT_LOD_DIMENSIONS) {
+         if (!DIRECT_LOD_DIMENSIONS.add(dimensionName) || DIRECT_LOD_DIMENSIONS.size() > 1) {
+            return;
+         }
+
+         for (RuntimeConfigOverride override : directLodOverrides()) {
+            if (override.acquire()) {
+               ACTIVE_RUNTIME_OVERRIDES.add(override);
+            }
+         }
+      }
+   }
+
+   private static void releaseDirectLodOverrides(String dimensionName) {
+      synchronized (DIRECT_LOD_DIMENSIONS) {
+         if (!DIRECT_LOD_DIMENSIONS.remove(dimensionName) || !DIRECT_LOD_DIMENSIONS.isEmpty()) {
+            return;
+         }
+
+         for (RuntimeConfigOverride override : ACTIVE_RUNTIME_OVERRIDES) {
+            override.release();
+         }
+         ACTIVE_RUNTIME_OVERRIDES.clear();
+      }
+   }
+
+   /** One DH config entry set through its API value, only when the player kept the given default. */
+   private static final class RuntimeConfigOverride {
+      private final String configClass;
+      private final String field;
+      private final Object expectedValue;
+      private final Object overrideValue;
+      private final String description;
+      private Object entry;
+
+      private RuntimeConfigOverride(String configClass, String field, Object expectedValue, Object overrideValue, String description) {
+         this.configClass = configClass;
+         this.field = field;
+         this.expectedValue = expectedValue;
+         this.overrideValue = overrideValue;
+         this.description = description;
+      }
+
+      private boolean acquire() {
+         try {
+            Object configEntry = Class.forName(this.configClass).getField(this.field).get(null);
+            Class<?> entryClass = configEntry.getClass();
+            if (this.expectedValue.equals(entryClass.getMethod("getTrueValue").invoke(configEntry))
+               && entryClass.getMethod("getApiValue").invoke(configEntry) == null) {
+               setApiValue(configEntry, this.overrideValue);
+               this.entry = configEntry;
+               LOGGER.info("Distant Horizons: {} while Tellus generates LODs (runtime only; config unchanged)", this.description);
+               return true;
+            }
+         } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
+            LOGGER.debug("Distant Horizons setting {} is unavailable; Tellus leaves it to DH", this.field, error);
+         }
+         return false;
+      }
+
+      private void release() {
+         Object configEntry = this.entry;
+         this.entry = null;
+         if (configEntry == null) {
+            return;
+         }
+         try {
+            Class<?> entryClass = configEntry.getClass();
+            if (this.overrideValue.equals(entryClass.getMethod("getApiValue").invoke(configEntry))) {
+               setApiValue(configEntry, null);
+            }
+         } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
+            LOGGER.warn("Failed to restore Distant Horizons setting {}", this.field, error);
+         }
+      }
+
+      /**
+       * DH 3.3.2 added the name of the mod setting an API value (its config screen shows it) and dropped the
+       * value-only setter, which older releases still need.
+       */
+      private static void setApiValue(Object configEntry, Object value) throws ReflectiveOperationException {
+         Class<?> entryClass = configEntry.getClass();
+         Method setter;
+         try {
+            setter = entryClass.getMethod("setApiValue", Object.class, String.class);
+         } catch (NoSuchMethodException error) {
+            entryClass.getMethod("setApiValue", Object.class).invoke(configEntry, value);
+            return;
+         }
+         setter.invoke(configEntry, value, "Tellus");
+      }
    }
 
    public static boolean shouldSkipChunkBackedUpdates(Object dhLevel) {
@@ -264,8 +402,13 @@ public final class DistantHorizonsIntegration {
       DhApiEventRegister.on(DhApiBlockStateWrapperCreatedEvent.class, new DhApiBlockStateWrapperCreatedEvent() {
          public void blockStateWrapperCreated(DhApiEventParam<DhApiBlockStateWrapperCreatedEvent.EventParam> event) {
             IDhApiBlockStateWrapper wrapper = event.value.getBlockStateWrapper();
-            if (wrapper.getWrappedMcObject() instanceof BlockState blockState && isCorrectedLodLeafBlock(blockState.getBlock())) {
+            if (!(wrapper.getWrappedMcObject() instanceof BlockState blockState)) {
+               return;
+            }
+            if (isCorrectedLodLeafBlock(blockState.getBlock())) {
                event.value.setAllowApiColorOverride(true);
+            } else if (isMisclassifiedLodLight(blockState)) {
+               event.value.setBlockMaterial(EDhApiBlockMaterial.ILLUMINATED);
             }
          }
       });
@@ -287,13 +430,13 @@ public final class DistantHorizonsIntegration {
          return;
       }
 
-      int color = correctedLeafColor(blockState.getBlock(), generator, event.getBlockPosX(), event.getBlockPosZ());
+      int color = correctedLeafColor(blockState.getBlock(), generator, event);
       if (color >= 0) {
          event.setColor(event.getAlpha(), red(color), green(color), blue(color));
       }
    }
 
-   private static int correctedLeafColor(Block block, EarthChunkGenerator generator, int blockX, int blockZ) {
+   private static int correctedLeafColor(Block block, EarthChunkGenerator generator, DhApiBlockColorOverrideEvent.EventParam event) {
       int textureColor = leafTextureColor(block);
       if (textureColor < 0) {
          return -1;
@@ -307,7 +450,21 @@ public final class DistantHorizonsIntegration {
          return multiplyRgb(textureColor, SPRUCE_FOLIAGE_COLOR);
       }
 
-      return multiplyRgb(textureColor, tellusFoliageColor(generator, blockX, blockZ));
+      return multiplyRgb(textureColor, lodFoliageColor(generator, event));
+   }
+
+   /**
+    * The foliage tint of the LOD column's own biome, which DH passes with the event and also tints the
+    * column's grass with. DH fires this event for every leaf on every LOD render build, so resolving the
+    * block's biome again (the full surface pipeline, water and hydrology included) kept DH's render threads
+    * busy and starved its world generation in game.
+    */
+   private static int lodFoliageColor(EarthChunkGenerator generator, DhApiBlockColorOverrideEvent.EventParam event) {
+      IDhApiBiomeWrapper biomeWrapper = event.getBiomeWrapper();
+      if (biomeWrapper != null && biomeWrapper.getWrappedMcObject() instanceof Holder<?> holder && holder.value() instanceof Biome biome) {
+         return biome.getFoliageColor();
+      }
+      return tellusFoliageColor(generator, event.getBlockPosX(), event.getBlockPosZ());
    }
 
    private static int tellusFoliageColor(EarthChunkGenerator generator, int blockX, int blockZ) {
@@ -356,6 +513,14 @@ public final class DistantHorizonsIntegration {
          || block == PALE_OAK_LEAVES_BLOCK
          || block == Blocks.AZALEA_LEAVES
          || block == Blocks.FLOWERING_AZALEA_LEAVES;
+   }
+
+   /**
+    * Light sources that DH files under stone because "stone" is in their name. Shader packs only make
+    * illuminated LODs glow, so lit LOD windows (glowstone) and lamps would stay dull.
+    */
+   private static boolean isMisclassifiedLodLight(BlockState blockState) {
+      return blockState.is(Blocks.GLOWSTONE) || blockState.is(Blocks.REDSTONE_LAMP) && blockState.getLightEmission() > 0;
    }
 
    private static boolean isCorrectedLodLeafBlock(Block block) {
@@ -416,7 +581,7 @@ public final class DistantHorizonsIntegration {
 
    private static EDhApiDistantGeneratorMode currentDistantGeneratorMode() {
       try {
-         return DhApi.Delayed.configs == null ? null : DhApi.Delayed.configs.worldGenerator().distantGeneratorMode().getValue();
+         return DhApi.Delayed.configs == null ? null : DhApi.Delayed.configs.worldGenerator().chunkGeneratorMode().getValue();
       } catch (RuntimeException error) {
          LOGGER.debug("Failed to read Distant Horizons generator mode", error);
          return null;

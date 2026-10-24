@@ -1,0 +1,11 @@
+// Adapt only tests whose vanilla fixture APIs changed. Run the shared regression
+// suite plus 26.2's height/biome checks, without a Distant Horizons runtime.
+sourceSets.test.java {
+   srcDir(rootProject.file('mc262/src/test/java'))
+   exclude '**/FastLodDataLoadingSimulation.java'
+   exclude 'com/yucareux/tellus/integration/distant_horizons/TellusLodGeneratorColumnTest.java'
+   exclude { element ->
+      def replacement = rootProject.file("shared/mc263/src/test/java/${element.relativePath.pathString}")
+      replacement.isFile() && element.file.toPath().toAbsolutePath().normalize() != replacement.toPath().toAbsolutePath().normalize()
+   }
+}

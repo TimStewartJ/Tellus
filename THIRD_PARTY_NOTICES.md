@@ -55,3 +55,13 @@ Published tile compilation license: CC BY 4.0.
 Source: https://github.com/openwatersio/seascape
 
 Tiles: https://tiles.openwaters.io/seascape/
+
+## Eiffel Tower landmark model
+
+The Eiffel Tower landmark (`tellus/landmarks/eiffel_tower.tlm`) is adapted from "Eiffel Tower" by Newcandle, published on Thingiverse (https://www.thingiverse.com/thing:912478) and on Wikimedia Commons (https://commons.wikimedia.org/wiki/File:EiffelTower_fixed.stl).
+
+Licensed under Creative Commons Attribution-ShareAlike 3.0 Unported (https://creativecommons.org/licenses/by-sa/3.0/). Changes: converted from STL to the Tellus landmark mesh format and scaled to a 124.9 m base and 330 m height. The adapted model is shared under the same license; this license covers that file only, not the rest of Tellus.
+
+## Golden Gate Bridge landmark model
+
+The Golden Gate Bridge landmark (`tellus/landmarks/golden_gate_bridge.tlm`) is converted from the "Golden Gate Bridge" SketchUp model published on the 3D Warehouse (https://3dwarehouse.sketchup.com/; model contributors listed in the file as Google / Google 3D Warehouse), used under the 3D Warehouse General Model License Agreement. Changes: converted from SketchUp to the Tellus landmark mesh format, placed from the model's UTM georeference, see-through textures cut to their opaque parts, the ground plaza left out, the Marin side of the deck raised to the real road's height, four support towers added under the Marin approach viaduct and materials replaced by Minecraft blocks.

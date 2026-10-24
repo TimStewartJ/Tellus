@@ -10,7 +10,7 @@ ext.tellus = [
 	fabricDependencyConfiguration: 'implementation',
 	javaVersion: 25,
 	distantHorizonsRuntimeProperty: 'mc262_distant_horizons_runtime_path',
-	sharedSourceLayers: ['post-1201', 'mc262', 'fabric'],
+	sharedSourceLayers: ['post-1201', 'mc262', 'mc26', 'fabric'],
 	mapboxVersion: '24.1.1',
 	protobufVersion: '4.28.2',
 	officialMappings: false,

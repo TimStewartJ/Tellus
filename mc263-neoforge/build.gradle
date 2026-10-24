@@ -1,0 +1,25 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+	id 'net.neoforged.moddev' version '2.0.141'
+	id 'com.gradleup.shadow' version '9.0.0'
+}
+
+apply from: rootProject.file('gradle/tellus-263-sources.gradle')
+
+ext.tellus = [
+	minecraftVersion: '26.3',
+	neoForgeVersion: '26.3.0.3-beta',
+	javaVersion: 25,
+	// Use ModDevGradle's official binary pipeline: the initial 26.3 source
+	// transformation has a HolderSet visibility error during recompilation.
+	disableRecompilation: true,
+	distantHorizonsRuntimeProperty: 'mc263_neoforge_distant_horizons_runtime_path',
+	sharedSourceLayers: ['post-1201', 'mc262', 'mc26', 'mc263', 'forge-family', 'neoforge'],
+	inheritedJavaProjects: ['mc262-neoforge'],
+	overriddenInheritedMainResources: ['META-INF/neoforge.mods.toml', 'tellus.mixins.json'],
+] + tellus263Sources
+tellus.overriddenSharedMainSources += ['com/yucareux/tellus/world/data/biome/BiomeProviderDiscovery.java']
+
+apply from: rootProject.file('gradle/tellus-neoforge.gradle')
+apply from: rootProject.file('gradle/tellus-263-tests.gradle')

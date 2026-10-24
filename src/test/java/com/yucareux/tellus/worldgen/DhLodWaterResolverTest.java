@@ -530,7 +530,7 @@ class DhLodWaterResolverTest {
    }
 
    @Test
-   void approximateFastLodsKeepTheirLegacyConstantDepth() {
+   void fastFallbackLakeBedsStayWithinTheSharedInteriorDepthRange() {
       int[] terrain = new int[]{0};
       int[] water = new int[]{80};
       boolean[] hasWater = new boolean[]{true};
@@ -552,11 +552,13 @@ class DhLodWaterResolverTest {
          false
       );
 
-      assertEquals(60, terrain[0]);
+      int depth = water[0] - terrain[0];
+      assertTrue(depth >= LakeBedProfile.minimumInteriorDepth());
+      assertTrue(depth <= LakeBedProfile.maximumInteriorDepth());
    }
 
    @Test
-   void detailedLakeBedsDoNotChangeFastLodRiverDepths() {
+   void fallbackRiverBedsUseTheShallowSharedProfile() {
       int[] terrain = new int[]{0};
       int[] water = new int[]{80};
       boolean[] hasWater = new boolean[]{true};
@@ -580,7 +582,8 @@ class DhLodWaterResolverTest {
          true
       );
 
-      assertEquals(60, terrain[0]);
-      assertFalse(detailed[0]);
+      int depth = water[0] - terrain[0];
+      assertTrue(depth >= 1 && depth <= 6, "A river must not inherit a twenty-block lake trench");
+      assertTrue(detailed[0], "Later fallback passes must preserve the resolved river bed");
    }
 }

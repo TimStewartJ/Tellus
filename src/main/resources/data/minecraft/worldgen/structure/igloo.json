@@ -1,7 +1,8 @@
 {
   "type": "minecraft:igloo",
   "biomes": [
-    "minecraft:frozen_peaks"
+    "minecraft:frozen_peaks",
+    "minecraft:snowy_slopes"
   ],
   "spawn_overrides": {},
   "step": "surface_structures"

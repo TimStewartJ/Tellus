@@ -31,6 +31,6 @@ side="BOTH"
 [[dependencies.tellus]]
 modId="distanthorizons"
 mandatory=false
-versionRange="[0,)"
+versionRange="[3.3.0,)"
 ordering="AFTER"
 side="BOTH"

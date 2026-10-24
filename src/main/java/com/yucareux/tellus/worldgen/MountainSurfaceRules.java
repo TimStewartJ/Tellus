@@ -13,17 +13,38 @@ public final class MountainSurfaceRules {
    public static final int ESA_WETLAND = 90;
    public static final int ESA_MANGROVES = 95;
    public static final int ESA_MOSS_LICHEN = 100;
+   /**
+    * Zone anchors. Callers pass heights mapped by {@link MountainElevationZones#zoneHeight},
+    * so these sit at latitude-dependent real elevations rather than fixed block heights.
+    */
    public static final int SURFACE_ALPINE_HEIGHT_ABOVE_SEA = 200;
    public static final int SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA = 120;
+   public static final int MATERIAL_STONE = 0;
+   public static final int MATERIAL_ANDESITE = 1;
+   public static final int MATERIAL_GRAVEL = 2;
+   public static final int MATERIAL_COBBLESTONE = 3;
+   public static final int MATERIAL_DIORITE = 4;
+   public static final int MATERIAL_PACKED_ICE = 5;
+   public static final int MATERIAL_BLUE_ICE = 6;
+   public static final int MATERIAL_SNOW = 7;
+   private static final long FORM_PRIMARY_SALT = 2914627375160349221L;
+   private static final long FORM_ACCENT_SALT = -6157224553818219851L;
+   private static final long GLACIER_PRIMARY_SALT = 8724352394416290811L;
+   private static final long GLACIER_ACCENT_SALT = -2389441726380115407L;
 
    private MountainSurfaceRules() {
    }
 
+   /**
+    * The land cover a column's ground, trees and biome follow. Forests and towns
+    * take the blended border too: keeping their raw 10 m pixels made every forest
+    * edge and town edge a staircase at fine scales.
+    */
    public static int resolveSurfaceCoverClass(int terrainCoverClass, int visualCoverClass) {
-      if (terrainCoverClass == ESA_BUILT) {
-         return ESA_BUILT;
-      } else if (terrainCoverClass == ESA_TREE_COVER) {
-         return ESA_TREE_COVER;
+      if (terrainCoverClass == ESA_SNOW_ICE || visualCoverClass == ESA_SNOW_ICE) {
+         // Visual blending must neither invent snow outside the data nor erase
+         // a mapped snow source. SnowTransitionPolicy softens its inner edge.
+         return terrainCoverClass;
       } else {
          return !isWaterLikeCoverClass(terrainCoverClass) && !isWaterLikeCoverClass(visualCoverClass) ? visualCoverClass : terrainCoverClass;
       }
@@ -186,7 +207,7 @@ public final class MountainSurfaceRules {
       if (snowSource) {
          if (retainsMountainSnow(surfaceCoverClass, snowLikeTerrain, heightAboveSea, slopeDiff, convexity, worldX, worldZ)) {
             return new MountainSurfaceRules.ApproximateSurface(
-               surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.SNOW, MountainSurfaceRules.MountainForm.SNOWFIELD
+               surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.SNOW, snowForm(slopeDiff, convexity)
             );
          }
       }
@@ -201,7 +222,7 @@ public final class MountainSurfaceRules {
             : MountainSurfaceRules.MountainForm.NONE;
          return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.NONE, form);
       } else {
-         MountainSurfaceRules.MountainForm form = classifyMountainForm(
+         MountainSurfaceRules.MountainForm form = landform(
             surfaceCoverClass, heightAboveSea, slopeDiff, convexity, worldX, worldZ
          );
          if (snowSource && prefersSnowStreak(surfaceCoverClass, snowLikeTerrain, heightAboveSea, slopeDiff, convexity, worldX, worldZ, form)) {
@@ -293,24 +314,31 @@ public final class MountainSurfaceRules {
       return Math.max(0, Math.min(100, score));
    }
 
-   private static MountainSurfaceRules.MountainForm classifyMountainForm(
+   /**
+    * Landform of an exposed column. Slope is the steepest rise over a four-block
+    * baseline and convexity is the four-neighbour mean minus the centre, so a
+    * positive convexity on a slope means the ground steepens uphill.
+    */
+   public static MountainSurfaceRules.MountainForm landform(
       int surfaceCoverClass, int heightAboveSea, int slopeDiff, int convexity, int worldX, int worldZ
    ) {
       int ruggedness = slopeDiff + Math.max(0, -convexity);
-      double drainageMask = approximateMask(worldX, worldZ, 80, 8361902749107219433L);
       double cliffMask = approximateMask(worldX, worldZ, 144, 5516042115276107717L);
       if (surfaceCoverClass == ESA_SNOW_ICE && heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA && slopeDiff <= 3 && convexity >= -1) {
          return MountainSurfaceRules.MountainForm.SNOWFIELD;
-      } else if (heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA + 20 && slopeDiff <= 2 && convexity >= 1) {
+      } else if (heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA && isGlacierHollow(slopeDiff, convexity)) {
+         // A high hollow: a cirque floor, debris-filled where no ice is mapped.
          return MountainSurfaceRules.MountainForm.GLACIER_BASIN;
-      } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && slopeDiff >= 4 && convexity >= 1 && drainageMask > 0.66) {
-         return MountainSurfaceRules.MountainForm.DRAINAGE_CHUTE;
       } else if (slopeDiff >= 6 || ruggedness >= 9 && cliffMask > 0.28) {
          return MountainSurfaceRules.MountainForm.CLIFF_FACE;
       } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && slopeDiff >= 4 && convexity >= 1) {
-         return MountainSurfaceRules.MountainForm.TALUS_SLOPE;
+         // Steep and concave: the gullies and couloirs that channel debris down a face.
+         return MountainSurfaceRules.MountainForm.DRAINAGE_CHUTE;
       } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && slopeDiff >= 5) {
          return MountainSurfaceRules.MountainForm.STEEP_ROCKY_SLOPE;
+      } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && slopeDiff >= 2 && convexity >= 1) {
+         // Scree rests at roughly 27-44 degrees where the slope eases below steeper rock.
+         return MountainSurfaceRules.MountainForm.TALUS_SLOPE;
       } else if (heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA && convexity <= -2 && slopeDiff >= 2) {
          return MountainSurfaceRules.MountainForm.RIDGE;
       } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && isVegetatedCoverClass(surfaceCoverClass) && slopeDiff <= 2) {
@@ -318,6 +346,74 @@ public final class MountainSurfaceRules {
       } else {
          return MountainSurfaceRules.MountainForm.VALLEY_WALL;
       }
+   }
+
+   /** A gentle hollow, where a mapped glacier shows bare ice rather than snow. */
+   public static boolean isGlacierHollow(int slopeDiff, int convexity) {
+      return slopeDiff <= 2 && convexity >= 1;
+   }
+
+   /** Form of a column that keeps its mapped snow. */
+   public static MountainSurfaceRules.MountainForm snowForm(int slopeDiff, int convexity) {
+      return isGlacierHollow(slopeDiff, convexity)
+         ? MountainSurfaceRules.MountainForm.GLACIER_BASIN
+         : MountainSurfaceRules.MountainForm.SNOWFIELD;
+   }
+
+   /** Landforms covered in loose debris, which the steep-slope rock rule must not repaint. */
+   public static boolean isLooseDebrisForm(MountainSurfaceRules.MountainForm form) {
+      return form == MountainSurfaceRules.MountainForm.TALUS_SLOPE
+         || form == MountainSurfaceRules.MountainForm.DRAINAGE_CHUTE
+         || form == MountainSurfaceRules.MountainForm.GLACIER_BASIN;
+   }
+
+   /**
+    * Top material of exposed rock, as clustered patches per landform. Scree and
+    * gullies are loose and lighter than the rock faces above them; faces and
+    * ridges are rock with weathered accents.
+    */
+   public static int formSurfaceMaterial(MountainSurfaceRules.MountainForm form, int worldX, int worldZ) {
+      int primary = SurfacePatchNoise.percent(worldX, worldZ, FORM_PRIMARY_SALT);
+      int accent = SurfacePatchNoise.percent(worldX, worldZ, FORM_ACCENT_SALT);
+      return switch (form) {
+         case TALUS_SLOPE -> primary < 55
+            ? MATERIAL_GRAVEL
+            : accent < 45 ? MATERIAL_ANDESITE : accent < 78 ? MATERIAL_DIORITE : MATERIAL_COBBLESTONE;
+         case DRAINAGE_CHUTE -> primary < 75 ? MATERIAL_GRAVEL : accent < 60 ? MATERIAL_COBBLESTONE : MATERIAL_ANDESITE;
+         case GLACIER_BASIN -> primary < 50 ? MATERIAL_GRAVEL : accent < 60 ? MATERIAL_STONE : MATERIAL_COBBLESTONE;
+         case RIDGE -> primary < 65 ? MATERIAL_STONE : accent < 57 ? MATERIAL_ANDESITE : MATERIAL_COBBLESTONE;
+         case STEEP_ROCKY_SLOPE -> primary < 70 ? MATERIAL_STONE : accent < 67 ? MATERIAL_ANDESITE : MATERIAL_GRAVEL;
+         case VALLEY_WALL -> primary < 70 ? MATERIAL_STONE : accent < 50 ? MATERIAL_ANDESITE : MATERIAL_GRAVEL;
+         case CLIFF_FACE -> primary < 85 ? MATERIAL_STONE : MATERIAL_ANDESITE;
+         default -> MATERIAL_STONE;
+      };
+   }
+
+   /** Surface of a mapped glacier's hollow: mostly bare ice, with snow patches and blue ice. */
+   public static int glacierSurfaceMaterial(int worldX, int worldZ) {
+      if (SurfacePatchNoise.percent(worldX, worldZ, GLACIER_PRIMARY_SALT) < 30) {
+         return MATERIAL_SNOW;
+      }
+
+      return SurfacePatchNoise.percent(worldX, worldZ, GLACIER_ACCENT_SALT) < 17 ? MATERIAL_BLUE_ICE : MATERIAL_PACKED_ICE;
+   }
+
+   /** Share of a steep, unforested vegetated slope that shows rock outcrops. */
+   public static int exposedRockPercent(int slopeDiff) {
+      if (slopeDiff < 3) {
+         return 0;
+      } else if (slopeDiff == 3) {
+         return 35;
+      } else if (slopeDiff == 4) {
+         return 60;
+      } else {
+         return slopeDiff == 5 ? 80 : 95;
+      }
+   }
+
+   /** Share of a highland meadow covered by scree patches. */
+   public static int alpineMeadowScreePercent(int slopeDiff) {
+      return slopeDiff >= 2 ? 25 : 0;
    }
 
    private static double approximateMask(int worldX, int worldZ, int cellSize, long salt) {

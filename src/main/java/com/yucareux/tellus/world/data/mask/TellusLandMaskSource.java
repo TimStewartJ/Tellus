@@ -12,6 +12,7 @@ import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNe
 import com.yucareux.tellus.platform.TellusPlatform;
 import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
 import com.yucareux.tellus.world.data.source.MapTileImageValidator;
+import com.yucareux.tellus.world.data.source.SourceInterrupts;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -42,6 +43,7 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
    private static final int MAX_CACHE_TILES = intProperty("tellus.landmask.cacheTiles", 256);
    private static final int AREA_PREFETCH_SAMPLE_POINTS = intProperty("tellus.landmask.areaPrefetch.samples", 25);
    private static final int AREA_PREFETCH_TILE_LIMIT = intProperty("tellus.landmask.areaPrefetch.tileLimit", 512);
+   private static final int MEMORY_PREFETCH_TILE_LIMIT = Math.max(1, MAX_CACHE_TILES / 4);
    private static final AtomicBoolean LOGGED_UNAVAILABLE = new AtomicBoolean(false);
    private final PmTilesReader reader;
    private final Path cacheRoot;
@@ -155,7 +157,7 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
    }
 
    public int preloadAreaTaskCount(double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, double worldScale) {
-      return Math.max(1, this.areaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale).size());
+      return Math.max(1, this.areaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale, AREA_PREFETCH_TILE_LIMIT).size());
    }
 
    public int preloadAreaInputs(
@@ -212,7 +214,9 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
    ) {
       BiConsumer<Integer, String> progress = progressConsumer == null ? (completed, detail) -> {
       } : progressConsumer;
-      List<TellusLandMaskSource.TileKey> keys = this.areaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale);
+      // Tiles loaded into memory beyond a share of the cache evict each other before they are read.
+      int tileLimit = loadIntoMemory ? Math.min(AREA_PREFETCH_TILE_LIMIT, MEMORY_PREFETCH_TILE_LIMIT) : AREA_PREFETCH_TILE_LIMIT;
+      List<TellusLandMaskSource.TileKey> keys = this.areaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale, tileLimit);
       if (keys.isEmpty()) {
          progress.accept(completedUnits, "Skipping land mask preload because land mask data is unavailable");
          return completedUnits + 1;
@@ -243,7 +247,7 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
    }
 
    private List<TellusLandMaskSource.TileKey> areaTileKeys(
-      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, double worldScale
+      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, double worldScale, int tileLimit
    ) {
       if (!this.available || worldScale <= 0.0) {
          return List.of();
@@ -251,7 +255,7 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
 
       LinkedHashSet<TellusLandMaskSource.TileKey> keys = new LinkedHashSet<>();
       TellusLandMaskSource.TileBounds bounds = this.tileBoundsForArea(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale);
-      if (bounds != null && bounds.count() <= AREA_PREFETCH_TILE_LIMIT) {
+      if (bounds != null && bounds.count() <= tileLimit) {
          for (int tileY = bounds.minY(); tileY <= bounds.maxY(); tileY++) {
             for (int tileX = bounds.minX(); tileX <= bounds.maxX(); tileX++) {
                keys.add(new TellusLandMaskSource.TileKey(bounds.zoom(), tileX, tileY));
@@ -369,6 +373,9 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
          return raced == null ? local : raced;
       } catch (IOException error) {
          Tellus.LOGGER.debug("Failed to read cached land mask tile {}", key, error);
+         if (SourceInterrupts.isInterruption(error)) {
+            return null;
+         }
          try {
             Files.deleteIfExists(cachePath);
          } catch (IOException deleteError) {
@@ -386,6 +393,7 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
          try {
             return decodeTile(readCachedTile(cachePath));
          } catch (IOException invalidCache) {
+            SourceInterrupts.throwIfInterruption(invalidCache);
             Files.deleteIfExists(cachePath);
             Tellus.LOGGER.debug("Discarded invalid cached land mask tile {}", resolvedKey, invalidCache);
          }
@@ -452,6 +460,7 @@ public final class TellusLandMaskSource implements TellusCacheHandle {
             validateTileBytes(readCachedTile(cachePath));
             return;
          } catch (IOException invalidCache) {
+            SourceInterrupts.throwIfInterruption(invalidCache);
             try {
                Files.deleteIfExists(cachePath);
             } catch (IOException deleteError) {

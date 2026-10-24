@@ -68,6 +68,23 @@ class EarthGeneratorSettingsCodecTest {
    }
 
    @Test
+   void cityLightsDistanceDefaultsTo1024ChunksAndRoundTrips() {
+      assertEquals(1024, EarthGeneratorSettings.DEFAULT.distantHorizonsCityLightsDistance());
+      // Worlds saved before the setting existed load with the default.
+      EarthGeneratorSettings legacy = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString("{\"height_offset\":48}")));
+      assertEquals(1024, legacy.distantHorizonsCityLightsDistance());
+      assertFalse(legacy.distantHorizonsCityLightsUnlimited());
+
+      for (int distance : new int[]{256, 4096, EarthGeneratorSettings.DH_CITY_LIGHTS_UNLIMITED}) {
+         EarthGeneratorSettings settings = EarthGeneratorSettings.DEFAULT.withDistantHorizonsCityLightsDistance(distance);
+         JsonElement encoded = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, settings));
+         assertEquals(distance, encoded.getAsJsonObject().get("distant_horizons_city_lights_distance").getAsInt());
+         assertEquals(settings, requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, encoded)));
+      }
+      assertTrue(EarthGeneratorSettings.DEFAULT.withDistantHorizonsCityLightsDistance(0).distantHorizonsCityLightsUnlimited());
+   }
+
+   @Test
    void legacySeaLevelSettingIsIgnored() {
       JsonElement input = JsonParser.parseString("{\"height_offset\":48,\"sea_level\":73}");
 

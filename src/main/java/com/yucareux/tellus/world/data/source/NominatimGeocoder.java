@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -28,13 +29,15 @@ public class NominatimGeocoder implements Geocoder {
    private static final String REVERSE_URL = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=10&accept-language=%s&lat=%.6f&lon=%.6f";
    private static final String DEFAULT_LANGUAGE = "en";
    private static final int GET_LIMIT = 8;
-   private static final int SUGGEST_LIMIT = 5;
-   private static final int SUGGEST_FETCH_LIMIT = 10;
    private static final int CONNECT_TIMEOUT_MS = 5000;
    private static final int READ_TIMEOUT_MS = 12000;
    private static final int TIMEOUT_RETRIES = 1;
    private static final int RETRY_BACKOFF_MS = 300;
    private static final int MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+   // Nominatim's usage policy allows at most one request per second, so map searches and the server's weather reports share this gate.
+   private static final long MIN_REQUEST_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L);
+   private static final Object REQUEST_GATE = new Object();
+   private static long nextRequestNanos = System.nanoTime();
    private static final Pattern DIACRITIC_PATTERN = Pattern.compile("\\p{M}+");
    private static final Pattern NON_SEARCH_CHARACTER_PATTERN = Pattern.compile("[^\\p{L}\\p{Nd}]+");
    private static final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s+");
@@ -64,32 +67,13 @@ public class NominatimGeocoder implements Geocoder {
          Tellus.LOGGER.warn("Geocoder timed out for: {}", place);
          Tellus.LOGGER.debug("Geocoder timeout details", var9);
       } catch (IOException var10) {
-         Tellus.LOGGER.error("Failed to geocode place: {}", place, var10);
+         // Closing the search screen interrupts a search that waits for its request slot.
+         if (!SourceInterrupts.isInterruption(var10)) {
+            Tellus.LOGGER.error("Failed to geocode place: {}", place, var10);
+         }
       }
 
       return null;
-   }
-
-   @Override
-   public Geocoder.Suggestion[] suggest(String place) {
-      try {
-         List<NominatimGeocoder.SearchCandidate> candidates = this.search(place, SUGGEST_FETCH_LIMIT);
-         List<Geocoder.Suggestion> suggestions = new ArrayList<>(SUGGEST_LIMIT);
-
-         for (int i = 0; i < candidates.size() && suggestions.size() < SUGGEST_LIMIT; i++) {
-            NominatimGeocoder.SearchCandidate candidate = candidates.get(i);
-            suggestions.add(new Geocoder.Suggestion(candidate.displayName(), candidate.latitude(), candidate.longitude()));
-         }
-
-         return suggestions.toArray(new Geocoder.Suggestion[0]);
-      } catch (SocketTimeoutException var13) {
-         Tellus.LOGGER.warn("Geocoder timed out for: {}", place);
-         Tellus.LOGGER.debug("Geocoder timeout details", var13);
-      } catch (IOException var14) {
-         Tellus.LOGGER.error("Failed to suggest places for: {}", place, var14);
-      }
-
-      return new Geocoder.Suggestion[0];
    }
 
    public NominatimGeocoder.Location reverse(double latitude, double longitude) throws IOException {
@@ -157,6 +141,7 @@ public class NominatimGeocoder implements Geocoder {
       int attempt = 0;
 
       while (attempt <= TIMEOUT_RETRIES) {
+         awaitRequestSlot();
          HttpURLConnection connection = (HttpURLConnection)uri.toURL().openConnection();
          try {
             connection.setRequestProperty("User-Agent", "Tellus/2.0.0 (Minecraft Mod)");
@@ -202,6 +187,22 @@ public class NominatimGeocoder implements Geocoder {
       }
 
       throw lastError != null ? lastError : new IOException("Geocoder query failed");
+   }
+
+   static void awaitRequestSlot() throws IOException {
+      synchronized (REQUEST_GATE) {
+         long waitNanos = nextRequestNanos - System.nanoTime();
+         if (waitNanos > 0L) {
+            try {
+               TimeUnit.NANOSECONDS.sleep(waitNanos);
+            } catch (InterruptedException error) {
+               Thread.currentThread().interrupt();
+               throw new IOException("Geocoder request interrupted", error);
+            }
+         }
+
+         nextRequestNanos = System.nanoTime() + MIN_REQUEST_INTERVAL_NANOS;
+      }
    }
 
    static NominatimGeocoder.Location parseLocation(JsonObject object) {

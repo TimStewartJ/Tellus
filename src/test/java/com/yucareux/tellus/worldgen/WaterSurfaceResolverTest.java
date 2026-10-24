@@ -238,11 +238,17 @@ class WaterSurfaceResolverTest {
    }
 
    @Test
-   void limitsNaturalizedInlandBanksToOneBlockOfRisePerBlock() {
-      assertEquals(81, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 10, 5, true));
-      assertEquals(82, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 20, 5, true));
-      assertEquals(85, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 50, 5, true));
-      assertEquals(84, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 20, 5, false));
+   void inlandBankRecoversOriginalTerrainWithoutAnOuterCliffRing() {
+      int previous = 80;
+      for (int distance = 0; distance <= 5; distance++) {
+         int limited = WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, distance * 10, 5, true);
+         int unrestricted = WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, distance * 10, 5, false);
+         assertTrue(limited >= previous && limited <= 90);
+         assertTrue(unrestricted >= limited && unrestricted <= 90);
+         previous = limited;
+      }
+      assertEquals(90, previous, "The blend must meet the original terrain at its outer edge");
+      assertEquals(90, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 60, 5, true));
       assertEquals(79, WaterSurfaceResolver.naturalizedInlandBankSurface(79, 80, 10, 5, true));
    }
 

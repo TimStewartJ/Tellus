@@ -37,8 +37,12 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -82,11 +86,24 @@ public class TellusCommon {
    private static final TellusRealtimeManager REALTIME_MANAGER = new TellusRealtimeManager();
    private static final TellusVoxyPregenManager VOXY_PREGEN_MANAGER = new TellusVoxyPregenManager();
    private static final ManagedTerrainDownloadManager MANAGED_TERRAIN_DOWNLOAD_MANAGER = new ManagedTerrainDownloadManager();
+   private static final Map<UUID, CompletableFuture<BlockPos>> GEO_TELEPORT_LOOKUPS = new ConcurrentHashMap<>();
    public static final Logger LOGGER = LoggerFactory.getLogger("tellus");
 
 
    public static void validateRuntime() {
+      configureHttpKeepAlive();
       ExperimentalHeightSupport.validateActiveRuntimeProfileOrThrow();
+   }
+
+   /**
+    * Terrain sources fetch thousands of small HTTP ranges from a handful of hosts. The JDK keeps only five
+    * idle keep-alive sockets per host by default, so parallel downloads keep re-running TCP/TLS handshakes.
+    * Raise the limit unless the user configured it; it applies if no HTTP connection has been pooled yet.
+    */
+   private static void configureHttpKeepAlive() {
+      if (System.getProperty("http.maxConnections") == null) {
+         System.setProperty("http.maxConnections", "32");
+      }
    }
 
    public static void initializeRuntime(TellusRuntimePlatform runtime) {
@@ -202,7 +219,7 @@ public class TellusCommon {
             logOverworldSettings(server, world, generator);
             if (generator instanceof EarthChunkGenerator earthGenerator) {
                ExperimentalHeightSupport.configureWorldBorder(earthGenerator.settings(), world.getWorldBorder());
-               TellusMinecraftCompat.configureInitialSpawn(world, earthGenerator);
+               // No spawn here: MinecraftServerInitialSpawnMixin sets it once when the world is created, so /setworldspawn survives restarts.
                ensureDynamicDimensionPack(server, world.dimensionTypeRegistration(), world.dimensionType(), earthGenerator);
             }
          }
@@ -630,8 +647,25 @@ public class TellusCommon {
             if (level.getChunkSource().getGenerator() instanceof EarthChunkGenerator earthGenerator) {
                double latitude = clampLatitude(payload.latitude());
                double longitude = clampLongitude(payload.longitude());
-               BlockPos target = earthGenerator.getSurfacePosition(level, latitude, longitude);
-               player.teleportTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
+               // The surface lookup downloads terrain data, so it must not run on the server thread.
+               CompletableFuture<BlockPos> lookup = MinecraftVersionCompat.supplyBackground(
+                  "tellus_geotp", () -> earthGenerator.getSurfacePosition(level, latitude, longitude)
+               );
+               GEO_TELEPORT_LOOKUPS.put(player.getUUID(), lookup);
+               lookup.whenCompleteAsync((target, error) -> {
+                  // Only the player's latest request teleports, and only while they are still in that level.
+                  if (!GEO_TELEPORT_LOOKUPS.remove(player.getUUID(), lookup)
+                     || player.isRemoved()
+                     || MinecraftVersionCompat.serverLevel(player) != level) {
+                     return;
+                  }
+
+                  if (error != null) {
+                     LOGGER.warn("Failed to find the teleport surface at lat={}, lon={}", latitude, longitude, error);
+                  } else {
+                     player.teleportTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
+                  }
+               }, server);
             } else {
                player.sendSystemMessage(Component.translatable("tellus.command.geotp.tellus_world_only"));
             }

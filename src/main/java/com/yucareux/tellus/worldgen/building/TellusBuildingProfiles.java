@@ -2,6 +2,7 @@ package com.yucareux.tellus.worldgen.building;
 
 import com.yucareux.tellus.world.data.osm.OsmBuildingFeature;
 import com.yucareux.tellus.world.data.osm.OsmBuildingMetadata;
+import com.yucareux.tellus.worldgen.EarthProjection;
 import java.util.Locale;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
@@ -14,35 +15,35 @@ public final class TellusBuildingProfiles {
 
    public static BuildingProfile resolveProfile(OsmBuildingFeature feature, double worldScale, Holder<Biome> biome, boolean interiorsEnabled) {
       OsmBuildingMetadata metadata = feature.metadata();
-      int floorCount = Math.max(Math.max(1, metadata.floorCount()), inferFloorCount(feature.heightMeters()));
+      int realFloorCount = Math.max(Math.max(1, metadata.floorCount()), inferFloorCount(feature.heightMeters()));
       double area = feature.areaSquareMeters();
-      BuildingProfile.BuildingCategory category = resolveCategory(metadata, area, floorCount, feature.heightMeters(), feature);
-      if (category == BuildingProfile.BuildingCategory.TALL_BUILDING
-         || category == BuildingProfile.BuildingCategory.GLASSY_SKYSCRAPER
-         || category == BuildingProfile.BuildingCategory.MODERN_SKYSCRAPER
-         || category == BuildingProfile.BuildingCategory.TOWER) {
-         floorCount = Math.max(floorCount, inferFloorCount(feature.heightMeters()));
-      } else if (category == BuildingProfile.BuildingCategory.GARAGE
+      BuildingProfile.BuildingCategory category = resolveCategory(metadata, area, realFloorCount, feature.heightMeters(), feature);
+      boolean singleStorey = category == BuildingProfile.BuildingCategory.GARAGE
          || category == BuildingProfile.BuildingCategory.SHED
-         || category == BuildingProfile.BuildingCategory.GREENHOUSE) {
-         floorCount = 1;
-      }
+         || category == BuildingProfile.BuildingCategory.GREENHOUSE;
 
       BuildingProfile.Archetype archetype = archetypeForCategory(category);
       BuildingProfile.ClimateFamily climate = climateFamily(biome);
-      int storeyHeightBlocks = interiorsEnabled ? 4 : Math.max(1, (int)Math.round(DEFAULT_STOREY_METERS / Math.max(1.0, worldScale)));
+      double projection = EarthProjection.heightScaleCorrectionAtLatitude(feature.centroidLat());
+      int storeyHeightBlocks = interiorsEnabled ? 4 : Math.max(1, (int)Math.round(DEFAULT_STOREY_METERS * projection / Math.max(1.0, worldScale)));
       BuildingProfile.RoofProfile roofProfile = resolveRoofProfile(metadata, category, archetype, feature);
       int parapetHeight = switch (category) {
          case HOUSE, FARM, GARAGE, SHED, GREENHOUSE -> 0;
          case TOWER, TALL_BUILDING, GLASSY_SKYSCRAPER, MODERN_SKYSCRAPER -> 2;
          default -> 1;
       };
+      // Storeys fill the part's real height in blocks; the roof sits inside that height, as OSM's height includes it.
+      double wallBlocks = Math.max(0.0, feature.heightMeters() - Math.max(0.0, feature.minHeightMeters())) * heightBlocksPerMeter(feature, worldScale);
+      int floorCount = singleStorey ? 1 : storeysFor(wallBlocks, storeyHeightBlocks);
       int roofRise = switch (roofProfile) {
-         case GABLED_X, GABLED_Z, HIPPED, PYRAMIDAL, SKILLION, DOME -> pitchedRoofRise(feature, worldScale, floorCount, storeyHeightBlocks);
+         case GABLED_X, GABLED_Z, HIPPED, PYRAMIDAL, SKILLION, DOME -> pitchedRoofRise(feature, worldScale, projection, floorCount, storeyHeightBlocks);
          case FLAT_CROWN -> 2;
          case FLAT_SKYLIGHT -> 1;
          case FLAT, FLAT_PARAPET -> 0;
       };
+      if (!singleStorey) {
+         floorCount = storeysFor(wallBlocks - roofRise, storeyHeightBlocks);
+      }
       int setbackEveryFloors = 0;
       int maxSetback = 0;
       if (floorCount >= 12 || archetype == BuildingProfile.Archetype.TOWER) {
@@ -74,6 +75,26 @@ public final class TellusBuildingProfiles {
 
    public static int inferFloorCount(double heightMeters) {
       return Math.max(1, (int)Math.round(heightMeters / DEFAULT_STOREY_METERS));
+   }
+
+   /**
+    * Blocks per metre of building height. Mercator enlarges footprints by
+    * sec(latitude), so heights take the same factor to keep real proportions.
+    */
+   public static double heightBlocksPerMeter(OsmBuildingFeature feature, double worldScale) {
+      return worldScale > 0.0 ? EarthProjection.heightScaleCorrectionAtLatitude(feature.centroidLat()) / worldScale : 0.0;
+   }
+
+   public static int heightBlocks(OsmBuildingFeature feature, double worldScale) {
+      return Math.max(3, (int)Math.round(feature.heightMeters() * heightBlocksPerMeter(feature, worldScale)));
+   }
+
+   public static int minHeightBlocks(OsmBuildingFeature feature, double worldScale) {
+      return Math.max(0, (int)Math.round(feature.minHeightMeters() * heightBlocksPerMeter(feature, worldScale)));
+   }
+
+   private static int storeysFor(double wallBlocks, int storeyHeightBlocks) {
+      return Math.max(1, (int)Math.round(wallBlocks / storeyHeightBlocks));
    }
 
    static BuildingProfile.BuildingCategory resolveCategory(
@@ -231,8 +252,8 @@ public final class TellusBuildingProfiles {
       };
    }
 
-   private static int pitchedRoofRise(OsmBuildingFeature feature, double worldScale, int floorCount, int storeyHeightBlocks) {
-      double scaledFootprint = Math.sqrt(Math.max(1.0, feature.areaSquareMeters())) / Math.max(1.0, worldScale);
+   private static int pitchedRoofRise(OsmBuildingFeature feature, double worldScale, double projection, int floorCount, int storeyHeightBlocks) {
+      double scaledFootprint = Math.sqrt(Math.max(1.0, feature.areaSquareMeters())) * projection / Math.max(1.0, worldScale);
       int spanRise = (int)Math.round(scaledFootprint / 3.5);
       int wallCap = Math.max(2, (int)Math.round(floorCount * storeyHeightBlocks * 0.6));
       return Math.max(2, Math.min(Math.min(6, wallCap), Math.max(spanRise, (int)Math.round(feature.heightMeters() / 8.0))));

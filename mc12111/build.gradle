@@ -25,7 +25,6 @@ ext.tellus = [
 		'com/yucareux/tellus/platform/FabricNetworkingVersionCompat.java',
 	],
 	overriddenSharedClientSources: [
-		'com/yucareux/tellus/client/compat/AbstractTellusButton.java',
 		'com/yucareux/tellus/client/compat/AbstractTellusEditBox.java',
 		'com/yucareux/tellus/client/compat/AbstractTellusScreen.java',
 		'com/yucareux/tellus/client/compat/AbstractTellusWidget.java',

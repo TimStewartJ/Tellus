@@ -1,7 +1,6 @@
 package com.yucareux.tellus.compat;
 
 import com.google.gson.JsonObject;
-import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import net.minecraft.SharedConstants;
 import net.minecraft.commands.CommandSourceStack;
@@ -24,11 +23,6 @@ public final class TellusMinecraftCompat {
 
    public static boolean hasGamemasterPermission(CommandSourceStack source) {
       return source.hasPermission(2);
-   }
-
-   public static void configureInitialSpawn(ServerLevel level, EarthChunkGenerator generator) {
-      BlockPos spawn = generator.getSpawnPosition(level);
-      level.setDefaultSpawnPos(spawn, 0.0F);
    }
 
    public static boolean vanillaPrecipitationIsSnow(Biome biome, BlockPos position, ServerLevel level) {

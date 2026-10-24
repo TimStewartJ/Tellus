@@ -31,6 +31,25 @@ public final class TellusBuildingBlueprints {
       int baseY, int floorY, int roofBaseY, int topY, List<RoadFeature> nearbyRoads,
       double worldScale, List<OsmBuildingFeature> nearbyBuildings
    ) {
+      return create(groupId, feature, profile, worldSeed, baseY, floorY, roofBaseY, topY, nearbyRoads, worldScale, nearbyBuildings, true);
+   }
+
+   /**
+    * Blueprint for exterior-only consumers such as Distant Horizons LODs, which never read the entrance.
+    * Skips the entrance-layout solver (a flood fill over the footprint); every other property is identical.
+    */
+   public static BuildingBlueprint createExterior(
+      String groupId, OsmBuildingFeature feature, BuildingProfile profile, long worldSeed,
+      int baseY, int floorY, int roofBaseY, int topY, double worldScale
+   ) {
+      return create(groupId, feature, profile, worldSeed, baseY, floorY, roofBaseY, topY, List.of(), worldScale, List.of(), false);
+   }
+
+   private static BuildingBlueprint create(
+      String groupId, OsmBuildingFeature feature, BuildingProfile profile, long worldSeed,
+      int baseY, int floorY, int roofBaseY, int topY, List<RoadFeature> nearbyRoads,
+      double worldScale, List<OsmBuildingFeature> nearbyBuildings, boolean resolveEntrance
+   ) {
       Objects.requireNonNull(groupId, "groupId");
       Objects.requireNonNull(feature, "feature");
       Objects.requireNonNull(profile, "profile");
@@ -42,7 +61,7 @@ public final class TellusBuildingBlueprints {
       BuildingStyle style = TellusBuildingStyles.resolveBuildingStyle(
          profile, feature.metadata(), feature.areaSquareMeters(), maxWorldX - minWorldX + 1, maxWorldZ - minWorldZ + 1, seed
       );
-      BuildingEntranceLayout.Placement entrance = profile.interiorsEnabled() && feature.minHeightMeters() <= 0
+      BuildingEntranceLayout.Placement entrance = resolveEntrance && profile.interiorsEnabled() && feature.minHeightMeters() <= 0
          ? BuildingEntranceLayout.resolve(feature, nearbyRoads == null ? List.of() : nearbyRoads, nearbyBuildings,
             worldScale, minWorldX, maxWorldX, minWorldZ, maxWorldZ) : null;
       return new BuildingBlueprint(groupId, seed, profile, style, baseY, floorY, roofBaseY, topY,

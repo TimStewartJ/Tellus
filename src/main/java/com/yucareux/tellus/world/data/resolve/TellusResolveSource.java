@@ -33,6 +33,13 @@ public final class TellusResolveSource {
    private static final int MAX_HEIGHT = 32_768;
    private static final int MAX_RUN_COUNT = 4_000_000;
    private static final int MAX_ECOREGION_ID = 4_096;
+   private static final double WARP_BROAD_WAVELENGTH_CELLS = 4.5;
+   private static final double WARP_BROAD_AMPLITUDE_CELLS = 1.1;
+   private static final double WARP_DETAIL_WAVELENGTH_CELLS = 1.3;
+   private static final double WARP_DETAIL_AMPLITUDE_CELLS = 0.35;
+   private static final long WARP_X_SEED = 0x2F6D9B41C83A5E17L;
+   private static final long WARP_Z_SEED = -0x61B2C9E4A7D3F05BL;
+   private static final long WARP_DETAIL_SALT = 0x4C1E8A7B39D6F25DL;
 
    private final String lookupResource;
    private final String metadataResource;
@@ -67,9 +74,60 @@ public final class TellusResolveSource {
          return ResolveEcoregion.UNKNOWN;
       }
 
+      // A nearest-cell lookup draws every ecoregion border, and the biomes and trees that follow
+      // it, as a staircase of 30" cells (926 m; 31 blocks at 1:30). A smooth warp of about a cell,
+      // fixed in block space, bends those borders into natural curves.
+      Dataset loaded = this.dataset();
+      if (loaded.available()) {
+         double cellBlocks = blocksPerDegree * loaded.lookup().arcsecondsPerCell() / 3600.0;
+         double warpX = warp(blockX, blockZ, cellBlocks, WARP_X_SEED);
+         double warpZ = warp(blockX, blockZ, cellBlocks, WARP_Z_SEED);
+         blockX += warpX;
+         blockZ += warpZ;
+      }
+
       double longitude = blockX / blocksPerDegree;
       double latitude = EarthProjection.blockZToLat(blockZ, worldScale);
       return this.sampleAtLonLat(longitude, latitude);
+   }
+
+   private static double warp(double blockX, double blockZ, double cellBlocks, long seed) {
+      if (!(Double.isFinite(cellBlocks) && cellBlocks > 1.0)) {
+         return 0.0;
+      }
+      double broadBlocks = cellBlocks * WARP_BROAD_WAVELENGTH_CELLS;
+      double detailBlocks = cellBlocks * WARP_DETAIL_WAVELENGTH_CELLS;
+      double broad = valueNoise(blockX / broadBlocks, blockZ / broadBlocks, seed) * 2.0 - 1.0;
+      double detail = valueNoise(blockX / detailBlocks + 23.5, blockZ / detailBlocks - 7.25, seed ^ WARP_DETAIL_SALT) * 2.0 - 1.0;
+      return (broad * WARP_BROAD_AMPLITUDE_CELLS + detail * WARP_DETAIL_AMPLITUDE_CELLS) * cellBlocks;
+   }
+
+   private static double valueNoise(double x, double z, long seed) {
+      double floorX = Math.floor(x);
+      double floorZ = Math.floor(z);
+      long x0 = (long)floorX;
+      long z0 = (long)floorZ;
+      double fx = smootherStep(x - floorX);
+      double fz = smootherStep(z - floorZ);
+      double north = lerp(fx, hashToUnit(x0, z0, seed), hashToUnit(x0 + 1L, z0, seed));
+      double south = lerp(fx, hashToUnit(x0, z0 + 1L, seed), hashToUnit(x0 + 1L, z0 + 1L, seed));
+      return lerp(fz, north, south);
+   }
+
+   private static double smootherStep(double value) {
+      return value * value * value * (value * (value * 6.0 - 15.0) + 10.0);
+   }
+
+   private static double lerp(double delta, double start, double end) {
+      return start + delta * (end - start);
+   }
+
+   private static double hashToUnit(long x, long z, long seed) {
+      long hash = seed ^ x * -7046029254386353131L ^ z * -4417276706812531889L;
+      hash = (hash ^ hash >>> 33) * -49064778989728563L;
+      hash = (hash ^ hash >>> 33) * -4265267296055464877L;
+      hash ^= hash >>> 33;
+      return (hash >>> 11) * 0x1.0p-53;
    }
 
    public ResolveEcoregion sampleAtLonLat(double longitude, double latitude) {

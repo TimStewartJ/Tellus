@@ -1,0 +1,1380 @@
+diff --git a/api/src/main/java/com/seibel/distanthorizons/api/interfaces/override/worldGenerator/IDhApiWorldGenerator.java b/api/src/main/java/com/seibel/distanthorizons/api/interfaces/override/worldGenerator/IDhApiWorldGenerator.java
+index e7e095447..9907cb795 100644
+--- a/api/src/main/java/com/seibel/distanthorizons/api/interfaces/override/worldGenerator/IDhApiWorldGenerator.java
++++ b/api/src/main/java/com/seibel/distanthorizons/api/interfaces/override/worldGenerator/IDhApiWorldGenerator.java
+@@ -62,6 +62,25 @@ public interface IDhApiWorldGenerator extends Closeable, IDhApiOverrideable
+ 	 * @since API 1.0.0
+ 	 */
+ 	default byte getLargestDataDetailLevel() { return EDhApiDetailLevel.BLOCK.detailLevel; }
++
++	/** Tellus extension: the request may start without waiting for external data. */
++	byte GENERATION_READY = 0;
++	/** Tellus extension: retry this area as smaller requests. */
++	byte GENERATION_SPLIT = 1;
++	/** Tellus extension: retain the request in the queue without occupying a worker. */
++	byte GENERATION_WAIT = 2;
++
++	/**
++	 * Non-blocking readiness check, called before allocating generation resources.
++	 * Implementations must be thread-safe and must not download data here.
++	 * WAIT requests are retried on subsequent queue ticks; they do not prevent
++	 * ready requests farther from the player from running. SPLIT is honored only
++	 * above the smallest section size. The default preserves stock DH behavior.
++	 * This is a Tellus fork extension, not part of upstream API 7.1.0.
++	 */
++	default byte getGenerationAvailability(int chunkPosMinX, int chunkPosMinZ,
++		int generationRequestChunkWidthCount, byte targetDataDetail)
++	{ return GENERATION_READY; }
+ 	
+ 	/** 
+ 	 * Used if {@link #getReturnType()} returns {@link EDhApiWorldGeneratorReturnType#API_CHUNKS} or {@link EDhApiWorldGeneratorReturnType#API_DATA_SOURCES}. <Br> 
+diff --git a/api/src/main/java/com/seibel/distanthorizons/coreapi/ModInfo.java b/api/src/main/java/com/seibel/distanthorizons/coreapi/ModInfo.java
+index 1de5c5059..99b024619 100644
+--- a/api/src/main/java/com/seibel/distanthorizons/coreapi/ModInfo.java
++++ b/api/src/main/java/com/seibel/distanthorizons/coreapi/ModInfo.java
+@@ -43,7 +43,7 @@ public final class ModInfo
+ 	public static final String NAME = "DistantHorizons";
+ 	/** Human-readable version of NAME */
+ 	public static final String READABLE_NAME = "Distant Horizons";
+-	public static final String VERSION = "3.3.1";
++	public static final String VERSION = "3.3.1-tellus.1";
+ 	/** Returns true if the current build is an unstable developer build, false otherwise. */
+ 	public static final boolean IS_DEV_BUILD = VERSION.toLowerCase().contains("dev");
+ 	
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/config/Config.java b/core/src/main/java/com/seibel/distanthorizons/core/config/Config.java
+index 80df95fb8..265d81c6d 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/config/Config.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/config/Config.java
+@@ -973,7 +973,7 @@ public class Config
+ 				public static ConfigUIComment autoUpdaterHeader = new ConfigUIComment.Builder().setParentConfigClass(AutoUpdater.class).build();
+ 				
+ 				public static ConfigEntry<Boolean> enableAutoUpdater = new ConfigEntry.Builder<Boolean>()
+-					.set(!isRunningInDevEnvironment())
++					.set(false)
+ 					.comment(""
+ 						+ "Automatically check for updates on game launch? \n"
+ 						+ "")
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV1.java b/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV1.java
+index ff63b7d24..ac3044eed 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV1.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV1.java
+@@ -251,7 +251,14 @@ public class FullDataSourceV1
+ 				{
+ 					for (long dataPoint : dataColumn)
+ 					{
+-						outputStream.writeLong(dataPoint);
++						try
++						{
++							outputStream.writeLong(FullDataPointUtil.toLegacyDataPoint(dataPoint));
++						}
++						catch (DataCorruptedException e)
++						{
++							throw new IOException(e);
++						}
+ 					}
+ 				}
+ 			}
+@@ -321,7 +328,14 @@ public class FullDataSourceV1
+ 			{
+ 				for (int y = 0; y < dataPointArrays[xz].length; y++)
+ 				{
+-					dataPointArrays[xz][y] = dataInputStream.readLong();
++					try
++					{
++						dataPointArrays[xz][y] = FullDataPointUtil.fromLegacyDataPoint(dataInputStream.readLong());
++					}
++					catch (DataCorruptedException e)
++					{
++						throw new IOException(e);
++					}
+ 				}
+ 			}
+ 		}
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV2.java b/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV2.java
+index 4bb1f2247..5ee1b6f11 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV2.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/dataObjects/fullData/sources/FullDataSourceV2.java
+@@ -1123,20 +1123,6 @@ public class FullDataSourceV2
+ 				int inputIndex = relativePosToIndex(inputX, inputZ);
+ 				
+ 				
+-				// world gen //
+-				
+-				// a separate generation step needs to be used so can replace
+-				// this data with higher-quality data when it is available
+-				byte inputGenStep = EDhApiWorldGenerationStep.DOWN_SAMPLED.value;
+-				this.columnGenerationSteps.set(recipientIndex, inputGenStep);
+-				
+-				
+-				// world compression //
+-				byte worldCompressionMode = inputDataSource.columnWorldCompressionMode.getByte(recipientIndex);
+-				this.columnWorldCompressionMode.set(recipientIndex, worldCompressionMode);
+-				
+-				
+-				
+ 				// data points //
+ 				
+ 				// check if this column should be downsampled
+@@ -1160,12 +1146,19 @@ public class FullDataSourceV2
+ 				
+ 				if (downSampleColumn)
+ 				{
++					// Mark only columns that actually receive lower-detail data.
++					// Existing generated child columns must retain their metadata.
++					this.columnGenerationSteps.set(recipientIndex, EDhApiWorldGenerationStep.DOWN_SAMPLED.value);
++					this.columnWorldCompressionMode.set(
++						recipientIndex,
++						inputDataSource.columnWorldCompressionMode.getByte(inputIndex));
++
+ 					LongArrayList inputDataArray = inputDataSource.dataPoints[inputIndex];
+-					
+-					// copy over the new data, this is necessary to prevent remapping issues
++					// Parent and child data sources use independently pooled columns.
++					// Sharing this reference lets ID remapping mutate the parent and
++					// leaves child data pointing at storage that the parent later releases.
+ 					this.dataPoints[recipientIndex].clear();
+ 					this.dataPoints[recipientIndex].addAll(inputDataArray);
+-					
+ 					this.remapDataColumn(recipientIndex, remappedIds);
+ 					
+ 					if (RUN_DATA_ORDER_VALIDATION)
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/file/fullDatafile/GeneratedFullDataSourceProvider.java b/core/src/main/java/com/seibel/distanthorizons/core/file/fullDatafile/GeneratedFullDataSourceProvider.java
+index bea6ef1aa..20360447c 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/file/fullDatafile/GeneratedFullDataSourceProvider.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/file/fullDatafile/GeneratedFullDataSourceProvider.java
+@@ -400,7 +400,7 @@ public class GeneratedFullDataSourceProvider extends FullDataSourceProviderV2 im
+ 						byte genStepByte = columnGenStepArray.getByte(i);
+ 						if (genStepByte == EDhApiWorldGenerationStep.EMPTY.value
+ 							|| genStepByte == EDhApiWorldGenerationStep.DOWN_SAMPLED.value
+-							|| genStepByte <= requiredWorldGenStep.value)
++							|| genStepByte < requiredWorldGenStep.value)
+ 						{
+ 							positionFullyGenerated = false;
+ 							break;
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationQueue.java b/core/src/main/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationQueue.java
+index a1150d7f0..d79c079e4 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationQueue.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationQueue.java
+@@ -86,8 +86,8 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 	 * and doesn't generally come up in normal gameplay.
+ 	 */
+ 	private final ExecutorService queueingThread = ThreadUtil.makeSingleThreadPool("World Gen Queue");
+-	private boolean generationQueueRunning = false;
+-	private DhBlockPos2D generationTargetPos = DhBlockPos2D.ZERO;
++	private volatile boolean generationQueueRunning = false;
++	private volatile DhBlockPos2D generationTargetPos = DhBlockPos2D.ZERO;
+ 		
+ 	/** just used for rendering to the F3 menu */
+ 	private long estimatedRemainingChunkCount = 0;
+@@ -292,22 +292,9 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 		}
+ 		
+ 		
+-		// find the closest task
+-		TaskDistancePair closestTaskPair = this.waitingTaskByPos.reduceEntries(1024,
+-			// get the target distance for each task
+-			(Map.Entry<Long, DataSourceRetrievalTask> entry) ->
+-			{ 
+-				DataSourceRetrievalTask task = entry.getValue();
+-				int distance = DhSectionPos.getCenterBlockPos(task.pos).chebyshevDist(targetPos);
+-				distance /= DhSectionPos.getDetailLevel(task.pos); // generate low detail LODs first 
+-				return new TaskDistancePair(entry.getValue(), distance);
+-			},
+-			// find the closest task
+-			(TaskDistancePair aTaskPair, TaskDistancePair bTaskPair) ->
+-			{
+-				return (aTaskPair.dist < bTaskPair.dist) ? aTaskPair : bTaskPair;
+-			});
+-		
++		WorldGenerationTaskSelector.Selection closestTaskPair = WorldGenerationTaskSelector.findClosest(
++			this.waitingTaskByPos.values(), this.generator, targetPos);
++
+ 		if (closestTaskPair == null)
+ 		{
+ 			// the waitingTasks was modified while this check was running
+@@ -316,10 +303,14 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 		DataSourceRetrievalTask closestTask = closestTaskPair.task;
+ 		
+ 		// remove the task we found, we are going to start it and don't want to run it multiple times
+-		this.waitingTaskByPos.remove(closestTask.pos, closestTask);
++		if (!this.waitingTaskByPos.remove(closestTask.pos, closestTask) || closestTask.future.isDone())
++		{
++			return true;
++		}
+ 		
+ 		// do we need to modify this task to generate it?
+-		if (this.canGenerateDetailLevel(DhSectionPos.getDetailLevel(closestTask.pos)))
++		if (closestTaskPair.availability == IDhApiWorldGenerator.GENERATION_READY
++			&& this.canGenerateDetailLevel(DhSectionPos.getDetailLevel(closestTask.pos)))
+ 		{
+ 			// detail level is correct for generation, start generation
+ 			
+@@ -381,13 +372,24 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 		//	"World gen task started that isn't within the range that the generator can create.");
+ 		
+ 		long generationStartMsTime = System.currentTimeMillis();
+-		CompletableFuture<FullDataSourceV2> generationFuture = this.startGenerationEvent(worldGenTask);
++		CompletableFuture<FullDataSourceV2> generationFuture;
++		try
++		{
++			generationFuture = this.startGenerationEvent(worldGenTask);
++		}
++		catch (Exception error)
++		{
++			this.inProgressGenTasksByLodPos.remove(taskPos, worldGenTask);
++			worldGenTask.future.completeExceptionally(error);
++			LOGGER.error("Unable to start world gen task at " + DhSectionPos.toString(taskPos), error);
++			return;
++		}
+ 		
+ 		// calculate generation speed
+ 		generationFuture.thenRun(() -> 
+ 		{
+ 			long totalGenTimeInMs = System.currentTimeMillis() - generationStartMsTime;
+-			int chunkCount = worldGenTask.widthInChunks * worldGenTask.widthInChunks;
++			long chunkCount = (long) worldGenTask.widthInChunks * worldGenTask.widthInChunks;
+ 			double timePerChunk = (double)totalGenTimeInMs / (double)chunkCount;
+ 			this.rollingAverageChunkGenTimeInMs.add(timePerChunk);
+ 		});
+@@ -414,7 +416,10 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 					boolean taskRemoved = this.inProgressGenTasksByLodPos.remove(taskPos, worldGenTask);
+ 					LodUtil.assertTrue(taskRemoved, "Unable to find in progress generator task with position ["+DhSectionPos.toString(taskPos)+"]");
+ 					
+-					worldGenTask.future.complete(DataSourceRetrievalResult.CreateSuccess(taskPos, fullDataSource));
++					if (!worldGenTask.future.complete(DataSourceRetrievalResult.CreateSuccess(taskPos, fullDataSource)))
++					{
++						fullDataSource.close();
++					}
+ 				}
+ 			}
+ 			catch (Exception e)
+@@ -424,6 +429,8 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 			}
+ 			finally
+ 			{
++				// Failed generation must release its slot too, or retries eventually stall the queue.
++				this.inProgressGenTasksByLodPos.remove(taskPos, worldGenTask);
+ 				this.tryQueueNewWorldGenRequestsAsync();
+ 			}
+ 			
+@@ -591,15 +598,26 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 		// apply to parents up to the top of the tree
+ 		pooledDataSource.applyToParent = DhSectionPos.getDetailLevel(pooledDataSource.getPos()) < FullDataSourceProviderV2.ROOT_SECTION_DETAIL_LEVEL;
+ 		
+-		CompletableFuture<Void> lodGenFuture = this.generator.generateLod(
+-			chunkPosMin.getX(), chunkPosMin.getZ(),
+-			DhSectionPos.getX(task.pos), DhSectionPos.getZ(task.pos),
+-			(byte) (DhSectionPos.getDetailLevel(task.pos) - DhSectionPos.SECTION_MINIMUM_DETAIL_LEVEL),
+-			pooledDataSource,
+-			generatorMode,
+-			ThreadPoolUtil.getWorldGenExecutor(),
+-			(IDhApiFullDataSource apiDataSource) -> { }
+-		);
++		CompletableFuture<Void> lodGenFuture;
++		try
++		{
++			lodGenFuture = this.generator.generateLod(
++				chunkPosMin.getX(), chunkPosMin.getZ(),
++				DhSectionPos.getX(task.pos), DhSectionPos.getZ(task.pos),
++				(byte) (DhSectionPos.getDetailLevel(task.pos) - DhSectionPos.SECTION_MINIMUM_DETAIL_LEVEL),
++				pooledDataSource,
++				generatorMode,
++				ThreadPoolUtil.getWorldGenExecutor(),
++				(IDhApiFullDataSource apiDataSource) -> { }
++			);
++		}
++		catch (Exception error)
++		{
++			pooledDataSource.recordLastSeen();
++			pooledDataSource.close();
++			returnFuture.completeExceptionally(error);
++			return returnFuture;
++		}
+ 		
+ 		
+ 		lodGenFuture.exceptionally((throwable) ->
+@@ -791,27 +809,4 @@ public class WorldGenerationQueue implements IFullDataSourceRetrievalQueue, IDeb
+ 	
+ 	
+ 	
+-	//================//
+-	// helper classes //
+-	//================//
+-	//region helper classes
+-	
+-	/** Used during task starting to determine the closest task */
+-	private static class TaskDistancePair
+-	{
+-		public final DataSourceRetrievalTask task;
+-		public final int dist;
+-		
+-		public TaskDistancePair(DataSourceRetrievalTask task, int dist)
+-		{
+-			this.task = task;
+-			this.dist = dist;
+-		}
+-		
+-	}
+-	
+-	//endregion helper classes
+-	
+-	
+-	
+ }
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/jar/updater/SelfUpdater.java b/core/src/main/java/com/seibel/distanthorizons/core/jar/updater/SelfUpdater.java
+index e3a3cc0b1..f455d3021 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/jar/updater/SelfUpdater.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/jar/updater/SelfUpdater.java
+@@ -75,7 +75,7 @@ public class SelfUpdater
+ 	 */
+ 	public static boolean onStart()
+ 	{
+-		if (!Config.Client.Advanced.AutoUpdater.enableAutoUpdater.get())
++		if (ModInfo.VERSION.contains("tellus") || !Config.Client.Advanced.AutoUpdater.enableAutoUpdater.get())
+ 		{
+ 			LOGGER.info("Distant Horizons auto update disabled.");
+ 			return false;
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/sql/dto/FullDataSourceV2DTO.java b/core/src/main/java/com/seibel/distanthorizons/core/sql/dto/FullDataSourceV2DTO.java
+index 525076f5c..01ab5821f 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/sql/dto/FullDataSourceV2DTO.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/sql/dto/FullDataSourceV2DTO.java
+@@ -61,6 +61,8 @@ public class FullDataSourceV2DTO
+ 	public static class DATA_FORMAT
+ 	{
+ 		public static final int V1_NO_ADJACENT_DATA = 1;
++		/** Written by the previous Tellus height fork; its payload uses the V2 encoding. */
++		public static final int V3_TELLUS_TALL_Y = 3;
+ 		public static final int V2_LATEST = 2;
+ 	}
+ 	
+@@ -200,10 +202,11 @@ public class FullDataSourceV2DTO
+ 	{
+ 		// format validation //
+ 		
+-		if (this.dataFormatVersion != DATA_FORMAT.V1_NO_ADJACENT_DATA 
+-			&& this.dataFormatVersion != DATA_FORMAT.V2_LATEST)
++		if (this.dataFormatVersion != DATA_FORMAT.V1_NO_ADJACENT_DATA
++			&& this.dataFormatVersion != DATA_FORMAT.V2_LATEST
++			&& this.dataFormatVersion != DATA_FORMAT.V3_TELLUS_TALL_Y)
+ 		{
+-			throw new IllegalStateException("Data source population only supports formats: ["+DATA_FORMAT.V1_NO_ADJACENT_DATA +","+DATA_FORMAT.V2_LATEST +"], data format found: ["+this.dataFormatVersion+"].");
++			throw new IllegalStateException("Data source population only supports formats: ["+DATA_FORMAT.V1_NO_ADJACENT_DATA+","+DATA_FORMAT.V2_LATEST+","+DATA_FORMAT.V3_TELLUS_TALL_Y+"], data format found: ["+this.dataFormatVersion+"].");
+ 		}
+ 		
+ 		if (direction != null
+@@ -336,7 +339,14 @@ public class FullDataSourceV2DTO
+ 				// write column data (will be skipped if no data was present)
+ 				for (int y = 0; y < columnLength; y++)
+ 				{
+-					compressedOut.writeLong(dataColumn.getLong(y));
++					try
++					{
++						compressedOut.writeLong(FullDataPointUtil.toLegacyDataPoint(dataColumn.getLong(y)));
++					}
++					catch (DataCorruptedException e)
++					{
++						throw new IOException(e);
++					}
+ 				}
+ 			}
+ 		}
+@@ -365,7 +375,7 @@ public class FullDataSourceV2DTO
+ 				// read column data (will be skipped if no data was present)
+ 				for (int y = 0; y < dataColumnLength; y++)
+ 				{
+-					long dataPoint = compressedIn.readLong();
++					long dataPoint = FullDataPointUtil.fromLegacyDataPoint(compressedIn.readLong());
+ 					if (VALIDATE_INPUT_DATAPOINTS)
+ 					{
+ 						FullDataPointUtil.validateDatapoint(dataPoint);
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/util/FullDataPointUtil.java b/core/src/main/java/com/seibel/distanthorizons/core/util/FullDataPointUtil.java
+index 2381729e0..c04c49805 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/util/FullDataPointUtil.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/util/FullDataPointUtil.java
+@@ -26,15 +26,8 @@ import org.jetbrains.annotations.Contract;
+  * BL: Block light <br>
+  * SL: Sky light <br><br>
+  *
+- * =======Bit layout=======	<br>
+- * SL SL SL SL  BL BL BL BL <-- Top bits <br>
+- * MY MY MY MY  MY MY MY MY	<br>
+- * MY MY MY MY  HI HI HI HI	<br>
+- * HI HI HI HI  HI HI HI HI	<br>
+- * ID ID ID ID  ID ID ID ID	<br>
+- * ID ID ID ID  ID ID ID ID	<br>
+- * ID ID ID ID  ID ID ID ID	<br>
+- * ID ID ID ID  ID ID ID ID <-- Bottom bits	<br>
++ * =======Bit layout (high to low)======= <br>
++ * BL: 4, SL: 4, MY: 14, HI: 14, ID: 28 <br>
+  * </code>
+  *
+  * @see FullDataSourceV1
+@@ -47,9 +40,11 @@ public class FullDataPointUtil
+ 	/** Represents the data held by an empty data point */
+ 	public static final int EMPTY_DATA_POINT = 0;
+ 	
+-	public static final int ID_WIDTH = 32;
+-	public static final int HEIGHT_WIDTH = 12;
+-	public static final int MIN_Y_WIDTH = 12;
++	// Four ID bits are reassigned to the two vertical fields so full-data
++	// points can represent worlds up to 16,383 blocks tall.
++	public static final int ID_WIDTH = 28;
++	public static final int HEIGHT_WIDTH = 14;
++	public static final int MIN_Y_WIDTH = 14;
+ 	public static final int SKY_LIGHT_WIDTH = 4;
+ 	public static final int BLOCK_LIGHT_WIDTH = 4;
+ 	
+@@ -61,12 +56,20 @@ public class FullDataPointUtil
+ 	public static final int BLOCK_LIGHT_OFFSET = SKY_LIGHT_OFFSET + SKY_LIGHT_WIDTH;
+ 	
+ 	
+-	public static final long ID_MASK = Integer.MAX_VALUE;
++	public static final long ID_MASK = (1L << ID_WIDTH) - 1L;
+ 	public static final long INVERSE_ID_MASK = ~ID_MASK;
+ 	public static final int HEIGHT_MASK = (int) Math.pow(2, HEIGHT_WIDTH) - 1;
+ 	public static final int MIN_Y_MASK = (int) Math.pow(2, MIN_Y_WIDTH) - 1;
+ 	public static final int SKY_LIGHT_MASK = (int) Math.pow(2, SKY_LIGHT_WIDTH) - 1;
+ 	public static final int BLOCK_LIGHT_MASK = (int) Math.pow(2, BLOCK_LIGHT_WIDTH) - 1;
++
++	private static final int LEGACY_ID_OFFSET = 0;
++	private static final int LEGACY_HEIGHT_OFFSET = 32;
++	private static final int LEGACY_MIN_Y_OFFSET = 44;
++	private static final int LEGACY_SKY_LIGHT_OFFSET = 56;
++	private static final int LEGACY_BLOCK_LIGHT_OFFSET = 60;
++	private static final long LEGACY_ID_MASK = Integer.MAX_VALUE;
++	private static final int LEGACY_Y_MASK = 0xFFF;
+ 	
+ 	
+ 	//==========//
+@@ -120,7 +123,11 @@ public class FullDataPointUtil
+ 		// ID
+ 		if (id < 0)
+ 		{
+-			throw new DataCorruptedException("Full datapoint ID [" + relMinY + "] must be greater than zero.");
++			throw new DataCorruptedException("Full datapoint ID [" + id + "] must be greater than or equal to zero.");
++		}
++		if (id > ID_MASK)
++		{
++			throw new DataCorruptedException("Full datapoint ID [" + id + "] must be in the range [0 - "+ID_MASK+"] (inclusive).");
+ 		}
+ 		
+ 		// height
+@@ -178,13 +185,65 @@ public class FullDataPointUtil
+ 	//=========//
+ 	//region
+ 	
+-	public static long setId(long data, int id) { return (data & ~(((ID_MASK)) << ID_OFFSET)) | (((long)(id)) << ID_OFFSET); }
+-	public static long setHeight(long data, int height) { return (data & ~(((long)(HEIGHT_MASK)) << HEIGHT_OFFSET)) | (((long)(height)) << HEIGHT_OFFSET); }
+-	public static long setBottomY(long data, int bottomY) { return (data & ~(((long)(MIN_Y_MASK)) << MIN_Y_OFFSET)) | (((long)(bottomY)) << MIN_Y_OFFSET); }
++	public static long setId(long data, int id) { return (data & ~(ID_MASK << ID_OFFSET)) | (((long) id & ID_MASK) << ID_OFFSET); }
++	public static long setHeight(long data, int height) { return (data & ~((long) HEIGHT_MASK << HEIGHT_OFFSET)) | (((long) height & HEIGHT_MASK) << HEIGHT_OFFSET); }
++	public static long setBottomY(long data, int bottomY) { return (data & ~((long) MIN_Y_MASK << MIN_Y_OFFSET)) | (((long) bottomY & MIN_Y_MASK) << MIN_Y_OFFSET); }
+ 	public static long setBlockLight(long data, byte blockLight) { return (data & ~((long) BLOCK_LIGHT_MASK << BLOCK_LIGHT_OFFSET) | (long) blockLight << BLOCK_LIGHT_OFFSET); }
+ 	public static long setSkyLight(long data, int skyLight) { return (data & ~((long) SKY_LIGHT_MASK << SKY_LIGHT_OFFSET) | (long) skyLight << SKY_LIGHT_OFFSET); }
+ 	
+ 	//endregion
++
++
++
++	//======================//
++	// legacy compatibility //
++	//======================//
++	//region
++
++	/** Converts the stock 32/12/12 full-data layout into the extended-height layout. */
++	public static long fromLegacyDataPoint(long legacyData) throws DataCorruptedException
++	{
++		if (legacyData == EMPTY_DATA_POINT)
++		{
++			return EMPTY_DATA_POINT;
++		}
++
++		int id = (int) ((legacyData >>> LEGACY_ID_OFFSET) & LEGACY_ID_MASK);
++		int height = (int) ((legacyData >>> LEGACY_HEIGHT_OFFSET) & LEGACY_Y_MASK);
++		int bottomY = (int) ((legacyData >>> LEGACY_MIN_Y_OFFSET) & LEGACY_Y_MASK);
++		byte skyLight = (byte) ((legacyData >>> LEGACY_SKY_LIGHT_OFFSET) & SKY_LIGHT_MASK);
++		byte blockLight = (byte) ((legacyData >>> LEGACY_BLOCK_LIGHT_OFFSET) & BLOCK_LIGHT_MASK);
++		validateData(id, height, bottomY, blockLight, skyLight);
++		return encode(id, height, bottomY, blockLight, skyLight);
++	}
++
++	/** Converts an extended-height point back to the stock layout when its Y values fit. */
++	public static long toLegacyDataPoint(long data) throws DataCorruptedException
++	{
++		if (data == EMPTY_DATA_POINT)
++		{
++			return EMPTY_DATA_POINT;
++		}
++
++		int id = getId(data);
++		int height = getHeight(data);
++		int bottomY = getBottomY(data);
++		int blockLight = getBlockLight(data);
++		int skyLight = getSkyLight(data);
++		validateData(id, height, bottomY, (byte) blockLight, (byte) skyLight);
++		if (height > LEGACY_Y_MASK || bottomY > LEGACY_Y_MASK)
++		{
++			throw new DataCorruptedException("Full datapoint cannot be represented by the legacy 12-bit Y layout: "+toString(data));
++		}
++
++		return (((long) id & LEGACY_ID_MASK) << LEGACY_ID_OFFSET)
++			| (long) height << LEGACY_HEIGHT_OFFSET
++			| (long) bottomY << LEGACY_MIN_Y_OFFSET
++			| (long) skyLight << LEGACY_SKY_LIGHT_OFFSET
++			| (long) blockLight << LEGACY_BLOCK_LIGHT_OFFSET;
++	}
++
++	//endregion
+ 	
+ 	
+ 	
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointReducingList.java b/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointReducingList.java
+index 6aaa5275a..926fc0bd1 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointReducingList.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointReducingList.java
+@@ -890,7 +890,7 @@ public class RenderDataPointReducingList extends AbstractPhantomArrayList
+ 			}
+ 		}
+ 		
+-		return (highestDataPoint & ~RenderDataPointUtil.MIN_Y_SHIFTED_MASK) | (RenderDataPointUtil.getYMin(lowestDataPoint) << RenderDataPointUtil.MIN_Y_SHIFT);
++		return RenderDataPointUtil.setYMin(highestDataPoint, RenderDataPointUtil.getYMin(lowestDataPoint));
+ 	}
+ 	
+ 	
+@@ -1003,29 +1003,28 @@ public class RenderDataPointReducingList extends AbstractPhantomArrayList
+ 
+ 	public void setMinY(int index, int minY) 
+ 	{
+-		this.data.set(index, (this.data.getLong(index) & ~RenderDataPointUtil.MIN_Y_SHIFTED_MASK) | ((minY & RenderDataPointUtil.MIN_Y_MASK) << RenderDataPointUtil.MIN_Y_SHIFT));
++		this.data.set(index, RenderDataPointUtil.setYMin(this.data.getLong(index), minY));
+ 	}
+ 	public void setMaxY(int index, int maxY) 
+ 	{
+-		this.data.set(index, (this.data.getLong(index) & ~RenderDataPointUtil.MAX_Y_SHIFTED_MASK) | ((maxY & RenderDataPointUtil.MAX_Y_MASK) << RenderDataPointUtil.MAX_Y_SHIFT));
++		this.data.set(index, RenderDataPointUtil.setYMax(this.data.getLong(index), maxY));
+ 	}
+ 
+ 	public void setRed(int index, int red) 
+ 	{
+-		this.data.set(index, (this.data.getLong(index) & ~(RenderDataPointUtil.RED_MASK << RenderDataPointUtil.RED_SHIFT)) | ((red & RenderDataPointUtil.RED_MASK) << RenderDataPointUtil.RED_SHIFT));
++		this.data.set(index, RenderDataPointUtil.setRed(this.data.getLong(index), red));
+ 	}
+ 	public void setGreen(int index, int green) 
+ 	{
+-		this.data.set(index, (this.data.getLong(index) & ~(RenderDataPointUtil.GREEN_MASK << RenderDataPointUtil.GREEN_SHIFT)) | ((green & RenderDataPointUtil.GREEN_MASK) << RenderDataPointUtil.GREEN_SHIFT));
++		this.data.set(index, RenderDataPointUtil.setGreen(this.data.getLong(index), green));
+ 	}
+ 
+ 	public void setBlue(int index, int blue) {
+-		this.data.set(index, (this.data.getLong(index) & ~(RenderDataPointUtil.BLUE_MASK << RenderDataPointUtil.BLUE_SHIFT)) | ((blue & RenderDataPointUtil.BLUE_MASK) << RenderDataPointUtil.BLUE_SHIFT));
++		this.data.set(index, RenderDataPointUtil.setBlue(this.data.getLong(index), blue));
+ 	}
+ 	public void setAlpha(int index, int alpha) 
+ 	{
+-		alpha >>>= RenderDataPointUtil.ALPHA_DOWNSIZE_SHIFT;
+-		this.data.set(index, (this.data.getLong(index) & ~(RenderDataPointUtil.ALPHA_MASK << RenderDataPointUtil.ALPHA_SHIFT)) | ((alpha & RenderDataPointUtil.ALPHA_MASK) << RenderDataPointUtil.ALPHA_SHIFT));
++		this.data.set(index, RenderDataPointUtil.setAlpha(this.data.getLong(index), alpha));
+ 	}
+ 	
+ 	public void setBlockLight(int index, int blockLight) 
+@@ -1072,4 +1071,4 @@ public class RenderDataPointReducingList extends AbstractPhantomArrayList
+ 		return builder.toString();
+ 	}
+ 	
+-}
+\ No newline at end of file
++}
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointUtil.java b/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointUtil.java
+index 183c67ad3..86d00d967 100644
+--- a/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointUtil.java
++++ b/core/src/main/java/com/seibel/distanthorizons/core/util/RenderDataPointUtil.java
+@@ -45,16 +45,8 @@ import com.seibel.distanthorizons.coreapi.util.ColorUtil;
+  * BL: block light <br>
+  * SL: sky light <br>
+  *
+- * =======Bit layout=======	<br>
+- * BM BM BM BM A  A  A  A  |	<br>
+- * R  R  R  R  R  R  R  R  |	<br>
+- * G  G  G  G  G  G  G  G  |	<br>
+- * B  B  B  B  B  B  B  B  |	<br><br>
+- *
+- * H  H  H  H  H  H  H  H  |	<br>
+- * H  H  H  H  D  D  D  D  |	<br>
+- * D  D  D  D  D  D  D  D  |	<br>
+- * BL BL BL BL SL SL SL SL |	<br>
++ * =======Bit layout (high to low)======= <br>
++ * BM: 4, A: 4, R: 7, G: 7, B: 6, H: 14, D: 14, BL: 4, SL: 4 <br>
+  * </code>
+  *
+  * @see FullDataPointUtil
+@@ -72,34 +64,39 @@ public class RenderDataPointUtil
+ 	
+ 	public final static int EMPTY_DATA = 0;
+ 
+-	// the maximum valid Y value is the maximum min y + world height.
+-	// min y is [-2032, 2031], height is < 4064.
+-	public final static int MAX_WORLD_Y_SIZE = 2031 + 4064;
++	public final static int Y_WIDTH = 14;
++	public final static int RED_WIDTH = 7;
++	public final static int GREEN_WIDTH = 7;
++	public final static int BLUE_WIDTH = 6;
++
++	// Four color bits are reassigned to the two vertical fields so render-data
++	// points can represent worlds up to 16,383 blocks tall.
++	public final static int MAX_WORLD_Y_SIZE = 1 << Y_WIDTH;
+ 	
+ 	public final static int ALPHA_DOWNSIZE_SHIFT = 4;
+ 	
+ 	
+ 	public final static int IRIS_BLOCK_MATERIAL_ID_SHIFT = 60;
+ 	
+-	public final static int COLOR_SHIFT = 32;
+-	public final static int BLUE_SHIFT = COLOR_SHIFT;
+-	public final static int GREEN_SHIFT = BLUE_SHIFT + 8;
+-	public final static int RED_SHIFT = GREEN_SHIFT + 8;
+-	public final static int ALPHA_SHIFT = RED_SHIFT + 8;
++	public final static int BLUE_SHIFT = 36;
++	public final static int GREEN_SHIFT = BLUE_SHIFT + BLUE_WIDTH;
++	public final static int RED_SHIFT = GREEN_SHIFT + GREEN_WIDTH;
++	public final static int ALPHA_SHIFT = RED_SHIFT + RED_WIDTH;
++	public final static int COLOR_SHIFT = BLUE_SHIFT;
+ 	
+-	public final static int MAX_Y_SHIFT = 20;
++	public final static int MAX_Y_SHIFT = 22;
+ 	public final static int MIN_Y_SHIFT = 8;
+ 	public final static int BLOCK_LIGHT_SHIFT = 4;
+ 	public final static int SKY_LIGHT_SHIFT = 0;
+ 	
+ 	public final static long ALPHA_MASK = 0xF;
+-	public final static long RED_MASK = 0xFF;
+-	public final static long GREEN_MASK = 0xFF;
+-	public final static long BLUE_MASK = 0xFF;
+-	public final static long COLOR_MASK = 0xFFFFFF;
+-	public final static long MAX_Y_MASK = 0xFFF;
+-	public final static long MIN_Y_MASK = 0xFFF;
+-	public final static long MIN_MAX_Y_MASK = 0xFFFFFF;
++	public final static long RED_MASK = (1L << RED_WIDTH) - 1L;
++	public final static long GREEN_MASK = (1L << GREEN_WIDTH) - 1L;
++	public final static long BLUE_MASK = (1L << BLUE_WIDTH) - 1L;
++	public final static long COLOR_MASK = (1L << (RED_WIDTH + GREEN_WIDTH + BLUE_WIDTH)) - 1L;
++	public final static long MAX_Y_MASK = (1L << Y_WIDTH) - 1L;
++	public final static long MIN_Y_MASK = (1L << Y_WIDTH) - 1L;
++	public final static long MIN_MAX_Y_MASK = (1L << (Y_WIDTH * 2)) - 1L;
+ 	public final static long BLOCK_LIGHT_MASK = 0xF;
+ 	public final static long SKY_LIGHT_MASK = 0xF;
+ 	public final static long IRIS_BLOCK_MATERIAL_ID_MASK = 0xF;
+@@ -149,7 +146,7 @@ public class RenderDataPointUtil
+ 				LodUtil.assertNotReach("Trying to create datapoint with lightBlock [" + lightBlock + "] out of range!");
+ 			}
+ 			
+-			if (irisBlockMaterialId < 0 || irisBlockMaterialId >= 256)
++			if (irisBlockMaterialId < 0 || irisBlockMaterialId > IRIS_BLOCK_MATERIAL_ID_MASK)
+ 			{
+ 				LodUtil.assertNotReach("Trying to create datapoint with irisBlockMaterialId [" + irisBlockMaterialId + "] out of range!");
+ 			}
+@@ -180,9 +177,9 @@ public class RenderDataPointUtil
+ 		
+ 		
+ 		long out = (long) (alpha >>> ALPHA_DOWNSIZE_SHIFT) << ALPHA_SHIFT
+-				| (red & RED_MASK) << RED_SHIFT
+-				| (green & GREEN_MASK) << GREEN_SHIFT
+-				| (blue & BLUE_MASK) << BLUE_SHIFT
++				| (long) packRed(red) << RED_SHIFT
++				| (long) packGreen(green) << GREEN_SHIFT
++				| (long) packBlue(blue) << BLUE_SHIFT
+ 				| (maxY & MAX_Y_MASK) << MAX_Y_SHIFT
+ 				| (minY & MIN_Y_MASK) << MIN_Y_SHIFT
+ 				| (lightBlock & BLOCK_LIGHT_MASK) << BLOCK_LIGHT_SHIFT
+@@ -205,12 +202,17 @@ public class RenderDataPointUtil
+ 	public static short getYMax(long dataPoint) { return (short) ((dataPoint >>> MAX_Y_SHIFT) & MAX_Y_MASK); }
+ 	/** AKA the starting/bottom/lowest Y value above {@link ILevelWrapper#getMinHeight()} */
+ 	public static short getYMin(long dataPoint) { return (short) ((dataPoint >>> MIN_Y_SHIFT) & MIN_Y_MASK); }
+-	public static long setYMin(long dataPoint, int minY) { return (long) ((dataPoint & ~(MIN_Y_MASK << MIN_Y_SHIFT)) | (minY & MIN_Y_MASK) << MIN_Y_SHIFT); }
++	public static long setYMin(long dataPoint, int depth) { return (dataPoint & ~(MIN_Y_MASK << MIN_Y_SHIFT)) | ((long) depth & MIN_Y_MASK) << MIN_Y_SHIFT; }
++	public static long setYMax(long dataPoint, int height) { return (dataPoint & ~(MAX_Y_MASK << MAX_Y_SHIFT)) | ((long) height & MAX_Y_MASK) << MAX_Y_SHIFT; }
+ 	
+ 	public static short getAlpha(long dataPoint) { return (short) ((((dataPoint >>> ALPHA_SHIFT) & ALPHA_MASK) << ALPHA_DOWNSIZE_SHIFT) | 0b1111); }
+-	public static short getRed(long dataPoint) { return (short) ((dataPoint >>> RED_SHIFT) & RED_MASK); }
+-	public static short getGreen(long dataPoint) { return (short) ((dataPoint >>> GREEN_SHIFT) & GREEN_MASK); }
+-	public static short getBlue(long dataPoint) { return (short) ((dataPoint >>> BLUE_SHIFT) & BLUE_MASK); }
++	public static short getRed(long dataPoint) { return (short) unpackColor((dataPoint >>> RED_SHIFT) & RED_MASK, RED_WIDTH); }
++	public static short getGreen(long dataPoint) { return (short) unpackColor((dataPoint >>> GREEN_SHIFT) & GREEN_MASK, GREEN_WIDTH); }
++	public static short getBlue(long dataPoint) { return (short) unpackColor((dataPoint >>> BLUE_SHIFT) & BLUE_MASK, BLUE_WIDTH); }
++	public static long setRed(long dataPoint, int red) { return (dataPoint & ~(RED_MASK << RED_SHIFT)) | (long) packRed(red) << RED_SHIFT; }
++	public static long setGreen(long dataPoint, int green) { return (dataPoint & ~(GREEN_MASK << GREEN_SHIFT)) | (long) packGreen(green) << GREEN_SHIFT; }
++	public static long setBlue(long dataPoint, int blue) { return (dataPoint & ~(BLUE_MASK << BLUE_SHIFT)) | (long) packBlue(blue) << BLUE_SHIFT; }
++	public static long setAlpha(long dataPoint, int alpha) { return (dataPoint & ~(ALPHA_MASK << ALPHA_SHIFT)) | ((long) (alpha >>> ALPHA_DOWNSIZE_SHIFT) & ALPHA_MASK) << ALPHA_SHIFT; }
+ 	
+ 	public static byte getLightSky(long dataPoint) { return (byte) ((dataPoint >>> SKY_LIGHT_SHIFT) & SKY_LIGHT_MASK); }
+ 	public static byte getLightBlock(long dataPoint) { return (byte) ((dataPoint >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK); }
+@@ -224,8 +226,19 @@ public class RenderDataPointUtil
+ 	
+ 	public static int getColor(long dataPoint)
+ 	{
+-		long alpha = getAlpha(dataPoint);
+-		return (int) (((dataPoint >>> COLOR_SHIFT) & COLOR_MASK) | (alpha << (ALPHA_SHIFT - COLOR_SHIFT)));
++		return getAlpha(dataPoint) << 24 | getRed(dataPoint) << 16 | getGreen(dataPoint) << 8 | getBlue(dataPoint);
++	}
++
++	public static int packRed(int red) { return packColor(red, RED_WIDTH); }
++	public static int packGreen(int green) { return packColor(green, GREEN_WIDTH); }
++	public static int packBlue(int blue) { return packColor(blue, BLUE_WIDTH); }
++
++	private static int packColor(int color, int width) { return (color & 0xFF) >>> (8 - width); }
++	private static int unpackColor(long color, int width)
++	{
++		int value = (int) color;
++		int shift = 8 - width;
++		return (value << shift) | (value >>> (width - shift));
+ 	}
+ 	
+ 	/** Return (>0) if dataA should replace dataB, (0) if equal, (<0) if dataB should replace dataA */
+@@ -256,4 +269,4 @@ public class RenderDataPointUtil
+ 	
+ 	
+ 	
+-}
+\ No newline at end of file
++}
+diff --git a/core/src/test/java/tests/ExtendedHeightDataPointTest.java b/core/src/test/java/tests/ExtendedHeightDataPointTest.java
+new file mode 100644
+index 000000000..8327aa160
+--- /dev/null
++++ b/core/src/test/java/tests/ExtendedHeightDataPointTest.java
+@@ -0,0 +1,152 @@
++/*
++ *    This file is part of the Distant Horizons mod
++ *    licensed under the GNU LGPL v3 License.
++ */
++
++package tests;
++
++import com.seibel.distanthorizons.api.enums.config.EDhApiDataCompressionMode;
++import com.seibel.distanthorizons.api.enums.config.EDhApiWorldCompressionMode;
++import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiWorldGenerationStep;
++import com.seibel.distanthorizons.core.dataObjects.fullData.FullDataPointIdMap;
++import com.seibel.distanthorizons.core.dataObjects.fullData.sources.FullDataSourceV2;
++import com.seibel.distanthorizons.core.pos.DhSectionPos;
++import com.seibel.distanthorizons.core.sql.dto.FullDataSourceV2DTO;
++import com.seibel.distanthorizons.core.util.FullDataPointUtil;
++import com.seibel.distanthorizons.core.util.RenderDataPointUtil;
++import com.seibel.distanthorizons.core.util.objects.DataCorruptedException;
++import it.unimi.dsi.fastutil.longs.LongArrayList;
++import java.io.IOException;
++import java.util.Arrays;
++import org.junit.Assert;
++import org.junit.Test;
++import testItems.wrappers.TestBiomeWrapper;
++import testItems.wrappers.TestBlockStateWrapper;
++
++public class ExtendedHeightDataPointTest
++{
++	private static final int TALL_BOTTOM_Y = 9_000;
++	private static final int TALL_TOP_Y = 9_168;
++
++	@Test
++	public void fullDataPointRoundTripsExtendedCoordinates() throws DataCorruptedException
++	{
++		int id = 0x0ABCDEF;
++		long dataPoint = FullDataPointUtil.encode(
++			id, TALL_TOP_Y - TALL_BOTTOM_Y, TALL_BOTTOM_Y, (byte) 13, (byte) 7);
++
++		Assert.assertEquals(id, FullDataPointUtil.getId(dataPoint));
++		Assert.assertEquals(TALL_TOP_Y - TALL_BOTTOM_Y, FullDataPointUtil.getHeight(dataPoint));
++		Assert.assertEquals(TALL_BOTTOM_Y, FullDataPointUtil.getBottomY(dataPoint));
++		Assert.assertEquals(13, FullDataPointUtil.getBlockLight(dataPoint));
++		Assert.assertEquals(7, FullDataPointUtil.getSkyLight(dataPoint));
++
++		long boundary = FullDataPointUtil.encode(
++			(int) FullDataPointUtil.ID_MASK,
++			1,
++			RenderDataPointUtil.MAX_WORLD_Y_SIZE - 1,
++			(byte) 15,
++			(byte) 15);
++		Assert.assertEquals((int) FullDataPointUtil.ID_MASK, FullDataPointUtil.getId(boundary));
++		Assert.assertEquals(RenderDataPointUtil.MAX_WORLD_Y_SIZE - 1, FullDataPointUtil.getBottomY(boundary));
++	}
++
++	@Test
++	public void renderDataPointRoundTripsExtendedCoordinatesAndPreservesFields()
++	{
++		long dataPoint = RenderDataPointUtil.createDataPoint(
++			TALL_TOP_Y, TALL_BOTTOM_Y, 0xFF_FF_7F_AC, 15, 12, 15);
++
++		Assert.assertEquals(TALL_TOP_Y, RenderDataPointUtil.getYMax(dataPoint));
++		Assert.assertEquals(TALL_BOTTOM_Y, RenderDataPointUtil.getYMin(dataPoint));
++		Assert.assertEquals(15, RenderDataPointUtil.getLightSky(dataPoint));
++		Assert.assertEquals(12, RenderDataPointUtil.getLightBlock(dataPoint));
++		Assert.assertEquals(15, RenderDataPointUtil.getBlockMaterialId(dataPoint));
++		Assert.assertEquals(0xFF_FF_7E_AE, RenderDataPointUtil.getColor(dataPoint));
++
++		long shifted = RenderDataPointUtil.setYMax(RenderDataPointUtil.setYMin(dataPoint, TALL_BOTTOM_Y + 100), TALL_TOP_Y + 100);
++		Assert.assertEquals(TALL_TOP_Y + 100, RenderDataPointUtil.getYMax(shifted));
++		Assert.assertEquals(TALL_BOTTOM_Y + 100, RenderDataPointUtil.getYMin(shifted));
++		Assert.assertEquals(RenderDataPointUtil.getColor(dataPoint), RenderDataPointUtil.getColor(shifted));
++
++		long recolored = RenderDataPointUtil.setBlue(
++			RenderDataPointUtil.setGreen(RenderDataPointUtil.setRed(dataPoint, 0), 0), 0);
++		Assert.assertEquals(0xFF_00_00_00, RenderDataPointUtil.getColor(recolored));
++		Assert.assertEquals(TALL_TOP_Y, RenderDataPointUtil.getYMax(recolored));
++		Assert.assertEquals(TALL_BOTTOM_Y, RenderDataPointUtil.getYMin(recolored));
++	}
++
++	@Test
++	public void stockPackedFullDataConvertsToExtendedLayout() throws DataCorruptedException
++	{
++		int id = 123_456;
++		int height = 123;
++		int bottomY = 3_500;
++		byte blockLight = 11;
++		byte skyLight = 6;
++		long stockDataPoint = (long) id
++			| (long) height << 32
++			| (long) bottomY << 44
++			| (long) skyLight << 56
++			| (long) blockLight << 60;
++
++		long converted = FullDataPointUtil.fromLegacyDataPoint(stockDataPoint);
++		Assert.assertEquals(id, FullDataPointUtil.getId(converted));
++		Assert.assertEquals(height, FullDataPointUtil.getHeight(converted));
++		Assert.assertEquals(bottomY, FullDataPointUtil.getBottomY(converted));
++		Assert.assertEquals(blockLight, FullDataPointUtil.getBlockLight(converted));
++		Assert.assertEquals(skyLight, FullDataPointUtil.getSkyLight(converted));
++		Assert.assertEquals(stockDataPoint, FullDataPointUtil.toLegacyDataPoint(converted));
++	}
++
++	@Test(expected = DataCorruptedException.class)
++	public void extendedCoordinateCannotBeWrittenAsStockPackedFullData() throws DataCorruptedException
++	{
++		long dataPoint = FullDataPointUtil.encode(1, 1, TALL_BOTTOM_Y, (byte) 0, (byte) 15);
++		FullDataPointUtil.toLegacyDataPoint(dataPoint);
++	}
++
++	@Test
++	public void v2StorageRoundTripsExtendedCoordinatesAndReadsPriorForkMarker()
++		throws DataCorruptedException, IOException, InterruptedException
++	{
++		long pos = DhSectionPos.encode((byte) 6, 0, 0);
++		FullDataPointIdMap mapping = new FullDataPointIdMap(pos);
++		int id = mapping.addIfNotPresentAndGetId(new TestBiomeWrapper("tall"), new TestBlockStateWrapper("tall"));
++		long expected = FullDataPointUtil.encode(
++			id, TALL_TOP_Y - TALL_BOTTOM_Y, TALL_BOTTOM_Y, (byte) 4, (byte) 15);
++
++		LongArrayList[] columns = emptyColumns();
++		int targetIndex = FullDataSourceV2.relativePosToIndex(10, 10);
++		columns[targetIndex].add(expected);
++		byte[] generationSteps = new byte[columns.length];
++		Arrays.fill(generationSteps, EDhApiWorldGenerationStep.FEATURES.value);
++		byte[] compressionModes = new byte[columns.length];
++		Arrays.fill(compressionModes, EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS.value);
++
++		try (
++			FullDataSourceV2 source = FullDataSourceV2.createWithData(
++				pos, mapping, columns, generationSteps, compressionModes);
++			FullDataSourceV2DTO dto = FullDataSourceV2DTO.CreateFromDataSource(
++				source, EDhApiDataCompressionMode.UNCOMPRESSED)
++		)
++		{
++			Assert.assertEquals(FullDataSourceV2DTO.DATA_FORMAT.V2_LATEST, dto.dataFormatVersion);
++			dto.dataFormatVersion = FullDataSourceV2DTO.DATA_FORMAT.V3_TELLUS_TALL_Y;
++			try (FullDataSourceV2 decoded = dto.createUnitTestDataSource())
++			{
++				Assert.assertEquals(expected, decoded.dataPoints[targetIndex].getLong(0));
++			}
++		}
++	}
++
++	private static LongArrayList[] emptyColumns()
++	{
++		LongArrayList[] columns = new LongArrayList[FullDataSourceV2.WIDTH * FullDataSourceV2.WIDTH];
++		for (int i = 0; i < columns.length; i++)
++		{
++			columns[i] = new LongArrayList();
++		}
++		return columns;
++	}
++}
+diff --git a/core/src/test/java/tests/FullDataSourceV2ChildUpsampleTest.java b/core/src/test/java/tests/FullDataSourceV2ChildUpsampleTest.java
+new file mode 100644
+index 000000000..5c358d7ac
+--- /dev/null
++++ b/core/src/test/java/tests/FullDataSourceV2ChildUpsampleTest.java
+@@ -0,0 +1,225 @@
++/*
++ *    This file is part of the Distant Horizons mod
++ *    licensed under the GNU LGPL v3 License.
++ *
++ *    Copyright (C) 2020 James Seibel
++ *
++ *    This program is free software: you can redistribute it and/or modify
++ *    it under the terms of the GNU Lesser General Public License as published by
++ *    the Free Software Foundation, version 3.
++ *
++ *    This program is distributed in the hope that it will be useful,
++ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *    GNU Lesser General Public License for more details.
++ *
++ *    You should have received a copy of the GNU Lesser General Public License
++ *    along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++package tests;
++import com.seibel.distanthorizons.api.enums.config.EDhApiWorldCompressionMode;
++import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiWorldGenerationStep;
++import com.seibel.distanthorizons.core.dataObjects.fullData.FullDataPointIdMap;
++import com.seibel.distanthorizons.core.dataObjects.fullData.sources.FullDataSourceV2;
++import com.seibel.distanthorizons.core.pos.DhSectionPos;
++import com.seibel.distanthorizons.core.util.FullDataPointUtil;
++import com.seibel.distanthorizons.core.util.LodUtil;
++import com.seibel.distanthorizons.core.util.objects.DataCorruptedException;
++import it.unimi.dsi.fastutil.longs.LongArrayList;
++import java.util.Arrays;
++import org.junit.Assert;
++import org.junit.Test;
++import testItems.wrappers.TestBiomeWrapper;
++import testItems.wrappers.TestBlockStateWrapper;
++public class FullDataSourceV2ChildUpsampleTest
++{
++	@Test
++	public void childUpsampleExpandsTallMultiLayerColumnsAcrossTwoByTwoFootprint() throws DataCorruptedException
++	{
++		long parentPos = DhSectionPos.encode((byte) 7, 0, 0);
++		long childPos = DhSectionPos.getChildByIndex(parentPos, 0);
++		int sourceX = 17;
++		int sourceZ = 23;
++		int sourceIndex = FullDataSourceV2.relativePosToIndex(sourceX, sourceZ);
++		FullDataPointIdMap parentMapping = new FullDataPointIdMap(parentPos);
++		int upperId = addMapping(parentMapping, "upper");
++		int lowerId = addMapping(parentMapping, "lower");
++		LongArrayList[] parentColumns = emptyColumns();
++		parentColumns[sourceIndex].add(FullDataPointUtil.encode(upperId, 168, 9_000, (byte) 7, (byte) 15));
++		parentColumns[sourceIndex].add(FullDataPointUtil.encode(lowerId, 9_000, 0, (byte) 3, (byte) 12));
++		FullDataPointIdMap childMapping = new FullDataPointIdMap(childPos);
++		addMapping(childMapping, "child_existing");
++		try (
++			FullDataSourceV2 parent = FullDataSourceV2.createWithData(
++				parentPos,
++				parentMapping,
++				parentColumns,
++				filledGenerationSteps(EDhApiWorldGenerationStep.FEATURES),
++				filledCompressionModes(EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS));
++			FullDataSourceV2 child = FullDataSourceV2.createWithData(
++				childPos,
++				childMapping,
++				emptyColumns(),
++				filledGenerationSteps(EDhApiWorldGenerationStep.EMPTY),
++				filledCompressionModes(EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS))
++		)
++		{
++			LongArrayList parentColumnBefore = new LongArrayList(parent.dataPoints[sourceIndex]);
++			Assert.assertTrue(child.updateFromDataSource(parent));
++			Assert.assertEquals(parentColumnBefore, parent.dataPoints[sourceIndex]);
++			LongArrayList firstExpandedColumn = null;
++			for (int targetX = sourceX * 2; targetX < sourceX * 2 + 2; targetX++)
++			{
++				for (int targetZ = sourceZ * 2; targetZ < sourceZ * 2 + 2; targetZ++)
++				{
++					LongArrayList column = child.dataPoints[FullDataSourceV2.relativePosToIndex(targetX, targetZ)];
++					Assert.assertEquals(2, column.size());
++					assertVerticalRange(column.getLong(0), 9_000, 168, 7, 15);
++					assertVerticalRange(column.getLong(1), 0, 9_000, 3, 12);
++					if (firstExpandedColumn == null)
++					{
++						firstExpandedColumn = column;
++					}
++					else
++					{
++						Assert.assertNotSame(firstExpandedColumn, column);
++					}
++				}
++			}
++		}
++	}
++	@Test
++	public void childUpsampleCopiesParentColumnsBeforeRemapping() throws DataCorruptedException
++	{
++		long parentPos = DhSectionPos.encode((byte) 7, 0, 0);
++		long childPos = DhSectionPos.getChildByIndex(parentPos, 0);
++		int sourceIndex = FullDataSourceV2.relativePosToIndex(0, 0);
++		FullDataPointIdMap parentMapping = new FullDataPointIdMap(parentPos);
++		int parentIdA = addMapping(parentMapping, "parent_a");
++		int parentIdB = addMapping(parentMapping, "parent_b");
++		LongArrayList[] parentColumns = emptyColumns();
++		parentColumns[sourceIndex].add(FullDataPointUtil.encode(parentIdB, 10, 100, LodUtil.MIN_MC_LIGHT, LodUtil.MAX_MC_LIGHT));
++		parentColumns[sourceIndex].add(FullDataPointUtil.encode(parentIdA, 100, 0, LodUtil.MIN_MC_LIGHT, LodUtil.MAX_MC_LIGHT));
++		FullDataPointIdMap childMapping = new FullDataPointIdMap(childPos);
++		addMapping(childMapping, "child_existing");
++		try (
++			FullDataSourceV2 parent = FullDataSourceV2.createWithData(
++				parentPos,
++				parentMapping,
++				parentColumns,
++				filledGenerationSteps(EDhApiWorldGenerationStep.FEATURES),
++				filledCompressionModes(EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS));
++			FullDataSourceV2 child = FullDataSourceV2.createWithData(
++				childPos,
++				childMapping,
++				emptyColumns(),
++				filledGenerationSteps(EDhApiWorldGenerationStep.EMPTY),
++				filledCompressionModes(EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS))
++		)
++		{
++			LongArrayList parentColumnBefore = new LongArrayList(parent.dataPoints[sourceIndex]);
++			Assert.assertTrue(child.updateFromDataSource(parent));
++			Assert.assertEquals(parentColumnBefore, parent.dataPoints[sourceIndex]);
++			Assert.assertNotSame(parent.dataPoints[sourceIndex], child.dataPoints[sourceIndex]);
++		}
++	}
++	@Test
++	public void childUpsampleKeepsExistingChildColumnMetadata() throws DataCorruptedException
++	{
++		long parentPos = DhSectionPos.encode((byte) 7, 0, 0);
++		long childPos = DhSectionPos.getChildByIndex(parentPos, 0);
++		int targetIndex = FullDataSourceV2.relativePosToIndex(0, 0);
++		FullDataPointIdMap parentMapping = new FullDataPointIdMap(parentPos);
++		int parentId = addMapping(parentMapping, "parent");
++		LongArrayList[] parentColumns = emptyColumns();
++		parentColumns[targetIndex].add(FullDataPointUtil.encode(parentId, 16, 0, LodUtil.MIN_MC_LIGHT, LodUtil.MAX_MC_LIGHT));
++		FullDataPointIdMap childMapping = new FullDataPointIdMap(childPos);
++		int childId = addMapping(childMapping, "child");
++		LongArrayList[] childColumns = emptyColumns();
++		childColumns[targetIndex].add(FullDataPointUtil.encode(childId, 16, 0, LodUtil.MIN_MC_LIGHT, LodUtil.MAX_MC_LIGHT));
++		byte[] childGenerationSteps = filledGenerationSteps(EDhApiWorldGenerationStep.EMPTY);
++		childGenerationSteps[targetIndex] = EDhApiWorldGenerationStep.FEATURES.value;
++		byte[] childCompressionModes = filledCompressionModes(EDhApiWorldCompressionMode.VISUALLY_EQUAL);
++		childCompressionModes[targetIndex] = EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS.value;
++		try (
++			FullDataSourceV2 parent = FullDataSourceV2.createWithData(
++				parentPos,
++				parentMapping,
++				parentColumns,
++				filledGenerationSteps(EDhApiWorldGenerationStep.FEATURES),
++				filledCompressionModes(EDhApiWorldCompressionMode.VISUALLY_EQUAL));
++			FullDataSourceV2 child = FullDataSourceV2.createWithData(
++				childPos, childMapping, childColumns, childGenerationSteps, childCompressionModes)
++		)
++		{
++			Assert.assertTrue(child.updateFromDataSource(parent));
++			Assert.assertEquals(EDhApiWorldGenerationStep.FEATURES.value, child.columnGenerationSteps.getByte(targetIndex));
++			Assert.assertEquals(EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS.value, child.columnWorldCompressionMode.getByte(targetIndex));
++		}
++	}
++	@Test
++	public void childUpsampleUsesParentSourceColumnCompression() throws DataCorruptedException
++	{
++		long parentPos = DhSectionPos.encode((byte) 7, 0, 0);
++		long childPos = DhSectionPos.getChildByIndex(parentPos, 0);
++		int targetIndex = FullDataSourceV2.relativePosToIndex(2, 0);
++		int sourceIndex = FullDataSourceV2.relativePosToIndex(1, 0);
++		FullDataPointIdMap parentMapping = new FullDataPointIdMap(parentPos);
++		int parentId = addMapping(parentMapping, "parent");
++		LongArrayList[] parentColumns = emptyColumns();
++		parentColumns[sourceIndex].add(FullDataPointUtil.encode(parentId, 16, 0, LodUtil.MIN_MC_LIGHT, LodUtil.MAX_MC_LIGHT));
++		byte[] parentCompressionModes = filledCompressionModes(EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS);
++		parentCompressionModes[sourceIndex] = EDhApiWorldCompressionMode.VISUALLY_EQUAL.value;
++		try (
++			FullDataSourceV2 parent = FullDataSourceV2.createWithData(
++				parentPos,
++				parentMapping,
++				parentColumns,
++				filledGenerationSteps(EDhApiWorldGenerationStep.FEATURES),
++				parentCompressionModes);
++			FullDataSourceV2 child = FullDataSourceV2.createWithData(
++				childPos,
++				new FullDataPointIdMap(childPos),
++				emptyColumns(),
++				filledGenerationSteps(EDhApiWorldGenerationStep.EMPTY),
++				filledCompressionModes(EDhApiWorldCompressionMode.MERGE_SAME_BLOCKS))
++		)
++		{
++			Assert.assertTrue(child.updateFromDataSource(parent));
++			Assert.assertEquals(EDhApiWorldGenerationStep.DOWN_SAMPLED.value, child.columnGenerationSteps.getByte(targetIndex));
++			Assert.assertEquals(EDhApiWorldCompressionMode.VISUALLY_EQUAL.value, child.columnWorldCompressionMode.getByte(targetIndex));
++		}
++	}
++	private static int addMapping(FullDataPointIdMap mapping, String name)
++	{
++		return mapping.addIfNotPresentAndGetId(new TestBiomeWrapper(name), new TestBlockStateWrapper(name));
++	}
++	private static void assertVerticalRange(long dataPoint, int bottomY, int height, int blockLight, int skyLight)
++	{
++		Assert.assertEquals(bottomY, FullDataPointUtil.getBottomY(dataPoint));
++		Assert.assertEquals(height, FullDataPointUtil.getHeight(dataPoint));
++		Assert.assertEquals(blockLight, FullDataPointUtil.getBlockLight(dataPoint));
++		Assert.assertEquals(skyLight, FullDataPointUtil.getSkyLight(dataPoint));
++	}
++	private static LongArrayList[] emptyColumns()
++	{
++		LongArrayList[] columns = new LongArrayList[FullDataSourceV2.WIDTH * FullDataSourceV2.WIDTH];
++		for (int i = 0; i < columns.length; i++)
++		{
++			columns[i] = new LongArrayList();
++		}
++		return columns;
++	}
++	private static byte[] filledGenerationSteps(EDhApiWorldGenerationStep generationStep)
++	{
++		byte[] values = new byte[FullDataSourceV2.WIDTH * FullDataSourceV2.WIDTH];
++		Arrays.fill(values, generationStep.value);
++		return values;
++	}
++	private static byte[] filledCompressionModes(EDhApiWorldCompressionMode compressionMode)
++	{
++		byte[] values = new byte[FullDataSourceV2.WIDTH * FullDataSourceV2.WIDTH];
++		Arrays.fill(values, compressionMode.value);
++		return values;
++	}
++}
+diff --git a/core/src/main/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationTaskSelector.java b/core/src/main/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationTaskSelector.java
+new file mode 100644
+index 000000000..cb0847326
+--- /dev/null
++++ b/core/src/main/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationTaskSelector.java
+@@ -0,0 +1,61 @@
++package com.seibel.distanthorizons.core.generation.queues;
++
++import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiWorldGeneratorReturnType;
++import com.seibel.distanthorizons.api.interfaces.override.worldGenerator.IDhApiWorldGenerator;
++import com.seibel.distanthorizons.core.generation.tasks.DataSourceRetrievalTask;
++import com.seibel.distanthorizons.core.pos.DhSectionPos;
++import com.seibel.distanthorizons.core.pos.blockPos.DhBlockPos2D;
++
++/** Selects work without allocating a distance wrapper for every queued request. */
++final class WorldGenerationTaskSelector
++{
++	static Selection findClosest(Iterable<DataSourceRetrievalTask> tasks,
++		IDhApiWorldGenerator generator, DhBlockPos2D target)
++	{
++		DataSourceRetrievalTask closest = null;
++		long closestDistance = Long.MAX_VALUE;
++		byte closestAvailability = IDhApiWorldGenerator.GENERATION_WAIT;
++		for (DataSourceRetrievalTask task : tasks)
++		{
++			if (task.future.isDone()) { continue; }
++			byte sectionDetail = DhSectionPos.getDetailLevel(task.pos);
++			long distance = Math.max(
++				Math.abs((long) DhSectionPos.getCenterBlockPosX(task.pos) - target.x),
++				Math.abs((long) DhSectionPos.getCenterBlockPosZ(task.pos) - target.z)) / sectionDetail;
++			if (closest != null && distance >= closestDistance) { continue; }
++			byte dataDetail = (byte) (sectionDetail - DhSectionPos.SECTION_MINIMUM_DETAIL_LEVEL);
++			byte availability;
++			if (dataDetail > generator.getLargestDataDetailLevel())
++			{
++				availability = IDhApiWorldGenerator.GENERATION_SPLIT;
++			}
++			else
++			{
++				byte targetDetail = generator.getReturnType() == EDhApiWorldGeneratorReturnType.API_DATA_SOURCES
++					? dataDetail : task.requestDetailLevel;
++				availability = generator.getGenerationAvailability(
++					DhSectionPos.getMinCornerBlockX(task.pos) >> 4,
++					DhSectionPos.getMinCornerBlockZ(task.pos) >> 4, task.widthInChunks, targetDetail);
++			}
++			if (availability == IDhApiWorldGenerator.GENERATION_SPLIT
++				&& sectionDetail <= DhSectionPos.SECTION_BLOCK_DETAIL_LEVEL) { continue; }
++			if (availability != IDhApiWorldGenerator.GENERATION_READY
++				&& availability != IDhApiWorldGenerator.GENERATION_SPLIT) { continue; }
++			closest = task;
++			closestDistance = distance;
++			closestAvailability = availability;
++		}
++		return closest == null ? null : new Selection(closest, closestAvailability);
++	}
++
++	static final class Selection
++	{
++		final DataSourceRetrievalTask task;
++		final byte availability;
++		Selection(DataSourceRetrievalTask task, byte availability)
++		{
++			this.task = task;
++			this.availability = availability;
++		}
++	}
++}
+diff --git a/core/src/test/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationTaskSelectorTest.java b/core/src/test/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationTaskSelectorTest.java
+new file mode 100644
+index 000000000..88bfc0547
+--- /dev/null
++++ b/core/src/test/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationTaskSelectorTest.java
+@@ -0,0 +1,110 @@
++package com.seibel.distanthorizons.core.generation.queues;
++
++import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiWorldGeneratorReturnType;
++import com.seibel.distanthorizons.api.interfaces.override.worldGenerator.IDhApiWorldGenerator;
++import com.seibel.distanthorizons.core.generation.tasks.DataSourceRetrievalTask;
++import com.seibel.distanthorizons.core.pos.DhSectionPos;
++import com.seibel.distanthorizons.core.pos.blockPos.DhBlockPos2D;
++import java.util.Arrays;
++import java.util.Collections;
++import org.junit.Assert;
++import org.junit.Test;
++
++public class WorldGenerationTaskSelectorTest
++{
++	@Test
++	public void waitingNearTerrainDoesNotStarveReadyTerrain()
++	{
++		DataSourceRetrievalTask near = task(6, 0, 0);
++		DataSourceRetrievalTask far = task(6, 10, 0);
++		Generator generator = new Generator() {
++			@Override public byte getGenerationAvailability(int x, int z, int width, byte detail)
++			{ return x == 0 ? GENERATION_WAIT : GENERATION_READY; }
++		};
++		WorldGenerationTaskSelector.Selection selected = WorldGenerationTaskSelector.findClosest(
++			Arrays.asList(near, far), generator, DhBlockPos2D.ZERO);
++		Assert.assertSame(far, selected.task);
++		Assert.assertFalse(near.future.isDone());
++	}
++
++	@Test
++	public void unavailableTerrainRemainsQueuedUntilReady()
++	{
++		DataSourceRetrievalTask task = task(8, -2, -3);
++		Generator generator = new Generator();
++		generator.availability = IDhApiWorldGenerator.GENERATION_WAIT;
++		Assert.assertNull(WorldGenerationTaskSelector.findClosest(Collections.singleton(task), generator, DhBlockPos2D.ZERO));
++		generator.availability = IDhApiWorldGenerator.GENERATION_READY;
++		Assert.assertSame(task, WorldGenerationTaskSelector.findClosest(Collections.singleton(task), generator, DhBlockPos2D.ZERO).task);
++		Assert.assertArrayEquals(new int[]{-32, -48, 16, 2}, generator.lastRequest);
++	}
++
++	@Test
++	public void partiallyReadyLargeAreaSplitsButSmallestAreaWaits()
++	{
++		Generator generator = new Generator();
++		generator.availability = IDhApiWorldGenerator.GENERATION_SPLIT;
++		WorldGenerationTaskSelector.Selection split = WorldGenerationTaskSelector.findClosest(
++			Collections.singleton(task(8, 0, 0)), generator, DhBlockPos2D.ZERO);
++		Assert.assertEquals(IDhApiWorldGenerator.GENERATION_SPLIT, split.availability);
++		Assert.assertNull(WorldGenerationTaskSelector.findClosest(Collections.singleton(task(6, 0, 0)), generator, DhBlockPos2D.ZERO));
++	}
++
++	@Test
++	public void chunkGeneratorsSplitLargeRequestsBeforeCheckingAvailability()
++	{
++		Generator generator = new Generator();
++		generator.maxDetail = 0;
++		generator.availability = IDhApiWorldGenerator.GENERATION_WAIT;
++		WorldGenerationTaskSelector.Selection split = WorldGenerationTaskSelector.findClosest(
++			Collections.singleton(task(8, 0, 0)), generator, DhBlockPos2D.ZERO);
++		Assert.assertEquals(IDhApiWorldGenerator.GENERATION_SPLIT, split.availability);
++		Assert.assertNull(generator.lastRequest);
++	}
++
++	@Test
++	public void cancelledRequestsAreNotGenerated()
++	{
++		DataSourceRetrievalTask cancelled = task(6, 0, 0);
++		cancelled.future.cancel(false);
++		Assert.assertNull(WorldGenerationTaskSelector.findClosest(Collections.singleton(cancelled), new Generator(), DhBlockPos2D.ZERO));
++	}
++
++	@Test
++	public void nearestFirstPriorityStillFavorsCoarseTerrain()
++	{
++		DataSourceRetrievalTask near = task(6, 4, 0);
++		DataSourceRetrievalTask coarse = task(9, 0, 0);
++		Assert.assertSame(coarse, WorldGenerationTaskSelector.findClosest(
++			Arrays.asList(near, coarse), new Generator(), DhBlockPos2D.ZERO).task);
++	}
++
++	@Test
++	public void oldGeneratorsDefaultToReady()
++	{
++		IDhApiWorldGenerator stock = new IDhApiWorldGenerator() {
++			@Override public void preGeneratorTaskStart() { }
++			@Override public void close() { }
++		};
++		Assert.assertEquals(IDhApiWorldGenerator.GENERATION_READY, stock.getGenerationAvailability(0, 0, 4, (byte) 0));
++	}
++
++	private static DataSourceRetrievalTask task(int detail, int x, int z)
++	{ return new DataSourceRetrievalTask(DhSectionPos.encode((byte) detail, x, z), (byte) 0); }
++
++	private static class Generator implements IDhApiWorldGenerator
++	{
++		byte maxDetail = 24;
++		byte availability = GENERATION_READY;
++		int[] lastRequest;
++		@Override public byte getLargestDataDetailLevel() { return maxDetail; }
++		@Override public EDhApiWorldGeneratorReturnType getReturnType() { return EDhApiWorldGeneratorReturnType.API_DATA_SOURCES; }
++		@Override public byte getGenerationAvailability(int x, int z, int width, byte detail)
++		{
++			lastRequest = new int[]{x, z, width, detail};
++			return availability;
++		}
++		@Override public void preGeneratorTaskStart() { }
++		@Override public void close() { }
++	}
++}
+diff --git a/core/src/test/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationQueueFailureTest.java b/core/src/test/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationQueueFailureTest.java
+new file mode 100644
+index 000000000..731e3e2ae
+--- /dev/null
++++ b/core/src/test/java/com/seibel/distanthorizons/core/generation/queues/WorldGenerationQueueFailureTest.java
+@@ -0,0 +1,64 @@
++package com.seibel.distanthorizons.core.generation.queues;
++
++import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiDistantGeneratorMode;
++import com.seibel.distanthorizons.api.enums.worldGeneration.EDhApiWorldGeneratorReturnType;
++import com.seibel.distanthorizons.api.interfaces.override.worldGenerator.IDhApiWorldGenerator;
++import com.seibel.distanthorizons.api.objects.data.IDhApiFullDataSource;
++import com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector;
++import com.seibel.distanthorizons.core.generation.tasks.DataSourceRetrievalTask;
++import com.seibel.distanthorizons.core.pos.DhSectionPos;
++import com.seibel.distanthorizons.core.render.renderer.AbstractDebugWireframeRenderer;
++import java.lang.reflect.Method;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.ExecutorService;
++import java.util.function.Consumer;
++import org.junit.Assert;
++import org.junit.BeforeClass;
++import org.junit.Test;
++
++public class WorldGenerationQueueFailureTest
++{
++	@BeforeClass
++	public static void bindRenderer()
++	{
++		SingletonInjector.INSTANCE.bind(AbstractDebugWireframeRenderer.class, new AbstractDebugWireframeRenderer() {
++			@Override public void renderBox(Box box) { }
++		});
++	}
++
++	@Test
++	public void failedFutureReleasesWorkerSlot() throws Exception { checkFailure(false); }
++
++	@Test
++	public void synchronousFailureReleasesWorkerSlot() throws Exception { checkFailure(true); }
++
++	private void checkFailure(boolean synchronous) throws Exception
++	{
++		IDhApiWorldGenerator generator = new IDhApiWorldGenerator() {
++			@Override public EDhApiWorldGeneratorReturnType getReturnType() { return EDhApiWorldGeneratorReturnType.API_DATA_SOURCES; }
++			@Override public void preGeneratorTaskStart() { }
++			@Override public void close() { }
++			@Override public CompletableFuture<Void> generateLod(int x, int z, int lodX, int lodZ, byte detail,
++				IDhApiFullDataSource source, EDhApiDistantGeneratorMode mode, ExecutorService executor,
++				Consumer<IDhApiFullDataSource> consumer)
++			{
++				if (synchronous) { throw new IllegalStateException("Simulated source failure"); }
++				CompletableFuture<Void> future = new CompletableFuture<>();
++				future.completeExceptionally(new IllegalStateException("Simulated async failure"));
++				return future;
++			}
++		};
++		try (WorldGenerationQueue queue = new WorldGenerationQueue(generator, null))
++		{
++			Method start = WorldGenerationQueue.class.getDeclaredMethod("startWorldGenTaskGroup", DataSourceRetrievalTask.class);
++			start.setAccessible(true);
++			for (int x = 0; x < 4; x++)
++			{
++				DataSourceRetrievalTask task = new DataSourceRetrievalTask(DhSectionPos.encode((byte) 6, x, 0), (byte) 0);
++				start.invoke(queue, task);
++				Assert.assertTrue(task.future.isCompletedExceptionally());
++				Assert.assertEquals("A failed task must not consume a generation slot", 0, queue.getInProgressTaskCount());
++			}
++		}
++	}
++}

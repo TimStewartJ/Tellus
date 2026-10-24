@@ -176,34 +176,37 @@ final class WorldCoverCogSource {
          return centerSample;
       }
 
+      double cellBlocks = sourceResolutionMeters / Math.max(worldScale, Double.MIN_NORMAL);
       double continuousX = continuousPixel(
          (lon - center.tileKey().lon()) / TILE_DEGREES,
          center.level().width()
-      );
+      ) + LandCoverTransition.warpPixelsX(blockX, blockZ, cellBlocks, transitionStrength);
       double continuousY = continuousPixel(
          (center.tileKey().lat() + TILE_DEGREES - lat) / TILE_DEGREES,
          center.level().height()
+      ) + LandCoverTransition.warpPixelsZ(blockX, blockZ, cellBlocks, transitionStrength);
+      // The warped point's pixel is the base class, unless it is water or missing data
+      // the column itself is not: hydrology keeps following the unwarped raster.
+      int warpedClass = this.sampleVisualOffset(
+         center,
+         (int)Math.floor(continuousX) - center.pixelX(),
+         (int)Math.floor(continuousY) - center.pixelY(),
+         centerSample.coverClass(),
+         lookupMode
       );
+      int baseClass = LandCoverTransition.isHardClass(warpedClass) ? centerSample.coverClass() : warpedClass;
       double blendX = continuousX - 0.5;
       double blendY = continuousY - 0.5;
       int x0 = (int)Math.floor(blendX);
       int y0 = (int)Math.floor(blendY);
       int x1 = x0 + 1;
       int y1 = y0 + 1;
-      int value00 = this.sampleVisualOffset(
-         center, x0 - center.pixelX(), y0 - center.pixelY(), centerSample.coverClass(), lookupMode
-      );
-      int value10 = this.sampleVisualOffset(
-         center, x1 - center.pixelX(), y0 - center.pixelY(), centerSample.coverClass(), lookupMode
-      );
-      int value01 = this.sampleVisualOffset(
-         center, x0 - center.pixelX(), y1 - center.pixelY(), centerSample.coverClass(), lookupMode
-      );
-      int value11 = this.sampleVisualOffset(
-         center, x1 - center.pixelX(), y1 - center.pixelY(), centerSample.coverClass(), lookupMode
-      );
+      int value00 = this.sampleVisualOffset(center, x0 - center.pixelX(), y0 - center.pixelY(), baseClass, lookupMode);
+      int value10 = this.sampleVisualOffset(center, x1 - center.pixelX(), y0 - center.pixelY(), baseClass, lookupMode);
+      int value01 = this.sampleVisualOffset(center, x0 - center.pixelX(), y1 - center.pixelY(), baseClass, lookupMode);
+      int value11 = this.sampleVisualOffset(center, x1 - center.pixelX(), y1 - center.pixelY(), baseClass, lookupMode);
       int selected = LandCoverTransition.selectVisualClass(
-         centerSample.coverClass(),
+         baseClass,
          value00,
          value10,
          value01,
@@ -213,7 +216,7 @@ final class WorldCoverCogSource {
          transitionStrength,
          blockX,
          blockZ,
-         sourceResolutionMeters / Math.max(worldScale, Double.MIN_NORMAL)
+         cellBlocks
       );
       return new Sample(selected, true);
    }
@@ -1456,6 +1459,9 @@ final class WorldCoverCogSource {
          }
          long responseLength = connection.getContentLengthLong();
          DownloadProgressReporter.requestStarted(responseLength);
+         // Reuse the socket (JDK keep-alive) when the exact range was consumed; the bucket is in Europe,
+         // so a fresh TLS handshake per block costs several hundred milliseconds.
+         boolean reusable = false;
          try {
             if (responseCode != 206 && !(responseCode == 200 && offset == 0L)) {
                throw httpError(connection, responseCode);
@@ -1475,11 +1481,14 @@ final class WorldCoverCogSource {
                if (bytes.length != length) {
                   throw new EOFException("Truncated WorldCover HTTP range");
                }
+               reusable = responseCode == 206 && responseLength == length;
                return bytes;
             }
          } finally {
             DownloadProgressReporter.requestFinished();
-            connection.disconnect();
+            if (!reusable) {
+               connection.disconnect();
+            }
          }
       }
 

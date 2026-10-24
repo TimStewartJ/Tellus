@@ -7,7 +7,7 @@ plugins {
 
 def minecraftVersion = '1.20.1'
 def forgeVersion = '47.4.20'
-def distantHorizonsApiVersion = '7.0.0'
+def distantHorizonsApiVersion = '7.1.0'
 def twelveMonkeysImageioVersion = '3.13.1'
 def javaVersion = 17
 def distantHorizonsRuntimePath = providers.gradleProperty('mc1201_forge_distant_horizons_runtime_path').orNull

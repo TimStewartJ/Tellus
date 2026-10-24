@@ -10,7 +10,7 @@ ext.tellus = [
 	neoForgeVersion: '26.2.0.7-beta',
 	javaVersion: 25,
 	distantHorizonsRuntimeProperty: 'mc262_distant_horizons_runtime_path',
-	sharedSourceLayers: ['post-1201', 'mc262', 'forge-family', 'neoforge'],
+	sharedSourceLayers: ['post-1201', 'mc262', 'mc26', 'forge-family', 'neoforge'],
 ]
 
 apply from: rootProject.file('gradle/tellus-neoforge.gradle')

@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 class ResolveBiomeClassificationTest {
    @Test
-   void fabric262ServiceLoadsTheResolveProvider() {
+   void serviceLoadsTheResolveProvider() {
       double worldScale = 1.0;
       int blockX = (int)Math.round(-122.3321 * EarthProjection.blocksPerDegree(worldScale));
       int blockZ = (int)Math.round(EarthProjection.latToBlockZ(47.6062, worldScale));

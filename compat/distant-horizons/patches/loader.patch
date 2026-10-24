@@ -1,0 +1,187 @@
+diff --git a/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/GlDhMetaRenderer.java b/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/GlDhMetaRenderer.java
+index 3001243d8..55e9d14a6 100644
+--- a/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/GlDhMetaRenderer.java
++++ b/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/GlDhMetaRenderer.java
+@@ -122,11 +122,13 @@ public class GlDhMetaRenderer implements IDhMetaRenderer
+ 		
+ 		this.bindLightmap(renderParams.lightmap);
+ 		
+-		if (Config.Client.Advanced.Graphics.Texture.enableTexturedLods.get())
++		// Iris also needs the neutral atlas tile when DH textures are disabled.
++		// Iris owns its sampler bindings; bind unit 1 only for DH's own shader.
++		boolean irisInactive = this.irisShadersInactive();
++		if (Config.Client.Advanced.Graphics.Texture.enableTexturedLods.get() || !irisInactive)
+ 		{
+ 			GlBlockTextureAtlas.INSTANCE.uploadPendingTiles();
+-			GlBlockTextureAtlas.INSTANCE.bind();
+-			DhApiRenderProxy.getDhBlockRatioAtlasTextureGlId = GlBlockTextureAtlas.INSTANCE.getTextureId();
++			if (irisInactive) { GlBlockTextureAtlas.INSTANCE.bind(); }
+ 		}
+ 	}
+ 	private void setGLState(
+diff --git a/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/terrain/GlBlockTextureAtlas.java b/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/terrain/GlBlockTextureAtlas.java
+index 8237d9b40..d29a9973e 100644
+--- a/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/terrain/GlBlockTextureAtlas.java
++++ b/common/src/main/java/com/seibel/distanthorizons/common/render/openGl/terrain/GlBlockTextureAtlas.java
+@@ -22,6 +22,7 @@ package com.seibel.distanthorizons.common.render.openGl.terrain;
+ import com.seibel.distanthorizons.common.wrappers.minecraft.MinecraftGLWrapper;
+ import com.seibel.distanthorizons.core.dataObjects.render.textures.BlockTextureRegistry;
+ import com.seibel.distanthorizons.core.render.AbstractBlockTextureAtlas;
++import com.seibel.distanthorizons.core.render.DhApiRenderProxy;
+ import com.seibel.distanthorizons.coreapi.util.TextureUtil;
+ import org.lwjgl.opengl.GL33;
+ 
+@@ -71,28 +72,40 @@ public class GlBlockTextureAtlas extends AbstractBlockTextureAtlas
+ 	@Override
+ 	protected void tryCreateOrResize(int width, int height)
+ 	{
+-		if (this.textureId != 0)
++		int previousTexture = GL33.glGetInteger(GL33.GL_TEXTURE_BINDING_2D);
++		if (previousTexture == this.textureId) { previousTexture = 0; }
++		DhApiRenderProxy.getDhBlockRatioAtlasTextureGlId = -1;
++		try
+ 		{
+-			GL33.glDeleteTextures(this.textureId);
++			if (this.textureId != 0)
++			{
++				GL33.glDeleteTextures(this.textureId);
++			}
++
++			this.textureId = GL33.glGenTextures();
++			GL33.glBindTexture(GL33.GL_TEXTURE_2D, this.textureId);
++			GL33.glTexImage2D(
++				GL33.GL_TEXTURE_2D, 0,
++				GL33.GL_RGBA8,
++				width, height,
++				0,
++				GL33.GL_RGBA, GL33.GL_UNSIGNED_BYTE,
++				(ByteBuffer) null
++			);
++
++			// nearest filtering keeps the blocky look and prevents
++			// texels bleeding between unrelated tiles on adjacent layers
++			GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MIN_FILTER, GL33.GL_NEAREST_MIPMAP_LINEAR);
++			GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MAG_FILTER, GL33.GL_NEAREST);
++			GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_WRAP_S, GL33.GL_REPEAT);
++			GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_WRAP_T, GL33.GL_REPEAT);
++			DhApiRenderProxy.getDhBlockRatioAtlasTextureGlId = this.textureId;
++		}
++		finally
++		{
++			// Allocation must not replace the lightmap or an Iris sampler binding.
++			GL33.glBindTexture(GL33.GL_TEXTURE_2D, previousTexture);
+ 		}
+-		
+-		this.textureId = GL33.glGenTextures();
+-		GL33.glBindTexture(GL33.GL_TEXTURE_2D, this.textureId);
+-		GL33.glTexImage2D(
+-			GL33.GL_TEXTURE_2D, 0,
+-			GL33.GL_RGBA8,
+-			width, height,
+-			0,
+-			GL33.GL_RGBA, GL33.GL_UNSIGNED_BYTE,
+-			(ByteBuffer) null
+-		);
+-		
+-		// nearest filtering keeps the blocky look and prevents
+-		// texels bleeding between unrelated tiles on adjacent layers
+-		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MIN_FILTER, GL33.GL_NEAREST_MIPMAP_LINEAR);
+-		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_MAG_FILTER, GL33.GL_NEAREST);
+-		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_WRAP_S, GL33.GL_REPEAT);
+-		GL33.glTexParameteri(GL33.GL_TEXTURE_2D, GL33.GL_TEXTURE_WRAP_T, GL33.GL_REPEAT);
+ 	}
+ 	
+ 	public int getTextureId() { return this.textureId; }
+@@ -178,11 +191,13 @@ public class GlBlockTextureAtlas extends AbstractBlockTextureAtlas
+ 		private int unpackAlignment = 0;
+ 		
+ 		private int textureBinding = 0;
++		private int activeTexture = GL33.GL_TEXTURE0;
+ 		
+ 		
+ 		
+ 		public void saveState()
+ 		{
++			this.activeTexture = GL33.glGetInteger(GL33.GL_ACTIVE_TEXTURE);
+ 			this.unpackRowLength = GL33.glGetInteger(GL33.GL_UNPACK_ROW_LENGTH);
+ 			this.unpackSkipPixels = GL33.glGetInteger(GL33.GL_UNPACK_SKIP_PIXELS);
+ 			this.unpackSkipRows = GL33.glGetInteger(GL33.GL_UNPACK_SKIP_ROWS);
+@@ -201,6 +216,7 @@ public class GlBlockTextureAtlas extends AbstractBlockTextureAtlas
+ 			GL33.glPixelStorei(GL33.GL_UNPACK_SKIP_PIXELS, this.unpackSkipPixels);
+ 			GL33.glPixelStorei(GL33.GL_UNPACK_SKIP_ROWS, this.unpackSkipRows);
+ 			GL33.glPixelStorei(GL33.GL_UNPACK_ALIGNMENT, this.unpackAlignment);
++			GLMC.glActiveTexture(this.activeTexture);
+ 		}
+ 		
+ 	}
+diff --git a/gradle.properties b/gradle.properties
+index 6fb75b9fa..0dacab4f6 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -6,7 +6,7 @@ org.gradle.caching=true
+ # Mod Info
+ mod_name=DistantHorizons
+ api_name=DistantHorizonsApi
+-mod_version=3.3.1
++mod_version=3.3.1-tellus.1
+ api_version=7.1.0
+ maven_group=com.seibel.distanthorizons
+ mod_readable_name=Distant Horizons
+diff --git a/TELLUS_COMPATIBILITY.md b/TELLUS_COMPATIBILITY.md
+new file mode 100644
+index 000000000..74e032162
+--- /dev/null
++++ b/TELLUS_COMPATIBILITY.md
+@@ -0,0 +1,52 @@
++# Tellus Distant Horizons fork: 3.3.1-tellus.1
++
++Based on upstream Distant Horizons 3.3.1 (`f0cefb7a994a670ca653e3dd52ff345275018724`)
++and core/API `b0a5f3506364485eb9e4cd94b5343304adb6c88c`. The fork implements official
++API 7.1.0 plus the optional generation-availability extension.
++
++The loader retains the 3.3.1 Shadow 9.0.0 pin fixing NeoForge translations. Tellus
++patches preserve the 14-bit vertical format, old-cache conversion, child-upsample
++metadata, Iris atlas allocation/upload state, and the neutral atlas with textures
++disabled. The new mipmap filter and upstream renderer remain in place. Automatic
++updates to stock DH are disabled even when an old config enabled the updater.
++
++The generation queue calls `getGenerationAvailability` before starting work.
++READY begins generation, SPLIT subdivides useful partially cached regions, and
++WAIT leaves unavailable regions queued without consuming workers. Generators that
++do not implement the extension remain ready by default. Queue selection avoids
++per-candidate allocations; generation failure and cancellation release capacity
++and pooled results. Completed columns at the required generation stage avoid
++redundant child database scans.
++
++Use the matching updated Tellus jar compiled against API 7.1. Tellus marks complete
++LOD columns as FEATURES and checks managed coverage without scanning enormous
++empty regions. Terrain sampling and detail settings are unchanged.
++
++## Building
++
++Use JDK 25 and the included Gradle wrapper. Build versions sequentially because
++Manifold definitions and common build outputs are shared. Clean the loader/common
++outputs when switching targets, then stage the jars before building the next one.
++
++Supported `mcVer` values: `26.3.0`, `26.2.0`, `1.21.11`, `1.21.1`, and `1.20.1`.
++Use `:fabric:remapJar` for every version; use `:neoforge:remapJar` except for 1.20.1,
++which uses `:forge:remapJar`. Run `:api:test :core:test` once for core regressions.
++The Tellus repository's `compat/distant-horizons/build.py` automates this matrix.
++
++Ship only the loader-specific `DistantHorizons-LOADER-3.3.1-tellus.1-MC.jar`, replacing
++the old DH jar for that instance. Do not install two loader/version variants.
++
++## Verification
++
++All 80 API/core tests pass, including height/cache conversion, child upsampling,
++readiness selection, cancellation, and synchronous/asynchronous failure cleanup.
++All ten jars preserve the official API and resolve all 107 DH class/member
++references in Iris 1.11.4 and 1.11.6. Language resources and core/API bytecode are
++identical across loaders. The Apple M4 OpenGL smoke check validates initial atlas
++allocation, neutral pixels, API texture IDs, pixel/sampler state, and atlas growth.
++The Tellus repository contains the complete runtime/test notes in
++`docs/distant-horizons-3.3.1.md` and reproducible source patches in
++`compat/distant-horizons/patches/`.
++
++A full interactive shader-pack playtest on Windows/NVIDIA remains separate from
++these local checks.

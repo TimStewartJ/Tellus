@@ -62,6 +62,8 @@ public final class TellusWorldgenSources {
    private static final int INFRASTRUCTURE_PREFETCH_RADIUS = intProperty("tellus.prefetch.infrastructure.radius", 1);
    private static final int BUILDINGS_PREFETCH_RADIUS = intProperty("tellus.prefetch.buildings.radius", 1);
    private static final int LOD_OSM_SURFACE_MAX_DETAIL = intProperty("tellus.dhOsmSurfaceMaxDetail", 6);
+   private static final int LOD_SHORELINE_SKIP_MIN_DETAIL = intProperty("tellus.dhFastRenderSkipShorelineMinDetail", 3);
+   private static final int LOD_SHORELINE_MAX_CELL_METERS = intProperty("tellus.dhFastRenderShorelineMaxCellMeters", 64);
    private static final ExecutorService PREFETCH_EXECUTOR = createPrefetchExecutor();
    private static final ThreadPoolExecutor LOD_PREFETCH_EXECUTOR = createLodPrefetchExecutor();
    private static final ExecutorService TERRAIN_DETAIL_EXECUTOR = createTerrainDetailExecutor();
@@ -296,18 +298,27 @@ public final class TellusWorldgenSources {
       sourceFutures.add(submitAreaPrefetch("elevation", () ->
          ELEVATION.preloadAreaInputsIntoMemory(minX, minZ, maxX, maxZ, worldScale, settings.demSelection(), previewResolutionMeters, 0, null)
       ));
-      sourceFutures.add(submitAreaPrefetch("land mask", () ->
-         LAND_MASK.preloadAreaInputsIntoMemory(minX, minZ, maxX, maxZ, worldScale, 0, null)
-      ));
+      // With map water on, LODs read the land mask only in the shoreline pass.
+      if (!settings.enableWater() || !skipsLodShoreline(settings, lodDetail(lodCellBlocks))) {
+         sourceFutures.add(submitAreaPrefetch("land mask", () ->
+            LAND_MASK.preloadAreaInputsIntoMemory(minX, minZ, maxX, maxZ, worldScale, 0, null)
+         ));
+      }
       if (SAND_PREFETCH_RADIUS > 0 && worldScale > 0.0 && lodDetail(lodCellBlocks) <= LOD_OSM_SURFACE_MAX_DETAIL) {
+         // Same tiles the LOD's sand lookups read: sized to its cells, not to single blocks.
          sourceFutures.add(submitAreaPrefetch("sand", () ->
-            OSM_SAND.preloadAreaTiles(minX, minZ, maxX, maxZ, worldScale, Math.max(1, SAND_PREFETCH_RADIUS), 0, null)
+            OSM_SAND.preloadAreaTiles(
+               minX, minZ, maxX, maxZ, worldScale, previewResolutionMeters, Math.max(1, SAND_PREFETCH_RADIUS), 0, null
+            )
          ));
       }
       if (WATER_PREFETCH_ENABLED && settings.enableWater()) {
          int waterTileBudget = DhLodWaterResolver.waterQueryTileBudget(lodCellBlocks);
+         int waterTileWidthBlocks = DhLodWaterResolver.waterQueryMinTileWidthBlocks(lodCellBlocks);
          sourceFutures.add(submitAreaPrefetch("water", () ->
-            OSM_WATER.downloadAreaInputs(minX, minZ, maxX, maxZ, worldScale, marginBlocks, waterTileBudget, 0, null)
+            OSM_WATER.downloadAreaInputs(
+               minX, minZ, maxX, maxZ, worldScale, marginBlocks, waterTileBudget, waterTileWidthBlocks, 0, null
+            )
          ));
       }
       if (includeRoadsPrefetch && settings.enableRoads() && worldScale > 0.0 && worldScale <= 15.0) {
@@ -342,6 +353,47 @@ public final class TellusWorldgenSources {
       return result;
    }
 
+   /**
+    * Downloads the map tiles {@link #prefetchForArea} would read for a LOD area (Overture water, roads, road
+    * infrastructure and buildings) to the disk cache without decoding them. Used to fetch the sections
+    * Distant Horizons will ask for next while it is still generating nearer ones.
+    */
+   public static void downloadLodMapTiles(
+      int minBlockX,
+      int minBlockZ,
+      int maxBlockX,
+      int maxBlockZ,
+      EarthGeneratorSettings settings,
+      boolean includeRoads,
+      boolean includeBuildings,
+      double previewResolutionMeters
+   ) {
+      if (ManagedTerrainNetworkPolicy.isCacheOnly() || !PREFETCH_ENABLED) {
+         return;
+      }
+
+      int minX = Math.min(minBlockX, maxBlockX);
+      int minZ = Math.min(minBlockZ, maxBlockZ);
+      int maxX = Math.max(minBlockX, maxBlockX);
+      int maxZ = Math.max(minBlockZ, maxBlockZ);
+      double worldScale = settings.worldScale();
+      int marginBlocks = Math.max(16, (int)Math.ceil(64.0 / Math.max(1.0, worldScale)));
+      int lodCellBlocks = lodCellSize(worldScale, previewResolutionMeters);
+      if (WATER_PREFETCH_ENABLED && settings.enableWater()) {
+         OSM_WATER.downloadAreaInputs(
+            minX, minZ, maxX, maxZ, worldScale, marginBlocks,
+            DhLodWaterResolver.waterQueryTileBudget(lodCellBlocks), DhLodWaterResolver.waterQueryMinTileWidthBlocks(lodCellBlocks), 0, null
+         );
+      }
+      if (includeRoads && settings.enableRoads() && worldScale > 0.0 && worldScale <= 15.0) {
+         OSM_ROADS.downloadAreaInputs(minX, minZ, maxX, maxZ, worldScale, marginBlocks, 0, null);
+         OSM_INFRASTRUCTURE.downloadAreaInputs(minX, minZ, maxX, maxZ, worldScale, marginBlocks, 0, null);
+      }
+      if (includeBuildings && settings.enableBuildings() && worldScale > 0.0 && worldScale <= 15.0) {
+         OSM_BUILDINGS.downloadAreaInputs(minX, minZ, maxX, maxZ, worldScale, marginBlocks, 0, null);
+      }
+   }
+
    private static int lodCellSize(double worldScale, double previewResolutionMeters) {
       if (!(worldScale > 0.0) || !Double.isFinite(previewResolutionMeters) || previewResolutionMeters <= 0.0) {
          return 1;
@@ -352,6 +404,17 @@ public final class TellusWorldgenSources {
 
    private static int lodDetail(int cellSize) {
       return 31 - Integer.numberOfLeadingZeros(Math.max(1, cellSize));
+   }
+
+   /**
+    * Whether Distant Horizons' fast render mode skips the shoreline pass (beach and shore palettes) for a
+    * LOD. The shore band is a few blocks wide, so it stops mattering past a detail level and, at large
+    * world scales, past a ground cell size.
+    */
+   public static boolean skipsLodShoreline(EarthGeneratorSettings settings, int detailLevel) {
+      return settings.distantHorizonsRenderMode() == EarthGeneratorSettings.DistantHorizonsRenderMode.FAST
+         && (detailLevel >= LOD_SHORELINE_SKIP_MIN_DETAIL
+            || (1L << detailLevel) * settings.worldScale() > LOD_SHORELINE_MAX_CELL_METERS);
    }
 
    private static boolean hasPreloadedTerrainForChunk(
@@ -754,10 +817,12 @@ public final class TellusWorldgenSources {
       if (!PREFETCH_ENABLED) {
          return null;
       }
+      // Each prepared LOD area submits one task per source and those tasks mostly wait on the shared
+      // download pool, so allow enough (cheap, blocked) threads and queue for many areas in flight.
       TellusWorldgenSources.ThreadBounds bounds = resolveThreadBounds(
-         "tellus.dhPrefetch.threads.min", "tellus.dhPrefetch.threads.max", "tellus.dhPrefetch.threads", 2, 8
+         "tellus.dhPrefetch.threads.min", "tellus.dhPrefetch.threads.max", "tellus.dhPrefetch.threads", 4, 32
       );
-      int queueSize = intProperty("tellus.dhPrefetch.queue", 128);
+      int queueSize = intProperty("tellus.dhPrefetch.queue", 1024);
       return createAdaptiveExecutor("tellus-dh-prefetch-", bounds.min(), bounds.max(), queueSize);
    }
 

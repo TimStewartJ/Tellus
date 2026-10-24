@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -67,6 +68,13 @@ public final class TellusCacheFiles {
          Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
       } catch (AtomicMoveNotSupportedException ignored) {
          Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+      } catch (FileSystemException error) {
+         // Windows refuses to replace a file that another worker has open. Cache entries are keyed by
+         // their source tile and only ever moved into place complete, so an existing target already
+         // holds equivalent data; keep it rather than failing the caller's load.
+         if (!Files.isRegularFile(target)) {
+            throw error;
+         }
       }
    }
 

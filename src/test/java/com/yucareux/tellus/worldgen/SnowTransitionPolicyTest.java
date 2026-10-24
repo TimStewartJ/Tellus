@@ -31,7 +31,17 @@ class SnowTransitionPolicyTest {
    }
 
    @Test
-   void warpingAndMaskTurnAStraightSourceEdgeIntoAnIrregularTransition() {
+   void neverCreatesSnowOutsideLocalCoverEvenWhenSurroundedBySnow() {
+      SnowTransitionPolicy.SourceSampler allNeighborsSnow = (worldX, worldZ) -> true;
+      for (int worldZ = -64; worldZ <= 64; worldZ++) {
+         for (int worldX = -64; worldX <= 64; worldX++) {
+            assertFalse(SnowTransitionPolicy.shouldCover(worldX, worldZ, 0.0, false, allNeighborsSnow, 1234L));
+         }
+      }
+   }
+
+   @Test
+   void warpingAndMaskSoftenTheInsideOfASnowCoverBoundary() {
       SnowTransitionPolicy.SourceSampler westHalfPlane = (worldX, worldZ) -> worldX <= 0;
       Set<Integer> transitionEdges = new HashSet<>();
       int barePocketsInsideSource = 0;
@@ -56,7 +66,7 @@ class SnowTransitionPolicyTest {
       }
 
       assertTrue(barePocketsInsideSource > 0);
-      assertTrue(snowPatchesOutsideSource > 0);
+      assertEquals(0, snowPatchesOutsideSource);
       assertTrue(transitionEdges.size() >= 12);
    }
 

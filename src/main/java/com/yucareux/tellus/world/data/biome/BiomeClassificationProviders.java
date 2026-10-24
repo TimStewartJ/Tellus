@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.ServiceConfigurationError;
-import java.util.ServiceLoader;
 import java.util.Set;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.biome.Biome;
@@ -41,7 +40,7 @@ public final class BiomeClassificationProviders {
    private static List<BiomeClassificationProvider> loadProviders() {
       List<BiomeClassificationProvider> providers = new ArrayList<>();
       try {
-         ServiceLoader.load(BiomeClassificationProvider.class).forEach(providers::add);
+         BiomeProviderDiscovery.load().forEach(providers::add);
       } catch (ServiceConfigurationError error) {
          Tellus.LOGGER.warn("Failed to load an optional biome classification provider", error);
       }

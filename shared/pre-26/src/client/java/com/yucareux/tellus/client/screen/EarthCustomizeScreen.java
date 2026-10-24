@@ -78,6 +78,8 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       "dynamicDimensionTypeKey"
    );
    private static final double OSM_ROADS_AND_BUILDINGS_MAX_WORLD_SCALE = 15.0;
+   // LOD city lights distance slider stops, in chunks; the step after the last one is Unlimited.
+   private static final int[] CITY_LIGHTS_DISTANCE_STEPS = {256, 512, 1024, 2048, 4096};
    private static final String BIOME_TOGGLE_PREFIX = "random_biome.";
    private final CreateWorldScreen parent;
    private final List<EarthCustomizeScreen.CategoryDefinition> categories;
@@ -92,6 +94,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
    private double spawnLatitude = 27.9881;
    private double spawnLongitude = 86.925;
    private long randomBiomeSeed = EarthGeneratorSettings.DEFAULT.randomBiomeSeed();
+   private Component validationError;
 
    public EarthCustomizeScreen(CreateWorldScreen parent, WorldCreationContext worldCreationContext) {
       super(TITLE);
@@ -140,10 +143,12 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
    }
 
    private void onSettingsChanged() {
+      this.validationError = null;
       this.previewDirtyAt = System.currentTimeMillis();
    }
 
    public void applySpawnpoint(double latitude, double longitude) {
+      this.validationError = null;
       this.spawnLatitude = latitude;
       this.spawnLongitude = longitude;
       this.previewDirtyAt = System.currentTimeMillis();
@@ -205,10 +210,18 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          EarthGeneratorSettings settings = Objects.requireNonNull(this.buildSettings(), "generatorSettings");
          WorldCreationContext current = Objects.requireNonNull(this.parent.getUiState().getSettings(), "worldCreationContext");
          EarthGeneratorSettings.HeightLimits limits = Objects.requireNonNull(EarthGeneratorSettings.resolveHeightLimits(settings), "heightLimits");
-         WorldCreationContext updated = Objects.requireNonNull(updateWorldCreationContext(current, settings, limits), "updatedWorldContext");
-         this.parent.getUiState().setSettings(updated);
-         this.preview.close();
-         this.minecraft.setScreen(this.parent);
+         try {
+            ExperimentalHeightSupport.validateOrThrow(settings, limits);
+            WorldCreationContext updated = Objects.requireNonNull(updateWorldCreationContext(current, settings, limits), "updatedWorldContext");
+            this.parent.getUiState().setSettings(updated);
+            this.preview.close();
+            this.minecraft.setScreen(this.parent);
+         } catch (IllegalStateException error) {
+            Tellus.LOGGER.warn("Tellus world settings validation failed", error);
+            this.validationError = settings.experimentalIncreaseHeight() && !ExperimentalHeightSupport.isRuntimeProfileActive()
+               ? experimentalHeightValidationFailedTooltip()
+               : Component.translatable("tellus.validation.world_settings_failed").withStyle(ChatFormatting.RED);
+         }
       }
    }
 
@@ -506,6 +519,9 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       EarthGeneratorSettings.DistantHorizonsRenderMode renderMode = this.findRenderMode(
          "distant_horizons_render_mode", EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()
       );
+      int distantHorizonsCityLightsDistance = cityLightsDistanceForStep(
+         this.findSliderValue("distant_horizons_city_lights_distance", cityLightsDistanceStep(EarthGeneratorSettings.DEFAULT_DH_CITY_LIGHTS_DISTANCE))
+      );
       if (!roadsAndBuildingsSupportedForWorldScale(worldScale)) {
          enableRoads = false;
          enableBuildings = false;
@@ -579,7 +595,8 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          undergroundDepth,
          customTrees,
          automaticHeightScaling,
-         hugeRedMushrooms
+         hugeRedMushrooms,
+         distantHorizonsCityLightsDistance
       );
    }
 
@@ -664,6 +681,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       this.setSliderValue("voxy_chunk_pregen_max_radius", initialSettings.voxyChunkPregenMaxRadius());
       this.setSliderValue("voxy_chunk_pregen_chunks_per_tick", initialSettings.voxyChunkPregenChunksPerTick());
       this.setRenderModeValue("distant_horizons_render_mode", initialSettings.distantHorizonsRenderMode());
+      this.setSliderValue("distant_horizons_city_lights_distance", cityLightsDistanceStep(initialSettings.distantHorizonsCityLightsDistance()));
    }
 
    private void setSliderValue(String key, double value) {
@@ -745,7 +763,12 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
       this.renderVersionBackground(graphics, mouseX, mouseY, delta);
       super.render(graphics, mouseX, mouseY, delta);
-      graphics.drawCenteredString(this.font, this.title, this.width / 2, 20, 16777215);
+      // Text colors need an alpha byte: since 1.21.6, text drawn with alpha 0 is skipped.
+      graphics.drawCenteredString(this.font, this.title, this.width / 2, 20, 0xFFFFFFFF);
+      if (this.validationError != null) {
+         int messageWidth = Math.max(120, this.width - 24);
+         graphics.drawWordWrap(this.font, this.validationError, 12, Math.max(42, this.height - 58), messageWidth, 0xFFFF5555);
+      }
    }
 
    private List<EarthCustomizeScreen.CategoryDefinition> createCategories() {
@@ -878,7 +901,14 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
                "distant_horizons",
                List.of(
                   mode("distant_horizons_render_mode", EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()),
-                  toggle("distant_horizons_water_resolver", EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver())
+                  toggle("distant_horizons_water_resolver", EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver()),
+                  slider(
+                     "distant_horizons_city_lights_distance",
+                     cityLightsDistanceStep(EarthGeneratorSettings.DEFAULT_DH_CITY_LIGHTS_DISTANCE),
+                     0.0,
+                     CITY_LIGHTS_DISTANCE_STEPS.length,
+                     1.0
+                  ).withDisplay(EarthCustomizeScreen::formatCityLightsDistance)
                )
             )
             .hideFromRoot()
@@ -1148,6 +1178,36 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       return Component.translatable("tellus.value.chunks", String.format(Locale.ROOT, "%.0f", value)).getString();
    }
 
+   private static String formatCityLightsDistance(double step) {
+      int distance = cityLightsDistanceForStep(step);
+      return distance == EarthGeneratorSettings.DH_CITY_LIGHTS_UNLIMITED
+         ? Component.translatable("tellus.value.unlimited").getString()
+         : formatChunkRadius(distance);
+   }
+
+   /** The chunk distance of a city lights slider step; the step after the last distance is Unlimited. */
+   private static int cityLightsDistanceForStep(double step) {
+      int index = (int)Math.round(step);
+      return index >= 0 && index < CITY_LIGHTS_DISTANCE_STEPS.length
+         ? CITY_LIGHTS_DISTANCE_STEPS[index]
+         : EarthGeneratorSettings.DH_CITY_LIGHTS_UNLIMITED;
+   }
+
+   /** The slider step showing a stored city lights distance: the nearest stop, or Unlimited. */
+   private static double cityLightsDistanceStep(int distanceChunks) {
+      if (distanceChunks == EarthGeneratorSettings.DH_CITY_LIGHTS_UNLIMITED) {
+         return CITY_LIGHTS_DISTANCE_STEPS.length;
+      }
+      int best = 0;
+      for (int i = 1; i < CITY_LIGHTS_DISTANCE_STEPS.length; i++) {
+         double ratio = Math.abs(Math.log((double)distanceChunks / CITY_LIGHTS_DISTANCE_STEPS[i]));
+         if (ratio < Math.abs(Math.log((double)distanceChunks / CITY_LIGHTS_DISTANCE_STEPS[best]))) {
+            best = i;
+         }
+      }
+      return best;
+   }
+
    private static String formatChunksPerTick(double value) {
       return Component.translatable("tellus.value.chunks_per_tick", String.format(Locale.ROOT, "%.0f", value)).getString();
    }
@@ -1314,6 +1374,14 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       );
    }
 
+   private static Component experimentalHeightValidationFailedTooltip() {
+      return Objects.requireNonNull(
+         Component.translatable("tellus.experimental_increase_height.validation_failed", ExperimentalHeightSupport.launchPropertyInstruction())
+            .withStyle(ChatFormatting.RED),
+         "experimentalHeightValidationFailedTooltip"
+      );
+   }
+
    private static String describeDimensionType(DimensionType type) {
       return "minY=" + type.minY() + ",height=" + type.height() + ",logicalHeight=" + type.logicalHeight();
    }
@@ -1417,6 +1485,8 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
    }
 
    private void showCategory(EarthCustomizeScreen.CategoryDefinition category) {
+      // Changing a setting re-shows its category; keep the scroll position so the edited row stays in view.
+      boolean refreshingCategory = category.getId().equals(this.currentCategoryId);
       this.currentCategoryId = category.getId();
       this.list.clear();
       String parentCategoryId = category.parentCategoryId();
@@ -1467,7 +1537,9 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          this.list.addWidget(setting.createWidget(onChange));
       }
 
-      this.list.setScrollAmount(0.0);
+      if (!refreshingCategory) {
+         this.list.setScrollAmount(0.0);
+      }
    }
 
    
@@ -1614,6 +1686,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       } else if ("distant_horizons".equals(category.getId())) {
          EarthCustomizeScreen.ModeDefinition renderMode = null;
          EarthCustomizeScreen.ToggleDefinition waterResolver = null;
+         EarthCustomizeScreen.SliderDefinition cityLightsDistance = null;
 
          for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
             if (setting instanceof EarthCustomizeScreen.ModeDefinition mode && mode.key.equals("distant_horizons_render_mode")) {
@@ -1623,10 +1696,14 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
             if (setting instanceof EarthCustomizeScreen.ToggleDefinition toggle && toggle.key.equals("distant_horizons_water_resolver")) {
                waterResolver = toggle;
             }
+
+            if (setting instanceof EarthCustomizeScreen.SliderDefinition slider && slider.key.equals("distant_horizons_city_lights_distance")) {
+               cityLightsDistance = slider;
+            }
          }
 
+         boolean blockedByVoxy = bothCompatibilityModsInstalled && voxyEnabled;
          if (renderMode != null && waterResolver != null) {
-            boolean blockedByVoxy = bothCompatibilityModsInstalled && voxyEnabled;
             boolean ultraFast = renderMode.value == EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST;
             renderMode.forceDisabled(blockedByVoxy);
             waterResolver.forceDisabled(ultraFast || blockedByVoxy);
@@ -1634,7 +1711,29 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
                waterResolver.value = false;
             }
          }
+
+         if (cityLightsDistance != null) {
+            Component unusedReason = this.cityLightsDistanceUnusedReason(renderMode);
+            if (unusedReason != null) {
+               cityLightsDistance.forceDisabled(true, unusedReason);
+            } else {
+               cityLightsDistance.forceDisabled(blockedByVoxy);
+            }
+         }
       }
+   }
+
+   /** Why the LOD city lights distance would have no effect with the current settings, or null when it applies. */
+   private Component cityLightsDistanceUnusedReason(EarthCustomizeScreen.ModeDefinition renderMode) {
+      if (renderMode != null && renderMode.value == EarthGeneratorSettings.DistantHorizonsRenderMode.DETAILED) {
+         return Component.translatable("property.tellus.distant_horizons_city_lights_distance.full_chunks.tooltip").withStyle(ChatFormatting.GRAY);
+      }
+      boolean roads = this.findToggleValue("enable_roads", EarthGeneratorSettings.DEFAULT.enableRoads());
+      boolean buildings = this.findToggleValue("enable_buildings", EarthGeneratorSettings.DEFAULT.enableBuildings());
+      if (!this.roadsAndBuildingsSupportedForSelectedScale() || !roads && !buildings) {
+         return Component.translatable("property.tellus.distant_horizons_city_lights_distance.no_towns.tooltip").withStyle(ChatFormatting.GRAY);
+      }
+      return null;
    }
 
    private boolean roadsAndBuildingsSupportedForSelectedScale() {
@@ -2288,6 +2387,7 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       private boolean unavailable;
       
       private Component unavailableTooltip;
+      private Component forceDisabledTooltip;
 
       private SliderDefinition(String key, double defaultValue, double min, double max, double step) {
          this.key = key;
@@ -2314,6 +2414,16 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
 
       private EarthCustomizeScreen.SliderDefinition forceDisabled(boolean forceDisabled) {
          this.forceDisabled = forceDisabled;
+         if (!forceDisabled) {
+            this.forceDisabledTooltip = null;
+         }
+
+         return this;
+      }
+
+      private EarthCustomizeScreen.SliderDefinition forceDisabled(boolean forceDisabled, Component tooltip) {
+         this.forceDisabled = forceDisabled;
+         this.forceDisabledTooltip = forceDisabled ? Objects.requireNonNull(tooltip, "forceDisabledTooltip") : null;
          return this;
       }
 
@@ -2328,7 +2438,9 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          EarthCustomizeScreen.EarthSlider slider = new EarthCustomizeScreen.EarthSlider(0, 0, 0, 20, this, onChange);
          Component tooltip = this.unavailableTooltip != null
             ? this.unavailableTooltip
-            : (this.locked ? EarthCustomizeScreen.workInProgressTooltip(this.key) : EarthCustomizeScreen.settingTooltip(this.key));
+            : (this.forceDisabled && this.forceDisabledTooltip != null
+               ? this.forceDisabledTooltip
+               : (this.locked ? EarthCustomizeScreen.workInProgressTooltip(this.key) : EarthCustomizeScreen.settingTooltip(this.key)));
          slider.setTooltip(Tooltip.create(tooltip));
          slider.active = !this.locked && !this.forceDisabled && !this.unavailable;
          return slider;

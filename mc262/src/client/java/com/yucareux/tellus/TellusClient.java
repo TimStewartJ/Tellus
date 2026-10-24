@@ -14,7 +14,6 @@ import com.yucareux.tellus.world.realtime.SnowGrid;
 import com.yucareux.tellus.world.realtime.TemperatureGrid;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
 import java.util.Objects;
-import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -26,14 +25,11 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
-import org.lwjgl.glfw.GLFW;
 
 @Environment(EnvType.CLIENT)
 public class TellusClient implements ClientModInitializer {
    private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(Tellus.id("controls"));
-   private static final KeyMapping OPEN_MAP_KEY = new KeyMapping(
-      "key.tellus.open_map", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_M, KEY_CATEGORY
-   );
+   private static final KeyMapping OPEN_MAP_KEY = com.yucareux.tellus.client.ClientInputCompat.openMapKey(KEY_CATEGORY);
    private int managedTerrainViewUpdateTicks;
 
    @Override

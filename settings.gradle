@@ -40,6 +40,8 @@ def availableTellusTargets = [
 	'mc12111-neoforge',
 	'mc262',
 	'mc262-neoforge',
+	'mc263',
+	'mc263-neoforge',
 ]
 def requestedTellusTargets = providers.gradleProperty('tellusTargets').orNull
 def selectedTellusTargets = requestedTellusTargets == null

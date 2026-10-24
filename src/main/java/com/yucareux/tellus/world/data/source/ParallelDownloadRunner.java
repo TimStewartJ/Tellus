@@ -22,8 +22,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Runs preload-only network requests with a conservative global concurrency cap. */
 public final class ParallelDownloadRunner {
-   private static final int THREADS = intProperty("tellus.preload.downloadThreads", 8, 1, 32);
-   private static final int MAX_IN_FLIGHT = intProperty("tellus.preload.downloadInFlight", THREADS * 2, THREADS, 64);
+   public static final String THREAD_NAME_PREFIX = "tellus-preload-download-";
+   // Tile requests are latency-bound (CDN and S3 range reads), so more concurrent keep-alive requests
+   // raise throughput without much CPU; 24 remains modest for those hosts.
+   private static final int THREADS = intProperty("tellus.preload.downloadThreads", 24, 1, 64);
+   private static final int MAX_IN_FLIGHT = intProperty("tellus.preload.downloadInFlight", THREADS * 2, THREADS, 128);
    private static final int RECENT_DOWNLOAD_MAX = intProperty("tellus.preload.downloadDedupEntries", 16384, 0, 262144);
    private static final long RECENT_DOWNLOAD_RETENTION_NANOS = TimeUnit.SECONDS.toNanos(
       intProperty("tellus.preload.downloadDedupSeconds", 120, 0, 3600)
@@ -36,7 +39,19 @@ public final class ParallelDownloadRunner {
 
       @Override
       public Thread newThread(Runnable runnable) {
-         Thread thread = new Thread(runnable, "tellus-preload-download-" + this.index.incrementAndGet());
+         Thread thread = new Thread(runnable, THREAD_NAME_PREFIX + this.index.incrementAndGet());
+         thread.setDaemon(true);
+         return thread;
+      }
+   });
+   // Items already being downloaded by another request are awaited here instead of on a download
+   // thread, so duplicate requests never occupy the bounded download pool.
+   private static final ExecutorService SHARED_WAITERS = Executors.newCachedThreadPool(new ThreadFactory() {
+      private final AtomicInteger index = new AtomicInteger();
+
+      @Override
+      public Thread newThread(Runnable runnable) {
+         Thread thread = new Thread(runnable, "tellus-preload-wait-" + this.index.incrementAndGet());
          thread.setDaemon(true);
          return thread;
       }
@@ -74,7 +89,9 @@ public final class ParallelDownloadRunner {
       }
 
       DownloadProgressReporter.Listener reporter = DownloadProgressReporter.currentListener();
-      ExecutorCompletionService<T> completion = new ExecutorCompletionService<>(EXECUTOR);
+      java.util.concurrent.BlockingQueue<Future<T>> settledQueue = new java.util.concurrent.LinkedBlockingQueue<>();
+      ExecutorCompletionService<T> completion = new ExecutorCompletionService<>(EXECUTOR, settledQueue);
+      ExecutorCompletionService<T> sharedCompletion = new ExecutorCompletionService<>(SHARED_WAITERS, settledQueue);
       List<Future<T>> futures = new ArrayList<>(Math.min(items.size(), MAX_IN_FLIGHT));
       List<T> pendingItems = new ArrayList<>(items.size());
       int finished = 0;
@@ -96,7 +113,7 @@ public final class ParallelDownloadRunner {
       Iterator<T> pending = pendingItems.iterator();
       try {
          while (pending.hasNext() && futures.size() < MAX_IN_FLIGHT) {
-            futures.add(submit(completion, scope, pending.next(), downloader, reporter));
+            futures.add(submit(completion, sharedCompletion, scope, pending.next(), downloader, reporter));
          }
 
          int settled = finished;
@@ -124,7 +141,7 @@ public final class ParallelDownloadRunner {
                }
             }
             if (pending.hasNext()) {
-               futures.add(submit(completion, scope, pending.next(), downloader, reporter));
+               futures.add(submit(completion, sharedCompletion, scope, pending.next(), downloader, reporter));
             }
          }
 
@@ -147,12 +164,14 @@ public final class ParallelDownloadRunner {
 
    private static <T> Future<T> submit(
       ExecutorCompletionService<T> completion,
+      ExecutorCompletionService<T> sharedCompletion,
       DownloadScope scope,
       T item,
       ParallelDownloadRunner.CheckedConsumer<T> downloader,
       DownloadProgressReporter.Listener reporter
    ) {
-      return completion.submit(() -> {
+      boolean shared = scope != null && IN_FLIGHT.containsKey(new DownloadKey(scope, item));
+      return (shared ? sharedCompletion : completion).submit(() -> {
          ParallelDownloadRunner.CheckedConsumer<T> reportedDownloader = requestedItem -> {
             if (reporter == null) {
                downloader.accept(requestedItem);
@@ -261,8 +280,11 @@ public final class ParallelDownloadRunner {
    }
 
    private static void cancel(List<? extends Future<?>> futures) {
+      // Only queued items are dropped. A running item may be shared with other requests and is
+      // writing a cache file or decoding a tile, so interrupting it would fail those requests and
+      // can corrupt decoder state; it finishes within its own timeouts and stays cached.
       for (Future<?> future : futures) {
-         future.cancel(true);
+         future.cancel(false);
       }
    }
 
