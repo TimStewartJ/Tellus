@@ -3,6 +3,7 @@
 	"package": "com.yucareux.tellus.mixin.client",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
+		"MinecraftNewWorldHeightMixin",
 		"LevelLoadingScreenMixin",
 		"MinecraftScreenMixin",
 		"PresetEditorMixin"

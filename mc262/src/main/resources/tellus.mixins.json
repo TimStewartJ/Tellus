@@ -16,6 +16,7 @@
 		"OceanMonumentBuildingMixin",
 		"SerializableChunkDataHighYMixin",
 		"OceanMonumentStructureMixin",
+		"ServerMainNewWorldHeightMixin",
 		"WaterSourceConversionMixin"
 	],
 	"injectors": {

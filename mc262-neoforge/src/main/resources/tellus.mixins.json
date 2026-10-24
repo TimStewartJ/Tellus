@@ -15,6 +15,7 @@
 		"SerializableChunkDataAccessor",
 		"SerializableChunkDataHighYMixin",
 		"OceanMonumentStructureMixin",
+		"ServerMainNewWorldHeightMixin",
 		"WaterSourceConversionMixin"
 	],
 	"injectors": {
