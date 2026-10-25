@@ -89,18 +89,10 @@ The Minecraft 26.2 target also has a headless benchmark that constructs the real
 
 Useful knobs: `-PbenchLatitude/-PbenchLongitude`, `-PbenchProfile=yosemite|default|osm`, `-PbenchScale=1.0`, `-PbenchWarmupRadius=3` (JIT warm-up on an area 256 chunks away so pass 1 measures a memory-cold area at steady state instead of interpreter start-up), `-PbenchPerChunk=true` (per-chunk rows), `-PbenchVerifyPreparedColumns=true` (independently rescans all 256 generated columns and fails if the cached decoration bottom differs), `-PbenchChunkTiming=true -PbenchChunkTimingThresholdMs=40` (per-chunk phase traces from the generator's own profiler), `-PbenchJvmArgs="-Dtellus.debugWater=true -XX:StartFlightRecording=filename=bench.jfr,settings=profile"` (per water-region build and `surface/osm/coast` input timings, plus a JFR CPU profile), and `-PbenchGameDir=...` (delete `mc262/build/chunkgen-benchmark-game` for a network-cold run). The benchmark runs at the standard height range because Increase Height requires the Tellus mixins; stages that need a `WorldGenRegion` (structures, carver mutation, decoration, lighting) must be measured in-game with `-Dtellus.debug.fullChunkPerf=true -Dtellus.chunkgen.timing=true`.
 
-Tellus prepares two formerly serialized underground-generation inputs in `fillFromNoise`, where Minecraft can run many chunks concurrently:
+Tellus prepares one formerly serialized underground-generation input in `fillFromNoise`, where Minecraft can run many chunks concurrently:
 
 - `tellus.chunkgen.prepareDecorationColumns` (default `true`) scans each terrain-shell column once after fill and caches the first usable block above bedrock. Vanilla underground placements reuse it instead of scanning as many as 512 blocks for every ore/stone placement. `false` restores the live per-placement scan.
-- `tellus.chunkgen.parallelCarverPreparation` (default `true`) compiles the vanilla Overworld density field into a compact ordered mutation plan. The serialized carver status only validates live block/structure state and applies it. `tellus.chunkgen.preparedCavePlanCacheMiB` overrides the device-aware cache budget (default: the smaller of 1/128 max heap and 2 MiB/logical processor, clamped to 4–64 MiB; `0` disables preparation). Eviction is safe: the carver stage regenerates the same plan synchronously.
 
-The cave preparation lane has its own deterministic scaling benchmark; serialized and parallel checksums must match:
-
-```bash
-./gradlew :mc262:benchmarkCarverPreparation -PcarverBenchRadius=6 -PcarverBenchThreads=16 -PcarverBenchRounds=3
-```
-
-Water-region builds sample elevation row by row with the tile raster and Mercator math hoisted per row (`-Dtellus.water.rowSampling=false` restores the per-sample path for A/B comparisons; results are identical). The dense grid margin is the hydrology context only (`tellus.water.flowContextBlocks`, default 192); Overture waterfall markers are queried separately out to `WaterfallNoCarveZone.queryMarginBlocks`, so changing `tellus.water.waterfallNoCarveRadiusChunks` (default 2 at 1:1, scaled down with world scale) no longer changes the grid size.
 The `3.3.1-tellus.1` fork preserves extended-height LODs and Iris compatibility, adds download-aware generation scheduling, and includes DH's 3.3 rendering improvements and 3.3.1 NeoForge translation fix. Use the matching updated Tellus jar with it. See [compatibility and build notes](docs/distant-horizons-3.3.1.md).
 
 ## Commands
@@ -152,7 +144,8 @@ instead of publishing a synthetic sea-level surface.
 
 API v7 adds read-only companion access to named Overture land/water point features via
 `TellusWorldgenSources.osmPlaces()` and a local-only `TellusApi.waterFlowLocalOnly(...)` probe for
-terrain-confirmed flow direction of already-cached watercourse centrelines.
+terrain-confirmed flow direction of already-cached watercourse centrelines. The probe reads the mapped
+line direction and terrain directly; it does not yet query the river network's solved levels.
 
 <details>
   <summary>Settings</summary>
@@ -259,12 +252,7 @@ This section lets you toggle vanilla structures and world features on or off, su
 - Overture Maps base-theme water features provide inland-water geometry and definitive `subtype=ocean` coastline polygons. Physical labels (`subtype=physical`, including named seas, oceans, and bays) are excluded because their polygons can cover islands; waterfall point markers remain available for terrain protection.
 - Ocean classification does not use Mapterhorn elevation, land-mask state, or an elevation-at-or-below-zero heuristic.
 - Complete empty vector tiles are valid dry coverage. Pending or failed coverage is kept non-cacheable so temporary source failures cannot become permanent dry seams.
-- Watercourses mapped only as a centreline (rivers without riverbank polygons, streams, canals, ditches, drains) generate as directed reaches. Width comes from mapped kind and ground scale (a stream is three blocks at 1:1, a river fourteen, everything one block at 1:30), and the bed sits one to four blocks below the water.
-- Vector-tile vertex order is not assumed to be downstream. Tellus scores both orientations against cross-channel terrain and uses the lower-conflict direction. Wet surfaces are non-climbing in that direction. Ordinary DEM noise is cut within `-Dtellus.water.riverMaxTerrainCut` (default 6); a short hump may use the existing hydro-flattening ceiling (default 12) only when terrain returns within the bounded 48-block lookahead. A long or excessive conflict stays dry until the established reach level can resume—it never restarts water higher on the first crest.
-- Confirmed waterfall drops generate bounded falling-water curtains from the raw terrain to the upstream reach.
-  Only resolver-confirmed curtain cells are held against vanilla lateral spreading or draining; normal water and
-  ordinary source conversion remain unchanged.
-- This directed profile is the first stage of a longer-term reach graph: future work can stitch compatible tile fragments at canonical endpoints, split at confluences and explicit waterfalls, and propagate outlet evidence across the graph without changing the channel cross-section contract.
+- Rivers, streams and canals are drawn by Tellus's river network: one directed network with solved water levels that never rise downstream, courses that follow the valley floor near their mapped lines, flowing steps and falls where the terrain drops, and banks that keep the natural terrain's shape. Blocks, previews and Distant Horizons LODs read the same plan.
 - https://docs.overturemaps.org/attribution/
 
 ### Koppen-Geiger climate classification

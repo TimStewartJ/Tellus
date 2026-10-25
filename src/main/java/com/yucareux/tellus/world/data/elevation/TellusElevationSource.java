@@ -2373,6 +2373,8 @@ public final class TellusElevationSource implements TellusCacheHandle {
          this.recentTiles.set(slot, null);
          this.recentOceanTiles.set(slot, null);
       }
+      this.tileMemo.invalidateAll();
+      this.oceanTileMemo.invalidateAll();
    }
 
    private ShortRaster getTileLocalOnly(TellusElevationSource.TileKey key) {
