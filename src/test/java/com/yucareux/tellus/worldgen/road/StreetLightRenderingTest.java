@@ -57,7 +57,7 @@ class StreetLightRenderingTest {
          }
          var settings = EarthGeneratorSettings.class.getDeclaredConstructor(types).newInstance(values);
          var biome = com.yucareux.tellus.test.MinecraftTestRegistries.create().lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS);
-         try (var ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+         try (@SuppressWarnings("unused") var ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
             generator = new EarthChunkGenerator(new FixedBiomeSource(biome), settings);
          }
          prepare = Arrays.stream(EarthChunkGenerator.class.getDeclaredMethods())

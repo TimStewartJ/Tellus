@@ -1,8 +1,6 @@
 package com.yucareux.tellus;
 
 import com.yucareux.tellus.client.screen.EarthTeleportScreen;
-import com.yucareux.tellus.client.hud.ManagedTerrainDownloadOverlay;
-import com.yucareux.tellus.compat.ClientMinecraftCompat;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainClientState;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainViewDistance;
 import com.yucareux.tellus.network.GeoTpOpenMapPayload;
@@ -10,6 +8,7 @@ import com.yucareux.tellus.network.GeoTpTeleportPayload;
 import com.yucareux.tellus.network.ManagedTerrainStatusPayload;
 import com.yucareux.tellus.network.ManagedTerrainViewPayload;
 import com.yucareux.tellus.network.TellusWeatherPayload;
+import com.yucareux.tellus.platform.FabricClientVersionCompat;
 import com.yucareux.tellus.platform.TellusClientPlatform;
 import com.yucareux.tellus.world.realtime.SnowGrid;
 import com.yucareux.tellus.world.realtime.TemperatureGrid;
@@ -23,7 +22,6 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -35,7 +33,7 @@ public class TellusClient implements ClientModInitializer {
       "key.tellus.open_map",
       InputConstants.Type.KEYSYM,
       GLFW.GLFW_KEY_M,
-      ClientMinecraftCompat.keyCategory("key.category.tellus.controls")
+      FabricClientVersionCompat.keyCategory()
    );
    private int managedTerrainViewUpdateTicks;
 
@@ -46,7 +44,7 @@ public class TellusClient implements ClientModInitializer {
          (latitude, longitude) -> ClientPlayNetworking.send(new GeoTpTeleportPayload(latitude, longitude))
       );
       KeyBindingHelper.registerKeyBinding(OPEN_MAP_KEY);
-      HudRenderCallback.EVENT.register((graphics, deltaTracker) -> ManagedTerrainDownloadOverlay.render(graphics));
+      FabricClientVersionCompat.registerHud();
       ClientPlayNetworking.registerGlobalReceiver(Objects.requireNonNull(GeoTpOpenMapPayload.TYPE, "GeoTpOpenMapPayload.TYPE"), (payload, context) -> context.client().execute(() -> {
          Minecraft minecraft = context.client();
          Screen parent = minecraft.screen;

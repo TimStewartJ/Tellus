@@ -35,7 +35,11 @@ public final class MinecraftRelease {
 
    public static Block block(String path) {
       ResourceLocation id = resourceLocation("minecraft", path);
-      return BuiltInRegistries.BLOCK.getOptional(id).orElseThrow(() -> new IllegalStateException("Missing Minecraft block " + id));
+      // Forge deprecates BuiltInRegistries.BLOCK but not the root registry, and this layer also builds for Fabric.
+      return BuiltInRegistries.REGISTRY.getOptional(Registries.BLOCK.location())
+         .flatMap(blocks -> blocks.getOptional(id))
+         .map(Block.class::cast)
+         .orElseThrow(() -> new IllegalStateException("Missing Minecraft block " + id));
    }
 
    public static Axolotl createAxolotl(ServerLevel level, BlockPos position) {

@@ -71,7 +71,7 @@ public abstract class TellusChunkGeneratorBridge extends ChunkGenerator {
       BiomeManager biomes, WorldGenRegion region, Set<Holder<Biome>> possibleBiomes
    ) {
       return this.fillFromNoise(blender, random, structures, chunk).thenApply(filled -> {
-         this.applyCarvers(region, random.seed(), random, biomes, structures, filled);
+         this.applyCarvers(region, region.getSeed(), random, biomes, structures, filled);
          return filled;
       });
    }

@@ -6,8 +6,6 @@ package com.yucareux.tellus.worldgen;
  * while the shore-distance ramp leaves a navigable shallow shelf.
  */
 final class LakeBedProfile {
-   private static final int SHORE_SHELF_END_BLOCKS = 5;
-   private static final int SHALLOW_SLOPE_END_BLOCKS = 8;
    private static final int INNER_SHELF_END_BLOCKS = 10;
    private static final int INTERIOR_TRANSITION_BLOCKS = 32;
    private static final int INTERIOR_BASE_DEPTH = 11;

@@ -10,7 +10,6 @@ import com.mojang.blaze3d.platform.InputConstants;
 import java.util.List;
 import java.util.function.Function;
 import net.minecraft.Util;
-import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -120,10 +119,6 @@ public final class ClientMinecraftCompat {
 
    public static <T> Registry<T> registryOrThrow(Frozen access, ResourceKey<? extends Registry<? extends T>> key) {
       return access.registryOrThrow(key);
-   }
-
-   public static String keyCategory(String translationKey) {
-      return translationKey;
    }
 
    public static <T> CycleButton.Builder<T> cycleButtonBuilder(

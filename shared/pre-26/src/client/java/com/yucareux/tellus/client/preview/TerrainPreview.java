@@ -130,7 +130,6 @@ public final class TerrainPreview implements AutoCloseable {
    private static final int PREVIEW_CLOUD_BOTTOM_COLOR = 0x8CC1C9CA;
    private static final int PREVIEW_SUN_REFLECTION_COLOR = 0xFFF0BC;
    private static final float PREVIEW_SUN_X = 0.0F;
-   private static final float PREVIEW_SUN_Y = -0.1F;
    private static final float PREVIEW_SUN_Z = -1.0F;
    private static final int PREVIEW_CLOUD_GRID_SIZE = 40;
    private static final float PREVIEW_CLOUD_MIN = -0.98F;

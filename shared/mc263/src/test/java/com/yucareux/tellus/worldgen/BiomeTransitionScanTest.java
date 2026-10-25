@@ -7,7 +7,6 @@ import com.yucareux.tellus.world.data.osm.OsmQueryMode;
 import com.yucareux.tellus.worldgen.tree.TellusProceduralTreeGenerator;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -107,7 +106,7 @@ class BiomeTransitionScanTest {
          label, lat, lon, scale, size, minX, minZ);
 
       long started = System.nanoTime();
-      Area area = new Area(minX, minZ, size);
+      Area area = new Area(size);
       int padded = size + 2 * MARGIN;
       int[] heights = new int[padded * padded];
       IntStream.range(0, padded).parallel().forEach(row -> {
@@ -201,7 +200,7 @@ class BiomeTransitionScanTest {
    }
 
    private static final class Area {
-      final int minX, minZ, size;
+      final int size;
       final int[] raw, visual;
       final byte[] group;
       final String[] climate, coherent;
@@ -211,8 +210,8 @@ class BiomeTransitionScanTest {
       final List<int[]> trees = new java.util.ArrayList<>();
 
       @SuppressWarnings("unchecked")
-      Area(int minX, int minZ, int size) {
-         this.minX = minX; this.minZ = minZ; this.size = size;
+      Area(int size) {
+         this.size = size;
          int cells = size * size;
          raw = new int[cells]; visual = new int[cells]; group = new byte[cells];
          climate = new String[cells]; coherent = new String[cells]; relief = new float[cells];
@@ -225,7 +224,7 @@ class BiomeTransitionScanTest {
       if (block == Blocks.GRASS_BLOCK || block == Blocks.PODZOL || block == Blocks.MOSS_BLOCK || block == Blocks.MYCELIUM
          || block == Blocks.ROOTED_DIRT) return G_VEG;
       if (block == Blocks.COARSE_DIRT || block == Blocks.DIRT || block == Blocks.MUD || block == Blocks.PACKED_MUD) return G_SOIL;
-      if (block == Blocks.RED_SAND || block == Blocks.RED_SANDSTONE || block.builtInRegistryHolder().key().identifier().getPath().endsWith("terracotta")) return G_RED;
+      if (block == Blocks.RED_SAND || block == Blocks.RED_SANDSTONE || BuiltInRegistries.BLOCK.getKey(block).getPath().endsWith("terracotta")) return G_RED;
       if (block == Blocks.SAND || block == Blocks.SANDSTONE) return G_SAND;
       if (block == Blocks.SNOW_BLOCK || block == Blocks.POWDER_SNOW || block == Blocks.PACKED_ICE || block == Blocks.ICE || block == Blocks.BLUE_ICE) return G_SNOW;
       if (block == Blocks.STONE || block == Blocks.GRAVEL || block == Blocks.ANDESITE || block == Blocks.DIORITE || block == Blocks.GRANITE
@@ -589,8 +588,8 @@ class BiomeTransitionScanTest {
          bindTags.invoke(biome, tags);
       }
       Set<Block> dirt = Set.of(Blocks.DIRT, Blocks.GRASS_BLOCK, Blocks.PODZOL, Blocks.COARSE_DIRT, Blocks.ROOTED_DIRT, Blocks.MYCELIUM, Blocks.MUD, Blocks.MOSS_BLOCK);
-      for (Block block : BuiltInRegistries.BLOCK) {
-         bindTags.invoke(block.builtInRegistryHolder(), dirt.contains(block) ? List.of(BlockTags.DIRT) : List.of());
+      for (Holder.Reference<Block> block : BuiltInRegistries.BLOCK.listElements().toList()) {
+         bindTags.invoke(block, dirt.contains(block.value()) ? List.of(BlockTags.DIRT) : List.of());
       }
    }
 }

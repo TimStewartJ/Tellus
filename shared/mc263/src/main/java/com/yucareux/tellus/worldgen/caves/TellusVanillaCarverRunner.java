@@ -4,6 +4,7 @@ import com.yucareux.tellus.compat.MinecraftVersionCompat;
 import com.yucareux.tellus.worldgen.UndergroundStructureExclusion;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.IntBinaryOperator;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
@@ -177,10 +178,13 @@ public final class TellusVanillaCarverRunner {
                   floodGuardYByColumn, generationFloorYByColumn, structureExclusions)) {
                   below.setWithOffset(cursor, Direction.DOWN);
                   if (chunk.getBlockState(below).is(Blocks.DIRT)) {
-                     safeRandomState.surfaceSystem().topMaterial(
+                     // Vanilla's private carving-mask pass still calls topMaterial; 26.3 has no public replacement.
+                     @SuppressWarnings("deprecation")
+                     Optional<BlockState> topMaterial = safeRandomState.surfaceSystem().topMaterial(
                         safeNoiseSettings.materialRule().value(), safeRandomState, context, carvedBiomeManager::getBiome,
                         chunk, noise.cachingSamplers(), below, !replacement.getFluidState().isEmpty()
-                     ).ifPresent(state -> {
+                     );
+                     topMaterial.ifPresent(state -> {
                         chunk.setBlockState(below, state);
                         if (!state.getFluidState().isEmpty()) {
                            chunk.markPosForPostProcessing(below);
@@ -209,9 +213,5 @@ public final class TellusVanillaCarverRunner {
       FluidStatus lava = new FluidStatus(lavaLevel, Blocks.LAVA.defaultBlockState());
       FluidStatus water = new FluidStatus(seaLevel, Blocks.WATER.defaultBlockState());
       return Objects.requireNonNull((x, y, z) -> y < lavaLevel ? lava : water, "fluidPicker");
-   }
-
-   private static int chunkIndex(int localX, int localZ) {
-      return localZ << 4 | localX;
    }
 }

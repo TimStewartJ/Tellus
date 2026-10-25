@@ -43,7 +43,6 @@ import com.yucareux.tellus.worldgen.building.BuildingProfile;
 import com.yucareux.tellus.worldgen.building.BuildingStyle;
 import com.yucareux.tellus.worldgen.building.TellusBuildingBlueprints;
 import com.yucareux.tellus.worldgen.building.TellusBuildingFacade;
-import com.yucareux.tellus.worldgen.building.TellusBuildingLighting;
 import com.yucareux.tellus.worldgen.building.TellusBuildingMaterials;
 import com.yucareux.tellus.worldgen.building.BuildingPlacementSupport;
 import com.yucareux.tellus.worldgen.building.TellusBuildingProfiles;
@@ -306,7 +305,6 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
    private static final int TREE_MAX_SURFACE_RISE = 3;
    private static final int SHORELINE_BANK_RAMP_MAX_SLOPE = 1;
    private static final int SHORELINE_BANK_RAMP_MIN_CLIFF = 3;
-   private static final int LOD_INLAND_SIMPLE_WATER_DEPTH = intProperty("tellus.lodInlandWaterDepth", 20, 1, 64);
    private static final int OCEAN_SHORE_MAX_DISTANCE = 8;
    private static final int INLAND_SHORE_MAX_DISTANCE = 4;
    private static final int FULL_CHUNK_OCEAN_BEACH_MAX_DISTANCE = intProperty("tellus.chunkgen.oceanBeachMaxDistance", 4, 0, OCEAN_SHORE_MAX_DISTANCE);
@@ -3176,14 +3174,6 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       };
    }
 
-   private static int roadWidthForClass(RoadClass roadClass, EarthChunkGenerator.RoadWidths widths) {
-      return switch (roadClass) {
-         case MAIN -> widths.main();
-         case NORMAL -> widths.normal();
-         case DIRT -> widths.dirt();
-      };
-   }
-
    private static boolean intersectsRoadLightBridgeSupport(
       int localX,
       int localZ,
@@ -3207,14 +3197,6 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
 
    private static int quantizeRoadCoordinate(double value) {
       return Mth.floor(value + 0.5);
-   }
-
-   private static Direction dominantHorizontalDirection(double tangentX, double tangentZ) {
-      if (Math.abs(tangentX) >= Math.abs(tangentZ)) {
-         return tangentX >= 0.0 ? Direction.EAST : Direction.WEST;
-      } else {
-         return tangentZ >= 0.0 ? Direction.SOUTH : Direction.NORTH;
-      }
    }
 
    private void clearRoadSurfaceColumn(
@@ -6281,29 +6263,6 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
 
       return EarthChunkGenerator.SurfacePalette.deepslate(
          DeepslateSlopePolicy.surfaceDepthForRelief(palette.depth(), localReliefBlocks)
-      );
-   }
-
-   private MountainSurfaceRules.ApproximateSurface classifyMountainSurface(
-      int surfaceCoverClass,
-      int heightAboveSea,
-      int slopeDiff,
-      int convexity,
-      boolean snowLikeTerrain,
-      float vegetationTransitionWeight,
-      int worldX,
-      int worldZ
-   ) {
-      return this.classifyMountainSurface(
-         surfaceCoverClass,
-         heightAboveSea,
-         slopeDiff,
-         convexity,
-         snowLikeTerrain,
-         vegetationTransitionWeight,
-         worldX,
-         worldZ,
-         this.resolveFullChunkOsmQueryMode()
       );
    }
 

@@ -89,8 +89,9 @@ final class VanillaNoiseFieldSampler {
          // Ore veins moved from NoiseChunk to material rules in 26.3. Apply the live
          // Overworld rule to this temporary chunk before projecting caves and ores.
          NoiseBasedChunkGenerator vanilla = new NoiseBasedChunkGenerator(new FixedBiomeSource(plains), Holder.direct(this.vanillaSettings));
+         // shortcut: the zoom seed cannot change a plains-only lookup, pass the world seed if this source starts varying.
          randomState.surfaceSystem().buildSurface(
-            randomState, new BiomeManager((x, y, z) -> plains, BiomeManager.obfuscateSeed(randomState.seed())),
+            randomState, new BiomeManager((x, y, z) -> plains, 0L),
             new WorldGenerationContext(vanilla, sample), sample, noise, this.vanillaSettings.materialRule().value(), Set.of(plains)
          );
          for (int z = 0; z < CHUNK_SIDE; z++) {

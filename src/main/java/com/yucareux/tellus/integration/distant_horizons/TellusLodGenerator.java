@@ -2125,22 +2125,6 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       );
    }
 
-   private void awaitPrefetch(CompletableFuture<Void> future) {
-      try {
-         future.get();
-      } catch (InterruptedException error) {
-         future.cancel(true);
-         Thread.currentThread().interrupt();
-         throw new CancellationException("Tellus LOD prefetch interrupted");
-      } catch (ExecutionException error) {
-         Throwable cause = error.getCause();
-         if (isInterruptedLodGeneration(cause) || cause instanceof Error) {
-            throw propagateLodGenerationFailure(cause);
-         }
-         LOGGER.debug("Tellus exact LOD tile prefetch completed with an error; generation will use normal source fallbacks.", cause);
-      }
-   }
-
    private static int coverSampleStride(int detailLevel, int lodSizePoints) {
       if (detailLevel < 7) {
          return 1;
