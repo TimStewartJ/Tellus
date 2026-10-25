@@ -93,11 +93,6 @@ pluginManager.withPlugin('eclipse') {
 				beforeMerged { classpath ->
 					classpath.entries.clear()
 				}
-				whenMerged { classpath ->
-					classpath.entries
-						.findAll { it.kind == 'src' && (it.path == 'main-java' || it.path == 'src_main_java') }
-						.each { it.excludes = (it.excludes + overriddenSharedMainSources).unique() }
-				}
 			}
 		}
 	}
