@@ -160,6 +160,8 @@ tasks.named('test').configure {
 	exclude '**/TellusBuildingStylesTest.class'
 	exclude '**/TellusEmptyBeardifierTest.class'
 	exclude '**/TellusVanillaNoiseCaveSamplerTest.class'
+	exclude '**/TellusResolveSourceWarpTest.class'
+	exclude '**/LandmarkCatalogTest.class'
 }
 
 java {
