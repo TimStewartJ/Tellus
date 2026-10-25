@@ -2,6 +2,7 @@ package com.yucareux.tellus.world.data.resolve;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.yucareux.tellus.worldgen.EarthProjection;
@@ -14,6 +15,8 @@ class TellusResolveSourceWarpTest {
 
    @Test
    void ecoregionBordersLeaveTheRasterCellEdges() {
+      // Loading the dataset logs through Tellus.LOGGER, which initializes TellusCommon's registry keys.
+      assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla registries");
       TellusResolveSource source = TellusResolveSource.shared();
       assumeTrue(source.available(), "bundled RESOLVE lookup");
       double cellDegrees = source.arcsecondsPerCell() / 3600.0;
@@ -57,6 +60,15 @@ class TellusResolveSourceWarpTest {
       assertTrue(borders.size() >= 4, "the border must wander across rows, found " + borders);
       for (int offset : borders) {
          assertTrue(Math.abs(offset) <= reach, "the warp stays within about two cells: " + offset);
+      }
+   }
+
+   private static boolean isMinecraftForge() {
+      try {
+         Class.forName("net.minecraftforge.fml.ModList", false, TellusResolveSourceWarpTest.class.getClassLoader());
+         return true;
+      } catch (ClassNotFoundException ignored) {
+         return false;
       }
    }
 }

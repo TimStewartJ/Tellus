@@ -100,7 +100,13 @@ class TellusOsmWaterGeometryTest {
       assertEquals(1, tile.features().size());
       assertTrue(tile.features().get(0).waterfallMarker());
       assertFalse(tile.features().get(0).containsLonLat(0.0, 0.0));
-      assertTrue(parseFeature("waterfall", "physical", Tile.GeomType.POLYGON, SQUARE).isEmpty());
+
+      // Waterfall areas are kept for hydrology but never rasterized as water surfaces.
+      OsmWaterTile area = parseFeature("waterfall", "physical", Tile.GeomType.POLYGON, SQUARE);
+      assertEquals(1, area.features().size());
+      assertTrue(area.features().get(0).waterfall());
+      assertFalse(area.features().get(0).waterfallMarker());
+      assertFalse(area.features().get(0).containsLonLat(0.0, 0.0));
    }
 
    @Test

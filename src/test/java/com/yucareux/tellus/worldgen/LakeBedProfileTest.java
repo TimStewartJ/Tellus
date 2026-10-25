@@ -10,10 +10,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class LakeBedProfileTest {
    @Test
    void preservesShallowShelvesBeforeTransitioningToTheInterior() {
-      assertEquals(1, LakeBedProfile.depth(0.0, 100, -200));
-      assertEquals(1, LakeBedProfile.depth(5.0, 100, -200));
-      assertEquals(3, LakeBedProfile.depth(6.0, 100, -200));
-      assertEquals(4, LakeBedProfile.depth(9.0, 100, -200));
+      // Shelf width and slope vary with position, so check the shape over many shores.
+      for (int x = -512; x <= 512; x += 37) {
+         for (int z = -512; z <= 512; z += 41) {
+            assertEquals(1, LakeBedProfile.depth(0.0, x, z));
+            int previous = 1;
+            for (double distance = 0.5; distance <= 10.0; distance += 0.5) {
+               int depth = LakeBedProfile.depth(distance, x, z);
+               assertTrue(depth >= previous && depth <= 4, "Shelf at " + x + "," + z + " went from " + previous + " to " + depth);
+               previous = depth;
+            }
+         }
+      }
    }
 
    @Test
