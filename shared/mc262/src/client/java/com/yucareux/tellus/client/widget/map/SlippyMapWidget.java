@@ -1,5 +1,6 @@
 package com.yucareux.tellus.client.widget.map;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.yucareux.tellus.client.widget.map.component.MapComponent;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -141,7 +142,7 @@ public class SlippyMapWidget extends AbstractWidget {
 
    public boolean mouseReleased( MouseButtonEvent event) {
       boolean handled = false;
-      if (event.button() == 0 && this.mouseDown && this.isMouseOver(event.x(), event.y())) {
+      if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && this.mouseDown && this.isMouseOver(event.x(), event.y())) {
          SlippyMapPoint mouse = this.getPointUnderMouse(event.x(), event.y());
 
          if (this.dragComponent != null) {

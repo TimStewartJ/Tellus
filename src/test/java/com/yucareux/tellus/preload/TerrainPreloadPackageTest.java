@@ -240,25 +240,29 @@ class TerrainPreloadPackageTest {
 
    @Test
    void visuallyBlendsSoftCoverClassesWithoutChangingRawPackageData() {
-      TerrainPreloadArea area = TerrainPreloadArea.fromChunkBounds(0.0, 0.0, 1, 1.0, 0, 0, 0, 0);
+      // Forest in the west half of an 8x8 grid, bare ground in the east half.
+      int side = 8;
+      TerrainPreloadArea area = TerrainPreloadArea.fromChunkBounds(0.0, 0.0, 8, 1.0, 0, 0, 7, 7);
+      int[] heights = new int[side * side];
+      byte[] covers = new byte[side * side];
+      byte[] land = new byte[side * side];
+      for (int index = 0; index < covers.length; index++) {
+         heights[index] = 64;
+         covers[index] = (byte)(index % side < side / 2 ? 10 : 60);
+         land[index] = 1;
+      }
       TerrainPreloadPackage pack = new TerrainPreloadPackage(
-         "visual-transition",
-         "fingerprint",
-         area,
-         16,
-         2,
-         2,
-         new int[]{64, 64, 64, 64},
-         new byte[]{10, 60, 10, 60},
-         new byte[]{1, 1, 1, 1},
-         new byte[4]
+         "visual-transition", "fingerprint", area, 16, side, side, heights, covers, land, new byte[side * side]
       );
 
+      // The blend is warped by up to about a grid cell, so read every column near the border.
       Set<Integer> visualClasses = new HashSet<>();
-      for (int z = 0; z < 16; z++) {
-         TerrainPreloadPackage.Sample sample = pack.sample(8, z);
-         assertEquals(60, sample.coverClass());
-         visualClasses.add(sample.visualCoverClass());
+      for (int z = 16; z < 96; z++) {
+         for (int x = 32; x < 96; x++) {
+            TerrainPreloadPackage.Sample sample = pack.sample(x, z);
+            assertEquals(Math.round(x / 16.0) < side / 2 ? 10 : 60, sample.coverClass());
+            visualClasses.add(sample.visualCoverClass());
+         }
       }
 
       assertEquals(Set.of(10, 60), visualClasses);

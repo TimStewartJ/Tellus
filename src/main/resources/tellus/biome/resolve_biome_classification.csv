@@ -54,12 +54,8 @@ TEMPERATE_CONIFER_FORESTS,10,CSB,old_growth_pine_taiga
 TEMPERATE_CONIFER_FORESTS,10,CFA,old_growth_spruce_taiga
 TEMPERATE_CONIFER_FORESTS,10,CFB,old_growth_spruce_taiga
 TEMPERATE_CONIFER_FORESTS,10,CFC,old_growth_spruce_taiga
-TEMPERATE_CONIFER_FORESTS,10,DFC,snowy_taiga
-TEMPERATE_CONIFER_FORESTS,10,DFD,snowy_taiga
-TEMPERATE_CONIFER_FORESTS,10,DWC,snowy_taiga
-TEMPERATE_CONIFER_FORESTS,10,DWD,snowy_taiga
-TEMPERATE_CONIFER_FORESTS,10,DSC,snowy_taiga
-TEMPERATE_CONIFER_FORESTS,10,DSD,snowy_taiga
+# Cold winters in temperate mountain forests do not imply permanent snow.
+# Keep their D climates on ordinary taiga; snowy taiga remains a boreal rule.
 TEMPERATE_CONIFER_FORESTS,10,D*,taiga
 TEMPERATE_CONIFER_FORESTS,10,B*,windswept_forest
 TEMPERATE_CONIFER_FORESTS,10,*,old_growth_pine_taiga
@@ -129,7 +125,11 @@ FLOODED_GRASSLANDS_SAVANNAS,60,*,swamp
 FLOODED_GRASSLANDS_SAVANNAS,90,*,swamp
 FLOODED_GRASSLANDS_SAVANNAS,100,*,swamp
 # Montane grasslands and shrublands.
-MONTANE_GRASSLANDS_SHRUBLANDS,10,*,grove
+# This region also includes warm highlands. Grove is a snowy Minecraft biome,
+# so require polar climate evidence instead of treating all mountain trees as snow.
+MONTANE_GRASSLANDS_SHRUBLANDS,10,ET,grove
+MONTANE_GRASSLANDS_SHRUBLANDS,10,EF,grove
+MONTANE_GRASSLANDS_SHRUBLANDS,10,*,windswept_forest
 MONTANE_GRASSLANDS_SHRUBLANDS,20,*,windswept_hills
 MONTANE_GRASSLANDS_SHRUBLANDS,30,*,meadow
 MONTANE_GRASSLANDS_SHRUBLANDS,40,*,meadow

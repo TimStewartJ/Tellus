@@ -4,7 +4,6 @@ import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FlowingFluid;
 import net.minecraft.world.level.material.FluidState;
@@ -12,16 +11,15 @@ import net.minecraft.world.level.material.Fluids;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Keeps planned waterfall curtains bounded while preserving ordinary water.
+ * Disables only the infinite-source conversion that can make DEM-following
+ * waterfall sheets fill their surroundings. Normal spreading and downward
+ * flow still run through vanilla's FlowingFluid implementation.
  */
 @Mixin(FlowingFluid.class)
 public class WaterSourceConversionMixin {
-   private static final int CURTAIN_LOOKUP_RETRY_TICKS = 20;
-
    @Inject(
       method = "getNewLiquid(Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;)Lnet/minecraft/world/level/material/FluidState;",
       at = @At("RETURN"),
@@ -35,73 +33,15 @@ public class WaterSourceConversionMixin {
    ) {
       FluidState current = level.getFluidState(pos);
       FluidState resolved = cir.getReturnValue();
-      if (current.getType().isSame(Fluids.WATER)
+      if (resolved.isSourceOfType(Fluids.WATER)
          && !current.isSource()
+         && current.getType().isSame(Fluids.WATER)
          && level instanceof ServerLevel serverLevel
-         && serverLevel.getChunkSource().getGenerator()
-           instanceof EarthChunkGenerator generator) {
-         boolean curtainCandidate = isCurtainCandidate(state, current);
-         boolean sourceConversion = resolved.isSourceOfType(Fluids.WATER);
-         if (!curtainCandidate && !sourceConversion) {
-           return;
-         }
-         EarthChunkGenerator.WaterfallFluidPolicy policy =
-           generator.waterfallFluidPolicy(
-              pos.getX(), pos.getY(), pos.getZ()
-           );
-         if (!policy.resolved()) {
-           if (!curtainCandidate) {
-              level.scheduleTick(
-                 pos, current.getType(), CURTAIN_LOOKUP_RETRY_TICKS
-              );
-           }
-           cir.setReturnValue(current);
-           return;
-         }
-         if (curtainCandidate && policy.preserveCurtain()
-           || sourceConversion && policy.suppressSourceConversion()) {
-           cir.setReturnValue(current);
-         }
+         && serverLevel.getChunkSource().getGenerator() instanceof EarthChunkGenerator generator
+         && generator.shouldSuppressWaterSourceConversion(pos.getX(), pos.getY(), pos.getZ())) {
+         // Returning the existing flowing state blocks only this attempted
+         // conversion. The next vanilla tick still updates and spreads it.
+         cir.setReturnValue(current);
       }
-   }
-
-   @Inject(
-      method = "spread(Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/material/FluidState;)V",
-      at = @At("HEAD"),
-      cancellable = true
-   )
-   private void tellus$containWaterfallCurtain(
-      Level level,
-      BlockPos pos,
-      FluidState fluid,
-      CallbackInfo ci
-   ) {
-      BlockState state = level.getBlockState(pos);
-      if (isCurtainCandidate(state, fluid)
-         && level instanceof ServerLevel serverLevel
-         && serverLevel.getChunkSource().getGenerator()
-            instanceof EarthChunkGenerator generator) {
-         EarthChunkGenerator.WaterfallFluidPolicy policy =
-            generator.waterfallFluidPolicy(
-               pos.getX(), pos.getY(), pos.getZ()
-            );
-         if (!policy.resolved()) {
-            level.scheduleTick(
-               pos, fluid.getType(), CURTAIN_LOOKUP_RETRY_TICKS
-            );
-         }
-         if (!policy.resolved() || policy.preserveCurtain()) {
-            ci.cancel();
-         }
-      }
-   }
-
-   private static boolean isCurtainCandidate(
-      BlockState state, FluidState fluid
-   ) {
-      return !fluid.isSource()
-         && fluid.getType().isSame(Fluids.WATER)
-         && state.hasProperty(LiquidBlock.LEVEL)
-         && state.getValue(LiquidBlock.LEVEL) == 8;
    }
 }

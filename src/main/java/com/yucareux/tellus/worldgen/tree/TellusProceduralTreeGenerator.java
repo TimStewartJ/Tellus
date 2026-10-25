@@ -812,7 +812,7 @@ public final class TellusProceduralTreeGenerator {
       ) - 1;
       int startY = Math.min(heightmapTop, anchorGroundY + ROOT_MAX_ANCHOR_DELTA);
       int minimumY = Math.max(
-         MinecraftVersionCompat.minBuildHeight(level),
+         MinecraftVersionCompat.minY(level),
          anchorGroundY - ROOT_SURFACE_SCAN_DEPTH
       );
       BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();

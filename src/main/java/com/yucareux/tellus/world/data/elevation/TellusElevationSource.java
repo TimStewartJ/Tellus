@@ -1,5 +1,6 @@
 package com.yucareux.tellus.world.data.elevation;
 
+import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
@@ -13,6 +14,7 @@ import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNe
 import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.world.data.source.DownloadProgressReporter;
 import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
+import com.yucareux.tellus.world.data.source.SourceInterrupts;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.WorldProjection;
 import com.yucareux.tellus.worldgen.TerrainSlopePolicy;
@@ -32,7 +34,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 import javax.imageio.ImageReader;
@@ -62,12 +68,16 @@ public final class TellusElevationSource implements TellusCacheHandle {
    private static final String MAPTERHORN_ENDPOINT = "https://tiles.mapterhorn.com";
    private static final String OPENWATERS_ENDPOINT = "https://tiles.openwaters.io/seascape";
    private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", defaultCacheTiles());
+   private static final int RECENT_TILES = 32;
    private static final int AREA_PREFETCH_SAMPLE_POINTS = intProperty("tellus.elevation.areaPrefetch.samples", 25);
    private static final int AREA_PREFETCH_TERRAIN_TILE_LIMIT = intProperty("tellus.elevation.areaPrefetch.terrainTileLimit", 512);
    private static final int TILE_DOWNLOAD_ATTEMPTS = intProperty("tellus.elevation.downloadAttempts", 3);
    private static final int TILE_CONNECT_TIMEOUT_MS = intProperty("tellus.elevation.connectTimeoutMs", 8000);
    private static final int TILE_READ_TIMEOUT_MS = intProperty("tellus.elevation.readTimeoutMs", 8000);
    private static final int TILE_RETRY_BACKOFF_MS = intProperty("tellus.elevation.retryBackoffMs", 250);
+   // Shorter than the canopy and land-cover retry: chunks generated while a terrain tile is unavailable wait for a refinement.
+   private static final long TILE_FAILURE_RETRY_NANOS = TimeUnit.SECONDS.toNanos(10L);
+   private static final ThreadLocal<int[]> UNAVAILABLE_TILE_READS = ThreadLocal.withInitial(() -> new int[1]);
    private static final int MAX_TILE_BYTES = 8 * 1024 * 1024;
    // The normalized cache currently incurs a very expensive first-build path on cache misses.
    // Keep it opt-in until the ingest/build cost is low enough for preview and spawn-time terrain reads.
@@ -90,6 +100,13 @@ public final class TellusElevationSource implements TellusCacheHandle {
    private final LastValueMemo<TellusElevationSource.TileKey, ShortRaster> tileMemo = new LastValueMemo<>();
    private final LastValueMemo<TellusElevationSource.TileKey, ShortRaster> oceanTileMemo = new LastValueMemo<>();
    private final ConcurrentHashMap<TellusElevationSource.TileKey, CompletableFuture<ShortRaster>> localTileLoads = new ConcurrentHashMap<>();
+   // Tiles the blocking loaders returned recently, read without the caches' locks and access-order
+   // bookkeeping, which cost more than the samples themselves. Dropped whenever cache entries are removed.
+   private final AtomicReferenceArray<TellusElevationSource.RecentRaster> recentTiles = new AtomicReferenceArray<>(RECENT_TILES);
+   private final AtomicReferenceArray<TellusElevationSource.RecentRaster> recentOceanTiles = new AtomicReferenceArray<>(RECENT_TILES);
+   private final AtomicLong recentGeneration = new AtomicLong();
+   // Keyed by cache path: Mapterhorn and OpenWaters tiles share z/x/y keys.
+   private final Cache<Path, Long> failedUntil = CacheBuilder.newBuilder().maximumSize(MAX_CACHE_TILES).build();
    private final MapterhornCoverageResolutionSource mapterhornResolutionSource = new MapterhornCoverageResolutionSource();
    private final TellusLandMaskSource landMask = TellusWorldgenSources.landMask();
    private volatile EarthGeneratorSettings.DemSelection lastLoggedSelection;
@@ -388,28 +405,41 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    public double sampleTerrainSlopeDegreesLocalOnly(double blockX, double blockZ, WorldProjection projection) {
-      return this.sampleTerrainSlopeDegreesLocalOnly(
+      return this.sampleTerrainGradientLocalOnly(blockX, blockZ, projection).slopeDegrees();
+   }
+
+   /** {@link #sampleTerrainSlopeDegreesLocalOnly} with the direction the ground falls. */
+   public TerrainSlopePolicy.Gradient sampleTerrainGradientLocalOnly(double blockX, double blockZ, WorldProjection projection) {
+      return this.sampleTerrainGradientLocalOnly(
          blockX, blockZ, projection, projection.worldScale(), TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS
       );
    }
 
+   public double sampleTerrainSlopeDegreesLocalOnly(
+      double blockX, double blockZ, WorldProjection projection, double previewResolutionMeters, int sampleRadiusBlocks
+   ) {
+      return this.sampleTerrainGradientLocalOnly(
+         blockX, blockZ, projection, previewResolutionMeters, sampleRadiusBlocks
+      ).slopeDegrees();
+   }
+
    /**
-    * Slope from the zoom that {@code previewResolutionMeters} selects (the zoom LOD surfaces are
+    * Gradient from the zoom that {@code previewResolutionMeters} selects (the zoom LOD surfaces are
     * sampled from) instead of the full-resolution tiles. Downsampled previews snap every sample to a
     * step-sized grid, so the stencil radius is rounded up to that step to keep the east/west and
     * north/south pairs genuinely {@code 2 * radius} blocks apart.
     */
-   public double sampleTerrainSlopeDegreesLocalOnly(
+   public TerrainSlopePolicy.Gradient sampleTerrainGradientLocalOnly(
       double blockX, double blockZ, WorldProjection projection, double previewResolutionMeters, int sampleRadiusBlocks
    ) {
       if (!(projection.worldScale() > 0.0)) {
-         return Double.NaN;
+         return TerrainSlopePolicy.Gradient.MISSING;
       }
 
       double groundMetersPerBlockX = projection.groundMetersPerBlockX(blockZ);
       double groundMetersPerBlockZ = projection.groundMetersPerBlockZ(blockZ);
       if (!(groundMetersPerBlockX > 0.0) || !(groundMetersPerBlockZ > 0.0)) {
-         return Double.NaN;
+         return TerrainSlopePolicy.Gradient.MISSING;
       }
 
       double worldScale = projection.worldScale();
@@ -432,7 +462,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
       double south = this.sampleTerrainTilesMetersLocalOnlyOrMissing(
          blockX, blockZ + stepZ, projection, sampleResolutionMeters
       );
-      return TerrainSlopePolicy.localSlopeDegrees(
+      return TerrainSlopePolicy.localGradient(
          center,
          east,
          west,
@@ -449,6 +479,96 @@ public final class TellusElevationSource implements TellusCacheHandle {
          return radius;
       }
       return Math.max(snapStep, (radius + snapStep - 1) / snapStep * snapStep);
+   }
+
+   /**
+    * Slope measured on the DEM as sampled at {@code resolutionMeters}, over a baseline of at least one
+    * sample. Distant LOD columns use this so surface rules read the tiles their terrain already uses.
+    */
+   public double sampleTerrainSlopeDegreesAtResolution(double blockX, double blockZ, WorldProjection projection, double resolutionMeters) {
+      return this.sampleTerrainGradientAtResolution(blockX, blockZ, projection, resolutionMeters).slopeDegrees();
+   }
+
+   /** Elevation as the slope rules read it at {@code resolutionMeters}: the tiles distant LOD surfaces already hold. */
+   public double sampleTerrainElevationMetersAtResolution(double blockX, double blockZ, WorldProjection projection, double resolutionMeters) {
+      double worldScale = projection.worldScale();
+      if (!(worldScale > 0.0)) {
+         return Double.NaN;
+      }
+
+      double sampleResolutionMeters = Double.isFinite(resolutionMeters) ? Math.max(worldScale, resolutionMeters) : worldScale;
+      return this.sampleTerrainTilesMetersOrMissing(blockX, blockZ, projection, sampleResolutionMeters);
+   }
+
+   /** {@link #sampleTerrainSlopeDegreesAtResolution} with the direction the ground falls. */
+   public TerrainSlopePolicy.Gradient sampleTerrainGradientAtResolution(
+      double blockX, double blockZ, WorldProjection projection, double resolutionMeters
+   ) {
+      double worldScale = projection.worldScale();
+      if (!(worldScale > 0.0)) {
+         return TerrainSlopePolicy.Gradient.MISSING;
+      }
+
+      double groundMetersPerBlockX = projection.groundMetersPerBlockX(blockZ);
+      double groundMetersPerBlockZ = projection.groundMetersPerBlockZ(blockZ);
+      if (!(groundMetersPerBlockX > 0.0) || !(groundMetersPerBlockZ > 0.0)) {
+         return TerrainSlopePolicy.Gradient.MISSING;
+      }
+
+      double sampleResolutionMeters = Double.isFinite(resolutionMeters) ? Math.max(worldScale, resolutionMeters) : worldScale;
+      int step = Math.max(TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS, (int)Math.ceil(sampleResolutionMeters / worldScale));
+      double center = this.sampleTerrainTilesMetersOrMissing(blockX, blockZ, projection, sampleResolutionMeters);
+      double east = this.sampleTerrainTilesMetersOrMissing(blockX + step, blockZ, projection, sampleResolutionMeters);
+      double west = this.sampleTerrainTilesMetersOrMissing(blockX - step, blockZ, projection, sampleResolutionMeters);
+      double north = this.sampleTerrainTilesMetersOrMissing(blockX, blockZ - step, projection, sampleResolutionMeters);
+      double south = this.sampleTerrainTilesMetersOrMissing(blockX, blockZ + step, projection, sampleResolutionMeters);
+      return TerrainSlopePolicy.localGradient(
+         center, east, west, north, south, step * groundMetersPerBlockX, step * groundMetersPerBlockZ
+      );
+   }
+
+   /**
+    * {@link #sampleTerrainGradientAtResolution} with the height range over the point and its eight
+    * neighbours, per metre of the span between opposite neighbours: zero on an ice sheet, large among peaks.
+    */
+   public TerrainSlopePolicy.Neighbourhood sampleTerrainNeighbourhoodAtResolution(
+      double blockX, double blockZ, WorldProjection projection, double resolutionMeters
+   ) {
+      double worldScale = projection.worldScale();
+      if (!(worldScale > 0.0)) {
+         return TerrainSlopePolicy.Neighbourhood.MISSING;
+      }
+
+      double groundMetersPerBlockX = projection.groundMetersPerBlockX(blockZ);
+      double groundMetersPerBlockZ = projection.groundMetersPerBlockZ(blockZ);
+      if (!(groundMetersPerBlockX > 0.0) || !(groundMetersPerBlockZ > 0.0)) {
+         return TerrainSlopePolicy.Neighbourhood.MISSING;
+      }
+
+      double sampleResolutionMeters = Double.isFinite(resolutionMeters) ? Math.max(worldScale, resolutionMeters) : worldScale;
+      int step = Math.max(TerrainSlopePolicy.SAMPLE_RADIUS_BLOCKS, (int)Math.ceil(sampleResolutionMeters / worldScale));
+      double[] heights = new double[9];
+      for (int i = 0; i < heights.length; i++) {
+         heights[i] = this.sampleTerrainTilesMetersOrMissing(
+            blockX + (i % 3 - 1) * step, blockZ + (i / 3 - 1) * step, projection, sampleResolutionMeters
+         );
+      }
+
+      // Row-major from the north-west: the centre is 4, east 5, west 3, north 1, south 7.
+      TerrainSlopePolicy.Gradient gradient = TerrainSlopePolicy.localGradient(
+         heights[4], heights[5], heights[3], heights[1], heights[7], step * groundMetersPerBlockX, step * groundMetersPerBlockZ
+      );
+      double low = Double.POSITIVE_INFINITY;
+      double high = Double.NEGATIVE_INFINITY;
+      for (double height : heights) {
+         if (Double.isFinite(height)) {
+            low = Math.min(low, height);
+            high = Math.max(high, height);
+         }
+      }
+
+      double relief = high >= low ? (high - low) / (step * (groundMetersPerBlockX + groundMetersPerBlockZ)) : Double.NaN;
+      return new TerrainSlopePolicy.Neighbourhood(gradient, relief);
    }
 
    public TellusElevationSource.ResolvedElevationSample sampleResolvedPreviewElevationMetersMemoryOnly(
@@ -1201,6 +1321,50 @@ public final class TellusElevationSource implements TellusCacheHandle {
       this.downloadRawTile(key, this.openWatersCachePath(key), TellusCacheDomain.OPENWATERS, OPENWATERS_ENDPOINT, "OpenWaters");
    }
 
+   /**
+    * Loads the terrain tiles that sampling the given points at {@code previewResolutionMeters} will read,
+    * using the bounded parallel preload downloader. Callers that then sample point by point (such as a
+    * lake shoreline survey) read from memory instead of downloading one tile at a time. Sampling results
+    * are unchanged; failures are left for the per-point samplers to handle as before.
+    */
+   public void preloadPointInputsIntoMemory(int[] blockXs, int[] blockZs, int count, WorldProjection projection, double previewResolutionMeters) {
+      double worldScale = projection.worldScale();
+      if (!(worldScale > 0.0) || count < 2 || ManagedTerrainNetworkPolicy.isCacheOnly()
+         || Thread.currentThread().getName().startsWith(ParallelDownloadRunner.THREAD_NAME_PREFIX)) {
+         return;
+      }
+      LinkedHashSet<TellusElevationSource.RawTileRequest> plan = new LinkedHashSet<>();
+      int step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
+      int zoom = selectPreviewZoom(worldScale, previewResolutionMeters, LAND_MAX_ZOOM);
+      int minZoom = mapterhornMinimumFallbackZoom(zoom);
+      for (int i = 0; i < count; i++) {
+         double blockX = step > 1 ? downsampleBlock(blockXs[i], step) : blockXs[i];
+         double blockZ = step > 1 ? downsampleBlock(blockZs[i], step) : blockZs[i];
+         // The sampler walks from the requested zoom to the global fallback; resolve every level
+         // it may probe (existing tiles and missing ones) concurrently.
+         for (int current = zoom; current >= minZoom; current--) {
+            addTilesAround(plan, blockX, blockZ, projection, 0, current, false);
+         }
+      }
+      plan.removeIf(request -> this.cache.getIfPresent(request.key()) != null);
+      if (plan.size() < 2) {
+         return;
+      }
+      try {
+         ParallelDownloadRunner.run(
+            ParallelDownloadRunner.scope("elevation-memory", TellusCacheRegistry.generation(TellusCacheDomain.TERRAIN)),
+            List.copyOf(plan),
+            0,
+            this::loadTileIntoCache,
+            (request, completed, total) -> {}
+         );
+      } catch (java.util.concurrent.CancellationException error) {
+         throw error;
+      } catch (RuntimeException error) {
+         Tellus.LOGGER.debug("Parallel DEM point preload failed; samplers will load tiles individually", error);
+      }
+   }
+
    private void loadTileIntoCache(TellusElevationSource.RawTileRequest request) {
       TellusCacheDomain domain = request.openWaters() ? TellusCacheDomain.OPENWATERS : TellusCacheDomain.TERRAIN;
       long generation = TellusCacheRegistry.generation(domain);
@@ -1222,6 +1386,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
          throw new java.util.concurrent.CancellationException("Interrupted while preloading " + request.label());
       }
       if (!TellusCacheRegistry.isCurrent(domain, generation)) {
+         this.forgetRecentTiles();
          this.invalidateCachedTile(domain, request.key());
          throw new IllegalStateException("Discarded stale " + request.label() + " elevation preload");
       }
@@ -2079,10 +2244,20 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    /**
+    * Counts this thread's elevation and bathymetry reads that found a tile whose download failed recently.
+    * Chunk generation compares it before and after building a chunk to defer chunks built from gaps.
+    */
+   public static int unavailableTileReads() {
+      return UNAVAILABLE_TILE_READS.get()[0];
+   }
+
+   /**
     * Clears negative in-memory results so a coherent preview pass can retry transient download failures.
     * Successfully decoded tiles remain cached.
     */
    public void retryMissingTiles() {
+      this.forgetRecentTiles();
+      this.failedUntil.invalidateAll();
       this.cache.asMap().entrySet().removeIf(entry -> entry.getValue() == MISSING_RASTER);
       this.oceanCache.asMap().entrySet().removeIf(entry -> entry.getValue() == MISSING_RASTER);
       this.tileMemo.invalidateAll();
@@ -2142,8 +2317,14 @@ public final class TellusElevationSource implements TellusCacheHandle {
          ShortRaster raster = (ShortRaster)this.cache.get(key);
          this.tileMemo.put(key, raster);
          return raster == MISSING_RASTER ? null : raster;
+      } catch (ExecutionException var3) {
+         // A failed download, already logged by loadTile.
+         UNAVAILABLE_TILE_READS.get()[0]++;
+         return null;
       } catch (Exception var3) {
-         Tellus.LOGGER.warn("Failed to load elevation tile {}", key, var3);
+         if (!SourceInterrupts.isInterruption(var3)) {
+            Tellus.LOGGER.warn("Failed to load elevation tile {}", key, var3);
+         }
          return null;
       }
    }
@@ -2157,9 +2338,40 @@ public final class TellusElevationSource implements TellusCacheHandle {
          ShortRaster raster = (ShortRaster)this.oceanCache.get(key);
          this.oceanTileMemo.put(key, raster);
          return raster == MISSING_RASTER ? null : raster;
-      } catch (Exception error) {
-         Tellus.LOGGER.warn("Failed to load OpenWaters bathymetry tile {}", key, error);
+      } catch (ExecutionException error) {
+         // A failed download, already logged by loadTile.
+         UNAVAILABLE_TILE_READS.get()[0]++;
          return null;
+      } catch (Exception error) {
+         if (!SourceInterrupts.isInterruption(error)) {
+            Tellus.LOGGER.warn("Failed to load OpenWaters bathymetry tile {}", key, error);
+         }
+         return null;
+      }
+   }
+
+   private static ShortRaster recentRaster(
+      AtomicReferenceArray<TellusElevationSource.RecentRaster> recent, TellusElevationSource.TileKey key, long generation
+   ) {
+      TellusElevationSource.RecentRaster entry = recent.get(recentSlot(key));
+      return entry != null && entry.generation() == generation && entry.key().zoom() == key.zoom() && entry.key().x() == key.x()
+            && entry.key().y() == key.y()
+         ? entry.raster()
+         : null;
+   }
+
+   private static int recentSlot(TellusElevationSource.TileKey key) {
+      long hash = key.x() * 0x9E3779B97F4A7C15L ^ key.y() * 0xC2B2AE3D27D4EB4FL ^ key.zoom();
+      hash ^= hash >>> 29;
+      return (int)(hash & (RECENT_TILES - 1));
+   }
+
+   /** Entries are about to leave or change in the tile caches: recent tiles must be read from them again. */
+   void forgetRecentTiles() {
+      this.recentGeneration.incrementAndGet();
+      for (int slot = 0; slot < RECENT_TILES; slot++) {
+         this.recentTiles.set(slot, null);
+         this.recentOceanTiles.set(slot, null);
       }
    }
 
@@ -2178,6 +2390,14 @@ public final class TellusElevationSource implements TellusCacheHandle {
          if (this.hasPersistedZeroTile(key)) {
             this.tileMemo.put(key, ZERO_RASTER);
             return ZERO_RASTER;
+         }
+         if (Files.exists(missingMarkerPath(cachePath))) {
+            // A recorded HTTP 404 is definitive: resolve it the way a blocking load does and keep it
+            // in memory, so zoom probing stops touching the file system for this tile.
+            ShortRaster missing = missingTileRaster(TellusCacheDomain.TERRAIN, key);
+            this.cache.put(key, missing);
+            this.tileMemo.put(key, missing);
+            return missing == MISSING_RASTER ? null : missing;
          }
          return null;
       }
@@ -2263,17 +2483,17 @@ public final class TellusElevationSource implements TellusCacheHandle {
       return cached == null || cached == MISSING_RASTER ? null : cached;
    }
 
-   private ShortRaster loadTile( TellusElevationSource.TileKey key) {
+   private ShortRaster loadTile( TellusElevationSource.TileKey key) throws IOException {
       return this.loadTile(key, this.cachePath(key), TellusCacheDomain.TERRAIN, MAPTERHORN_ENDPOINT, "Mapterhorn");
    }
 
-   private ShortRaster loadOpenWatersTile(TellusElevationSource.TileKey key) {
+   private ShortRaster loadOpenWatersTile(TellusElevationSource.TileKey key) throws IOException {
       return this.loadTile(key, this.openWatersCachePath(key), TellusCacheDomain.OPENWATERS, OPENWATERS_ENDPOINT, "OpenWaters");
    }
 
    private ShortRaster loadTile(
       TellusElevationSource.TileKey key, Path cachePath, TellusCacheDomain cacheDomain, String endpoint, String providerName
-   ) {
+   ) throws IOException {
       if (Files.exists(cachePath)) {
          if (cacheDomain == TellusCacheDomain.TERRAIN) {
             this.removePersistedZeroTile(key);
@@ -2281,6 +2501,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
          try {
             return readCachedTerrainRaster(cachePath);
          } catch (IOException var13) {
+            SourceInterrupts.throwIfInterruption(var13);
             this.handleInvalidTile(cachePath, key, var13);
          }
       }
@@ -2289,27 +2510,41 @@ public final class TellusElevationSource implements TellusCacheHandle {
          return ZERO_RASTER;
       }
 
+      // Zoom levels above a region's source resolution do not exist (HTTP 404). Samplers probe
+      // from the finest zoom down, so remembering those misses on disk spares every later session
+      // a chain of serialized HTTP round trips per tile position. Transient failures are never recorded on disk.
+      Path missingMarker = missingMarkerPath(cachePath);
+      if (Files.exists(missingMarker)) {
+         return missingTileRaster(cacheDomain, key);
+      }
+
+      // A failed download throws instead of returning MISSING_RASTER, so the caches keep no entry and
+      // the tile is downloaded again once the retry pause is over.
+      Long retryAt = this.failedUntil.getIfPresent(cachePath);
+      if (retryAt != null && System.nanoTime() < retryAt) {
+         throw new IOException(providerName + " elevation tile " + key + " failed recently; waiting to retry");
+      }
+
       long generation = TellusCacheRegistry.generation(cacheDomain);
       byte[] data;
       try {
          data = this.downloadTile(key, endpoint);
       } catch (IOException var10) {
-         Tellus.LOGGER.debug("Failed to download {} elevation tile {}", providerName, key, var10);
-         return MISSING_RASTER;
+         SourceInterrupts.throwIfInterruption(var10);
+         this.failedUntil.put(cachePath, System.nanoTime() + TILE_FAILURE_RETRY_NANOS);
+         Tellus.LOGGER.warn(
+            "Failed to download {} elevation tile {}; retrying in {} s: {}",
+            providerName,
+            key,
+            TimeUnit.NANOSECONDS.toSeconds(TILE_FAILURE_RETRY_NANOS),
+            var10.toString()
+         );
+         throw var10;
       }
 
       if (data == null) {
-         // The global Mapterhorn pyramid omits empty ocean tiles. Copernicus GLO-30
-         // defines those gaps as zero elevation, so walking to coarser parents only
-         // adds serialized HTTP misses and can blend distant land into ocean samples.
-         if (cacheDomain == TellusCacheDomain.TERRAIN
-            && mapterhornMissingTileRepresentsZero(key.zoom())) {
-            this.cacheTile(
-               this.zeroCachePath(key), new byte[0], cacheDomain, generation
-            );
-            return ZERO_RASTER;
-         }
-         return MISSING_RASTER;
+         this.cacheTile(missingMarker, new byte[0], cacheDomain, generation);
+         return missingTileRaster(cacheDomain, key);
       } else {
          if (!this.cacheTile(cachePath, data, cacheDomain, generation)) {
             throw new IllegalStateException("Discarded stale " + providerName + " elevation cache write for " + key);
@@ -2356,6 +2591,8 @@ public final class TellusElevationSource implements TellusCacheHandle {
    private byte[] downloadTileOnce(TellusElevationSource.TileKey key, String endpoint) throws IOException {
       URI uri = URI.create(String.format("%s/%d/%d/%d.webp", endpoint, key.zoom(), key.x(), key.y()));
       HttpURLConnection connection = (HttpURLConnection)uri.toURL().openConnection();
+      // A fully read tile leaves the socket to the JDK keep-alive cache for the next tile.
+      boolean reusable = false;
       try {
          connection.setConnectTimeout(TILE_CONNECT_TIMEOUT_MS);
          connection.setReadTimeout(TILE_READ_TIMEOUT_MS);
@@ -2376,12 +2613,16 @@ public final class TellusElevationSource implements TellusCacheHandle {
          DownloadProgressReporter.requestStarted(contentLength);
 
          try (InputStream input = Objects.requireNonNull(connection.getInputStream(), "elevationTileResponse")) {
-            return DownloadProgressReporter.readAllBytesWithProgress(input, MAX_TILE_BYTES);
+            byte[] tile = DownloadProgressReporter.readAllBytesWithProgress(input, MAX_TILE_BYTES);
+            reusable = true;
+            return tile;
          } finally {
             DownloadProgressReporter.requestFinished();
          }
       } finally {
-         connection.disconnect();
+         if (!reusable) {
+            connection.disconnect();
+         }
       }
    }
 
@@ -2401,6 +2642,19 @@ public final class TellusElevationSource implements TellusCacheHandle {
          Tellus.LOGGER.warn("Failed to cache elevation tile {}", cachePath, var4);
          return false;
       }
+   }
+
+   private static ShortRaster missingTileRaster(TellusCacheDomain cacheDomain, TellusElevationSource.TileKey key) {
+      // The global Mapterhorn pyramid omits empty ocean tiles. Copernicus GLO-30
+      // defines those gaps as zero elevation, so walking to coarser parents only
+      // adds serialized HTTP misses and can blend distant land into ocean samples.
+      return cacheDomain == TellusCacheDomain.TERRAIN && mapterhornMissingTileRepresentsZero(key.zoom())
+         ? ZERO_RASTER
+         : MISSING_RASTER;
+   }
+
+   private static Path missingMarkerPath(Path cachePath) {
+      return cachePath.resolveSibling(cachePath.getFileName().toString() + ".missing");
    }
 
    private Path cachePath(TellusElevationSource.TileKey key) {
@@ -2445,6 +2699,10 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    private void handleInvalidTile(Path cachePath, TellusElevationSource.TileKey key, IOException cause) {
+      if (SourceInterrupts.isInterruption(cause)) {
+         // A cancelled read says nothing about the file.
+         return;
+      }
       try {
          Files.deleteIfExists(cachePath);
       } catch (IOException var5) {
@@ -2923,6 +3181,8 @@ public final class TellusElevationSource implements TellusCacheHandle {
 
    @Override
    public void clearCache() {
+      this.forgetRecentTiles();
+      this.failedUntil.invalidateAll();
       this.cache.invalidateAll();
       this.oceanCache.invalidateAll();
       this.tileMemo.invalidateAll();
@@ -2933,6 +3193,9 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    private record TileKey(int zoom, int x, int y) {
+   }
+
+   private record RecentRaster(TellusElevationSource.TileKey key, long generation, ShortRaster raster) {
    }
 
    private record AreaSample(double blockX, double blockZ) {

@@ -39,6 +39,7 @@ public final class EarthBiomeSource extends BiomeSource {
          .apply(instance, EarthBiomeSource::new)
    );
    private static final int ESA_TREE_COVER = 10;
+   private static final int ESA_SHRUBLAND = 20;
    private static final int ESA_GRASSLAND = 30;
    private static final int ESA_CROPLAND = 40;
    private static final int ESA_SNOW_ICE = 70;
@@ -81,6 +82,7 @@ public final class EarthBiomeSource extends BiomeSource {
    private final HolderGetter<Biome> biomeLookup;
    
    private final EarthGeneratorSettings settings;
+
    private final WorldProjection projection;
    
    private final Set<Holder<Biome>> possibleBiomes;
@@ -114,7 +116,11 @@ public final class EarthBiomeSource extends BiomeSource {
    private final Holder<Biome> river;
    
    private final Holder<Biome> frozenPeaks;
-   
+
+   private final Holder<Biome> snowySlopes;
+
+   private final Holder<Biome> jaggedPeaks;
+
    private final Holder<Biome> mangrove;
    
    private final Holder<Biome> lushCaves;
@@ -127,8 +133,9 @@ public final class EarthBiomeSource extends BiomeSource {
    private final AntarcticSnowPolicy antarcticSnowPolicy;
    private final RandomBiomeMixer randomBiomeMixer;
    private final ThreadLocal<Integer> structureBiomeQueryDepth = new ThreadLocal<>();
-   private final ThreadLocal<EarthBiomeSource.RegionalReliefCache> badlandsReliefCache = ThreadLocal.withInitial(
-      EarthBiomeSource.RegionalReliefCache::new
+   private final BadlandsRegionField badlandsRegion;
+   private final ThreadLocal<EarthBiomeSource.SnowBiomeCache> snowBiomeCache = ThreadLocal.withInitial(
+      EarthBiomeSource.SnowBiomeCache::new
    );
    private final int structureBiomeProbeCeilingY;
    private volatile boolean fastSpawnMode = true;
@@ -154,12 +161,15 @@ public final class EarthBiomeSource extends BiomeSource {
       this.deepFrozenOcean = this.resolveBiome(Biomes.DEEP_FROZEN_OCEAN, this.deepOcean);
       this.river = this.resolveBiome(Biomes.RIVER, this.plains);
       this.frozenPeaks = this.resolveBiome(Biomes.FROZEN_PEAKS, this.plains);
+      this.snowySlopes = this.resolveBiome(Biomes.SNOWY_SLOPES, this.frozenPeaks);
+      this.jaggedPeaks = this.resolveBiome(Biomes.JAGGED_PEAKS, this.frozenPeaks);
       this.mangrove = this.resolveBiome(Biomes.MANGROVE_SWAMP, this.plains);
       this.lushCaves = this.resolveOptionalBiome(Biomes.LUSH_CAVES);
       this.dripstoneCaves = this.resolveOptionalBiome(Biomes.DRIPSTONE_CAVES);
       this.deepDark = this.resolveOptionalBiome(Biomes.DEEP_DARK);
       this.waterResolver = TellusWorldgenSources.waterResolver(this.settings);
       this.antarcticSnowPolicy = AntarcticSnowPolicy.forProjection(this.projection);
+      this.badlandsRegion = new BadlandsRegionField(this.settings.worldScale());
       this.randomBiomeMixer = new RandomBiomeMixer(this.biomeLookup, this.settings);
       this.possibleBiomes = this.buildPossibleBiomes();
    }
@@ -296,20 +306,10 @@ public final class EarthBiomeSource extends BiomeSource {
       return this.resolveSurfaceBiomeAtBlock(blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, null);
    }
 
-   public Holder<Biome> getLodBiomeAtBlock(
-      int blockX, int blockZ, int rawCoverClass, int visualCoverClass, boolean hasWater, boolean isOcean
-   ) {
-      return this.resolveSurfaceBiomeAtBlock(blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, null);
-   }
-
-   public Holder<Biome> getLodBiomeAtBlock(
-      int blockX, int blockZ, int rawCoverClass, int visualCoverClass, boolean hasWater, boolean isOcean, double previewResolutionMeters
-   ) {
-      return this.resolveSurfaceBiomeAtBlock(
-         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, null, previewResolutionMeters, null
-      );
-   }
-
+   /**
+    * Coarse streaming passes the relief it already measured; the badlands field now reads relief at the
+    * LOD's own resolution, so the measured value is not needed for the result.
+    */
    public Holder<Biome> getLodBiomeAtBlock(
       int blockX,
       int blockZ,
@@ -320,16 +320,20 @@ public final class EarthBiomeSource extends BiomeSource {
       double previewResolutionMeters,
       double regionalReliefMeters
    ) {
+      return this.getLodBiomeAtBlock(blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, previewResolutionMeters);
+   }
+
+   public Holder<Biome> getLodBiomeAtBlock(
+      int blockX, int blockZ, int rawCoverClass, int visualCoverClass, boolean hasWater, boolean isOcean
+   ) {
+      return this.resolveSurfaceBiomeAtBlock(blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, null);
+   }
+
+   public Holder<Biome> getLodBiomeAtBlock(
+      int blockX, int blockZ, int rawCoverClass, int visualCoverClass, boolean hasWater, boolean isOcean, double previewResolutionMeters
+   ) {
       return this.resolveSurfaceBiomeAtBlock(
-         blockX,
-         blockZ,
-         rawCoverClass,
-         visualCoverClass,
-         hasWater,
-         isOcean,
-         null,
-         previewResolutionMeters,
-         regionalReliefMeters
+         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, null, previewResolutionMeters
       );
    }
 
@@ -449,7 +453,7 @@ public final class EarthBiomeSource extends BiomeSource {
       int blockX, int blockZ, int rawCoverClass, int visualCoverClass, boolean hasWater, boolean isOcean, String precomputedKoppen
    ) {
       return this.resolveSurfaceBiomeAtBlock(
-         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, precomputedKoppen, Double.NaN, null
+         blockX, blockZ, rawCoverClass, visualCoverClass, hasWater, isOcean, precomputedKoppen, Double.NaN
       );
    }
 
@@ -461,8 +465,7 @@ public final class EarthBiomeSource extends BiomeSource {
       boolean hasWater,
       boolean isOcean,
       String precomputedKoppen,
-      double previewResolutionMeters,
-      Double precomputedRegionalReliefMeters
+      double previewResolutionMeters
    ) {
       if (rawCoverClass == ESA_MANGROVES) {
          return this.mangrove;
@@ -473,9 +476,7 @@ public final class EarthBiomeSource extends BiomeSource {
       if (this.settings.enableWater() && !hasWater) {
          visualCoverClass = this.resolveDryOsmVisualCoverClass(blockX, blockZ, rawCoverClass, visualCoverClass);
       }
-      return this.resolveSurfaceBiomeAfterWater(
-         blockX, blockZ, rawCoverClass, visualCoverClass, precomputedKoppen, precomputedRegionalReliefMeters
-      );
+      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, rawCoverClass, visualCoverClass, precomputedKoppen, previewResolutionMeters);
    }
 
    private int resolveDryOsmVisualCoverClass(int blockX, int blockZ, int rawCoverClass, int visualCoverClass) {
@@ -541,19 +542,34 @@ public final class EarthBiomeSource extends BiomeSource {
    private Holder<Biome> resolveSurfaceBiomeAfterWater(
       int blockX, int blockZ, int rawCoverClass, int visualCoverClass, String precomputedKoppen
    ) {
-      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, rawCoverClass, visualCoverClass, precomputedKoppen, null);
+      return this.resolveSurfaceBiomeAfterWater(blockX, blockZ, rawCoverClass, visualCoverClass, precomputedKoppen, Double.NaN);
+   }
+
+   /**
+    * Distant LOD columns (16+ block cells) measure the badlands regional relief on the DEM at their own
+    * resolution; the relief spans kilometres, so native tiles for every column add downloads, not detail.
+    */
+   private double lodReliefResolutionMeters(double previewResolutionMeters) {
+      double worldScale = this.settings.worldScale();
+      return Double.isFinite(previewResolutionMeters) && worldScale > 0.0 && previewResolutionMeters >= worldScale * 16.0
+         ? previewResolutionMeters
+         : Double.NaN;
+   }
+
+   /** Distant LOD columns read the ground of their snow biome on the elevation data their own terrain used. */
+   private double lodSnowResolutionMeters(double previewResolutionMeters) {
+      return Double.isFinite(previewResolutionMeters) && previewResolutionMeters > this.settings.worldScale()
+         ? previewResolutionMeters
+         : Double.NaN;
    }
 
    private Holder<Biome> resolveSurfaceBiomeAfterWater(
-      int blockX,
-      int blockZ,
-      int rawCoverClass,
-      int visualCoverClass,
-      String precomputedKoppen,
-      Double precomputedRegionalReliefMeters
+      int blockX, int blockZ, int rawCoverClass, int visualCoverClass, String precomputedKoppen, double previewResolutionMeters
    ) {
       if (this.antarcticSnowPolicy.shouldUseSnowFallback(rawCoverClass, blockZ) || visualCoverClass == ESA_SNOW_ICE) {
-         return this.applyRandomLandBiome(this.frozenPeaks, blockX, blockZ, null);
+         return this.applyRandomLandBiome(
+            this.resolveSnowBiome(blockX, blockZ, this.lodSnowResolutionMeters(previewResolutionMeters)), blockX, blockZ, null
+         );
       }
 
       String koppen = precomputedKoppen;
@@ -565,26 +581,33 @@ public final class EarthBiomeSource extends BiomeSource {
       }
 
       if (BadlandsTerrainPolicy.isDryCanyonCover(visualCoverClass)) {
-         String coherentKoppen = KOPPEN_SOURCE.sampleSmoothedCode(blockX, blockZ, this.projection);
+         String coherentKoppen = KOPPEN_SOURCE.sampleCoherentCode(blockX, blockZ, this.projection);
          if (BadlandsTerrainPolicy.shouldUseCoherentAridClimate(visualCoverClass, coherentKoppen)) {
             koppen = coherentKoppen;
          }
       }
 
-      ResourceKey<Biome> biomeKey = BiomeClassification.findBiomeKey(visualCoverClass, koppen);
-      if (biomeKey == null) {
-         biomeKey = BiomeClassification.findFallbackKey(visualCoverClass);
+      ResourceKey<Biome> biomeKey = classifyLandBiome(visualCoverClass, koppen);
+      ResourceKey<Biome> unpromotedKey = biomeKey;
+      boolean aridCanyon = BadlandsTerrainPolicy.isDryCanyonCover(visualCoverClass)
+         && BadlandsTerrainPolicy.isAridClimate(koppen)
+         && BadlandsRegionField.isCanyonRelief(this.sampleRegionalReliefMeters(blockX, blockZ, previewResolutionMeters), blockX, blockZ);
+      if (aridCanyon) {
+         biomeKey = Biomes.BADLANDS;
       }
 
-      if (!Biomes.BADLANDS.equals(biomeKey)
-         && BadlandsTerrainPolicy.isDryCanyonCover(visualCoverClass)
-         && BadlandsTerrainPolicy.isAridClimate(koppen)
-         && BadlandsTerrainPolicy.shouldPromoteToBadlands(
-            visualCoverClass,
-            koppen,
-            precomputedRegionalReliefMeters == null ? this.sampleRegionalReliefMeters(blockX, blockZ) : precomputedRegionalReliefMeters
-         )) {
-         biomeKey = Biomes.BADLANDS;
+      // Badlands must read as a landscape: a dry pixel among towns, fields, forest or plain steppe
+      // takes the biome of its surroundings rather than becoming a patch of red sand. In arid
+      // canyons, and where even scrub maps to badlands, all dry cover counts; elsewhere only the
+      // bare ground the badlands came from.
+      if (Biomes.BADLANDS.equals(biomeKey)) {
+         BadlandsRegionField.Support support = this.sampleBadlandsSupport(blockX, blockZ, previewResolutionMeters);
+         boolean dryLandscape = aridCanyon || Biomes.BADLANDS.equals(classifyLandBiome(ESA_SHRUBLAND, koppen));
+         if (!BadlandsRegionField.keepsBadlands(dryLandscape ? support.dryShare() : support.bareShare(), blockX, blockZ)) {
+            biomeKey = Biomes.BADLANDS.equals(unpromotedKey)
+               ? demotedBadlandsKey(dryLandscape ? support.nonDryCoverClass() : support.nonBareCoverClass(), koppen)
+               : unpromotedKey;
+         }
       }
 
       Holder<Biome> biome = biomeKey == null ? this.plains : this.resolveBiome(biomeKey, this.plains);
@@ -683,51 +706,114 @@ public final class EarthBiomeSource extends BiomeSource {
       return samples >= 3 && relief >= CHERRY_GROVE_MIN_RELIEF_METERS && relief <= CHERRY_GROVE_MAX_RELIEF_METERS;
    }
 
-   private double sampleRegionalReliefMeters(int blockX, int blockZ) {
-      double worldScale = this.settings.worldScale();
-      if (!(worldScale > 0.0)) {
-         return Double.NaN;
-      }
-
-      int cellSize = BadlandsTerrainPolicy.regionalSampleCellBlocks(worldScale);
-      int cellX = Math.floorDiv(blockX, cellSize);
-      int cellZ = Math.floorDiv(blockZ, cellSize);
-      EarthBiomeSource.RegionalReliefCache cache = this.badlandsReliefCache.get();
-      if (cache.cellX == cellX && cache.cellZ == cellZ) {
-         return cache.reliefMeters;
-      }
-
-      int sampleX = cellCenter(cellX, cellSize);
-      int sampleZ = cellCenter(cellZ, cellSize);
-      int offset = Math.max(4, Mth.ceil(BadlandsTerrainPolicy.CANYON_RELIEF_SAMPLE_METERS / worldScale));
-      double[] elevations = new double[]{
-         ELEVATION_SOURCE.sampleElevationMeters(sampleX, sampleZ, this.projection, false, this.settings.demSelection()),
-         ELEVATION_SOURCE.sampleElevationMeters(offsetCoordinate(sampleX, offset), sampleZ, this.projection, false, this.settings.demSelection()),
-         ELEVATION_SOURCE.sampleElevationMeters(offsetCoordinate(sampleX, -offset), sampleZ, this.projection, false, this.settings.demSelection()),
-         ELEVATION_SOURCE.sampleElevationMeters(sampleX, offsetCoordinate(sampleZ, offset), this.projection, false, this.settings.demSelection()),
-         ELEVATION_SOURCE.sampleElevationMeters(sampleX, offsetCoordinate(sampleZ, -offset), this.projection, false, this.settings.demSelection())
-      };
-      double min = Double.POSITIVE_INFINITY;
-      double max = Double.NEGATIVE_INFINITY;
-      int samples = 0;
-      for (double elevation : elevations) {
-         if (Double.isFinite(elevation)) {
-            min = Math.min(min, elevation);
-            max = Math.max(max, elevation);
-            samples++;
-         }
-      }
-
-      double relief = samples >= 3 ? max - min : Double.NaN;
-      cache.cellX = cellX;
-      cache.cellZ = cellZ;
-      cache.reliefMeters = relief;
-      return relief;
+   private static ResourceKey<Biome> classifyLandBiome(int coverClass, String koppen) {
+      ResourceKey<Biome> biomeKey = BiomeClassification.findBiomeKey(coverClass, koppen);
+      return biomeKey == null ? BiomeClassification.findFallbackKey(coverClass) : biomeKey;
    }
 
-   private static int cellCenter(int cell, int cellSize) {
-      long center = (long)cell * cellSize + cellSize / 2L;
-      return (int)Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, center));
+   /** Canyon relief around a column, interpolated between relief cells so promotion has no cell edges. */
+   private double sampleRegionalReliefMeters(int blockX, int blockZ, double previewResolutionMeters) {
+      if (!(this.settings.worldScale() > 0.0)) {
+         return Double.NaN;
+      }
+      double resolutionMeters = this.lodReliefResolutionMeters(previewResolutionMeters);
+      return this.badlandsRegion.reliefMeters(
+         blockX, blockZ, resolutionMeters, this.lodColumnBlocks(resolutionMeters), this::sampleReliefElevationMeters
+      );
+   }
+
+   /**
+    * Dry land share around a column. Chunks and fine LODs read the land cover chunks use, so both
+    * keep the same badlands; distant LOD columns read the cover at their own resolution.
+    */
+   private BadlandsRegionField.Support sampleBadlandsSupport(int blockX, int blockZ, double previewResolutionMeters) {
+      double worldScale = this.settings.worldScale();
+      if (!(worldScale > 0.0)) {
+         return BadlandsRegionField.Support.UNKNOWN;
+      }
+      double lodResolutionMeters = this.lodReliefResolutionMeters(previewResolutionMeters);
+      double resolutionMeters = Double.isFinite(lodResolutionMeters) ? lodResolutionMeters : worldScale;
+      return this.badlandsRegion.support(
+         blockX,
+         blockZ,
+         resolutionMeters,
+         this.lodColumnBlocks(lodResolutionMeters),
+         (x, z, resolution) -> LAND_COVER_SOURCE.sampleCoverClass(x, z, this.projection, resolution)
+      );
+   }
+
+   /** Width of the column a distant LOD resolution stands for, or one block for chunks and fine LODs. */
+   private double lodColumnBlocks(double lodResolutionMeters) {
+      return Double.isFinite(lodResolutionMeters) ? lodResolutionMeters / this.settings.worldScale() : 1.0;
+   }
+
+   /**
+    * The biome a dry pixel takes outside a badlands landscape: that of the land cover around it, so
+    * a vacant lot reads as part of its town and a clearing as part of its forest.
+    */
+   private static ResourceKey<Biome> demotedBadlandsKey(int surroundingCover, String koppen) {
+      if (surroundingCover >= 0 && surroundingCover != ESA_SNOW_ICE) {
+         ResourceKey<Biome> key = classifyLandBiome(surroundingCover, koppen);
+         if (key != null && !Biomes.BADLANDS.equals(key)) {
+            return key;
+         }
+      }
+      return koppen != null && koppen.toUpperCase(Locale.ROOT).endsWith("H") ? Biomes.SAVANNA : Biomes.PLAINS;
+   }
+
+   private double sampleReliefElevationMeters(int blockX, int blockZ, double resolutionMeters) {
+      double worldScale = this.settings.worldScale();
+      return Double.isFinite(resolutionMeters)
+         ? ELEVATION_SOURCE.sampleResolvedPreviewElevationMeters(
+            blockX, blockZ, this.projection, false, this.settings.demSelection(), resolutionMeters
+         ).elevationMeters()
+         : ELEVATION_SOURCE.sampleElevationMeters(blockX, blockZ, this.projection, false, this.settings.demSelection());
+   }
+
+   /**
+    * Frozen peaks, snowy slopes or jagged peaks for mapped snow, read from the ground around the
+    * corner of the biome quart the point lies in, where chunk biomes are resolved, so distant LOD
+    * columns name the same biome as the chunks that replace them.
+    */
+   private Holder<Biome> resolveSnowBiome(int blockX, int blockZ, double resolutionMeters) {
+      double worldScale = this.settings.worldScale();
+      if (!(worldScale > 0.0)) {
+         return this.frozenPeaks;
+      }
+
+      int sampleX = quartBlock(blockX);
+      int sampleZ = quartBlock(blockZ);
+      long key = (long)sampleX << 32 | sampleZ & 0xFFFFFFFFL;
+      EarthBiomeSource.SnowBiomeCache cache = this.snowBiomeCache.get();
+      Holder<Biome> cached = cache.get(key, resolutionMeters);
+      if (cached != null) {
+         return cached;
+      }
+
+      int baseline = SnowBiomePolicy.baselineBlocks(worldScale);
+      SnowBiomePolicy.Kind kind = SnowBiomePolicy.classify(
+         this.sampleSnowBiomeElevationMeters(sampleX, sampleZ, resolutionMeters),
+         this.sampleSnowBiomeElevationMeters(offsetCoordinate(sampleX, baseline), sampleZ, resolutionMeters),
+         this.sampleSnowBiomeElevationMeters(offsetCoordinate(sampleX, -baseline), sampleZ, resolutionMeters),
+         this.sampleSnowBiomeElevationMeters(sampleX, offsetCoordinate(sampleZ, -baseline), resolutionMeters),
+         this.sampleSnowBiomeElevationMeters(sampleX, offsetCoordinate(sampleZ, baseline), resolutionMeters),
+         baseline * this.projection.groundMetersPerBlockX(sampleZ),
+         baseline * this.projection.groundMetersPerBlockZ(sampleZ)
+      );
+      Holder<Biome> biome = switch (kind) {
+         case JAGGED_PEAKS -> this.jaggedPeaks;
+         case SNOWY_SLOPES -> this.snowySlopes;
+         case FROZEN_PEAKS -> this.frozenPeaks;
+      };
+      cache.put(key, resolutionMeters, biome);
+      return biome;
+   }
+
+   private double sampleSnowBiomeElevationMeters(int blockX, int blockZ, double resolutionMeters) {
+      double worldScale = this.settings.worldScale();
+      return Double.isFinite(resolutionMeters)
+         ? ELEVATION_SOURCE.sampleTerrainElevationMetersAtResolution(blockX, blockZ, this.projection, resolutionMeters)
+         : ELEVATION_SOURCE.sampleElevationMeters(blockX, blockZ, this.projection, false, this.settings.demSelection());
    }
 
    private static int offsetCoordinate(int coordinate, int offset) {
@@ -737,9 +823,7 @@ public final class EarthBiomeSource extends BiomeSource {
 
    private int sampleVisualCoverClass(int blockX, int blockZ, int rawCoverClass) {
       double worldScale = this.settings.worldScale();
-      return worldScale > 0.0 && worldScale < 10.0
-         ? LAND_COVER_SOURCE.sampleVisualCoverClass(blockX, blockZ, this.projection)
-         : rawCoverClass;
+      return worldScale > 0.0 && worldScale < 10.0 ? LAND_COVER_SOURCE.sampleVisualCoverClass(blockX, blockZ, this.projection) : rawCoverClass;
    }
 
    
@@ -764,6 +848,8 @@ public final class EarthBiomeSource extends BiomeSource {
       holders.add(this.deepFrozenOcean);
       holders.add(this.river);
       holders.add(this.frozenPeaks);
+      holders.add(this.snowySlopes);
+      holders.add(this.jaggedPeaks);
       holders.add(this.mangrove);
       if (this.settings.randomBiomes()) {
          holders.add(this.cherryGrove);
@@ -789,7 +875,7 @@ public final class EarthBiomeSource extends BiomeSource {
          }
       }
 
-      double depthFactor = Mth.clamp((depth - TellusCaveBiomeDepthPolicy.MIN_CAVE_BIOME_DEPTH) / 80.0, 0.0, 1.0);
+      double depthFactor = TellusCaveBiomeDepthPolicy.normalizedDepthFactor(depth, this.settings.undergroundDepth());
       double noise = sampleCaveNoise(blockX, blockY, blockZ, CAVE_BIOME_GRID, CAVE_BIOME_Y_GRID);
       Holder<Biome> lushCavesBiome = this.lushCaves;
       Holder<Biome> dripstoneCavesBiome = this.dripstoneCaves;
@@ -827,7 +913,7 @@ public final class EarthBiomeSource extends BiomeSource {
          return false;
       }
 
-      double depthFactor = Mth.clamp((depth - TellusCaveBiomeDepthPolicy.MIN_CAVE_BIOME_DEPTH) / 80.0, 0.0, 1.0);
+      double depthFactor = TellusCaveBiomeDepthPolicy.normalizedDepthFactor(depth, this.settings.undergroundDepth());
       double deepNoise = sampleCaveNoise(blockX, -depth, blockZ, DEEP_DARK_GRID, DEEP_DARK_Y_GRID);
       return deepNoise < 0.28 + depthFactor * 0.22;
    }
@@ -955,9 +1041,30 @@ public final class EarthBiomeSource extends BiomeSource {
    private record ResolvedBiomeColumn(Holder<Biome> surfaceBiome, WaterSurfaceResolver.WaterColumnData waterColumn) {
    }
 
-   private static final class RegionalReliefCache {
-      private int cellX = Integer.MIN_VALUE;
-      private int cellZ = Integer.MIN_VALUE;
-      private double reliefMeters = Double.NaN;
+   /** Snow biomes of recent quarts, so the rows of fine LOD columns sharing a quart classify it once. */
+   private static final class SnowBiomeCache {
+      private static final int BITS = 8;
+      private final long[] keys = new long[1 << BITS];
+      private final double[] resolutions = new double[1 << BITS];
+      private final Object[] biomes = new Object[1 << BITS];
+
+      @SuppressWarnings("unchecked")
+      private Holder<Biome> get(long key, double resolutionMeters) {
+         int slot = slot(key);
+         return this.biomes[slot] != null && this.keys[slot] == key && Double.compare(this.resolutions[slot], resolutionMeters) == 0
+            ? (Holder<Biome>)this.biomes[slot]
+            : null;
+      }
+
+      private void put(long key, double resolutionMeters, Holder<Biome> biome) {
+         int slot = slot(key);
+         this.keys[slot] = key;
+         this.resolutions[slot] = resolutionMeters;
+         this.biomes[slot] = biome;
+      }
+
+      private static int slot(long key) {
+         return (int)(key * -7046029254386353131L >>> (64 - BITS));
+      }
    }
 }

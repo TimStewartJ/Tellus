@@ -4,26 +4,38 @@ import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.HighYPackedCoordinateProfile;
 import com.yucareux.tellus.worldgen.RandomBiomeCatalog;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderSet;
 import net.minecraft.core.Registry;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Util;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.animal.axolotl.Axolotl;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.BiomeGenerationSettings;
 import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.CarvingMask;
 import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.ProtoChunk;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.levelgen.Beardifier;
 import net.minecraft.world.level.levelgen.DensityFunctions;
@@ -142,5 +154,71 @@ public final class MinecraftVersionCompat {
 
    public static Block paleOakLeavesOr(Block fallback) {
       return Blocks.PALE_OAK_LEAVES;
+   }
+
+   public static int minY(LevelHeightAccessor level) {
+      return level.getMinY();
+   }
+
+   public static int maxY(LevelHeightAccessor level) {
+      return level.getMaxY();
+   }
+
+   public static void setBlockState(ChunkAccess chunk, BlockPos position, BlockState state) {
+      chunk.setBlockState(position, state);
+   }
+
+   public static <T> Registry<T> registry(RegistryAccess access, ResourceKey<? extends Registry<? extends T>> key) {
+      return access.lookupOrThrow(key);
+   }
+
+   public static <T> T registryValue(Registry<T> registry, ResourceKey<T> key) {
+      return registry.getValueOrThrow(key);
+   }
+
+   public static <T> Holder<T> registryHolder(Registry<T> registry, ResourceKey<T> key) {
+      return registry.getOrThrow(key);
+   }
+
+   public static String keyPath(ResourceKey<?> key) {
+      return key.identifier().getPath();
+   }
+
+   public static String keyId(ResourceKey<?> key) {
+      return key.identifier().toString();
+   }
+
+   public static <T> String registryKeyPath(Registry<T> registry, T value) {
+      Identifier id = registry.getKey(value);
+      return id == null ? null : id.getPath();
+   }
+
+   public static <T> CompletableFuture<T> supplyBackground(String taskName, Supplier<T> task) {
+      return CompletableFuture.supplyAsync(task, Util.backgroundExecutor().forName(taskName));
+   }
+
+   public static void snapTo(Entity entity, double x, double y, double z, float yRot, float xRot) {
+      entity.snapTo(x, y, z, yRot, xRot);
+   }
+
+   public static CarvingMask carvingMask(ProtoChunk chunk) {
+      return chunk.getCarvingMask();
+   }
+
+   public static CarvingMask getOrCreateCarvingMask(ProtoChunk chunk) {
+      return chunk.getOrCreateCarvingMask();
+   }
+
+   public static void setCarvingMask(ProtoChunk chunk, CarvingMask mask) {
+      chunk.setCarvingMask(mask);
+   }
+
+   public static void copyCarvers(BiomeGenerationSettings original, BiomeGenerationSettings.PlainBuilder builder, Predicate<Holder<?>> keep) {
+      for (var carver : original.getCarvers()) {
+         var safeCarver = Objects.requireNonNull(carver, "carver");
+         if (keep.test(safeCarver)) {
+            builder.addCarver(safeCarver);
+         }
+      }
    }
 }

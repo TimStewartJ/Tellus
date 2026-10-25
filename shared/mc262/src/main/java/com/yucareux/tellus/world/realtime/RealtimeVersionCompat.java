@@ -14,7 +14,7 @@ final class RealtimeVersionCompat {
    }
 
    static long dayTimeTicks(ServerLevel level) {
-      return defaultClock(level).map(clock -> level.clockManager().getTotalTicks(clock)).orElse(level.getGameTime());
+      return defaultClock(level).map(clock -> com.yucareux.tellus.compat.MinecraftClockAccess.totalTicks(level, clock)).orElse(level.getGameTime());
    }
 
    static void setDayTimeTicks(ServerLevel level, long ticks) {

@@ -1,28 +1,32 @@
 package com.yucareux.tellus.world.data.osm;
 
 import com.yucareux.tellus.worldgen.WorldProjection;
-import java.util.Arrays;
 import java.util.Objects;
 
 public final class OsmWaterFeature {
-   /** Slack over the half width that absorbs projection round-off in the bounding-box rejects. */
-   private static final double LINE_REJECT_SLACK_BLOCKS = 0.01;
-   /**
-    * Latitude rejects rely on Mercator stretching latitude (one block never spans more than
-    * 1/blocksPerDegree degrees of latitude), which stops holding inside the polar clamp.
-    */
-   private static final double LAT_REJECT_LIMIT_DEGREES = 85.0;
+   private static final double LINE_HALF_WIDTH_BLOCKS = 0.5;
    private final long featureId;
    private final boolean lineGeometry;
    private final boolean pointGeometry;
    private final boolean oceanHint;
    private final OsmWaterKind kind;
+   private final double widthMeters;
+   private final double dropMeters;
    private final double[][] longitudes;
    private final double[][] latitudes;
    private final double minLon;
    private final double maxLon;
    private final double minLat;
    private final double maxLat;
+   // Lazily projected line geometry; features are immutable, so a racing rebuild is harmless.
+   private volatile LineIndex lineIndex;
+   // Bounds of the vector tile this feature was read from, NaN when unknown. Tiles clip their features with
+   // a buffer; inside its own tile a fragment holds the original geometry, so the pieces of adjacent tiles
+   // join exactly, without the clipped overlap. Set once, before the tile is published.
+   private double tileSouth = Double.NaN;
+   private double tileWest = Double.NaN;
+   private double tileNorth = Double.NaN;
+   private double tileEast = Double.NaN;
 
    public OsmWaterFeature(long featureId, boolean lineGeometry, boolean oceanHint, double[][] longitudes, double[][] latitudes) {
       this(featureId, lineGeometry, oceanHint, OsmWaterKind.UNKNOWN, longitudes, latitudes);
@@ -43,6 +47,13 @@ public final class OsmWaterFeature {
       double[][] longitudes,
       double[][] latitudes
    ) {
+      this(featureId, lineGeometry, pointGeometry, oceanHint, kind, longitudes, latitudes, Double.NaN, Double.NaN);
+   }
+
+   OsmWaterFeature(
+      long featureId, boolean lineGeometry, boolean pointGeometry, boolean oceanHint, OsmWaterKind kind,
+      double[][] longitudes, double[][] latitudes, double widthMeters, double dropMeters
+   ) {
       this.featureId = featureId;
       this.lineGeometry = lineGeometry;
       this.pointGeometry = pointGeometry;
@@ -50,6 +61,8 @@ public final class OsmWaterFeature {
          throw new IllegalArgumentException("Water feature cannot be both a line and a point");
       }
       this.kind = Objects.requireNonNullElse(kind, OsmWaterKind.UNKNOWN);
+      this.widthMeters = positiveDimension(widthMeters);
+      this.dropMeters = positiveDimension(dropMeters);
       this.oceanHint = oceanHint || this.kind.ocean();
       this.longitudes = copyParts(Objects.requireNonNull(longitudes, "longitudes"));
       this.latitudes = copyParts(Objects.requireNonNull(latitudes, "latitudes"));
@@ -114,6 +127,44 @@ public final class OsmWaterFeature {
       return this.pointGeometry && this.kind == OsmWaterKind.WATERFALL;
    }
 
+   public boolean waterfall() { return this.kind == OsmWaterKind.WATERFALL; }
+
+   public double widthMeters() { return this.widthMeters; }
+
+   public double dropMeters() { return this.dropMeters; }
+
+   OsmWaterFeature withDimensions(double widthMeters, double dropMeters) {
+      return new OsmWaterFeature(this.featureId, this.lineGeometry, this.pointGeometry, this.oceanHint, this.kind,
+         this.longitudes, this.latitudes, widthMeters, dropMeters);
+   }
+
+   /** The same feature with the points of the parts {@code flip} marks in reverse order: waterways drawn the other way. */
+   public OsmWaterFeature reversed(boolean[] flip) {
+      double[][] lons = new double[this.longitudes.length][];
+      double[][] lats = new double[lons.length][];
+
+      for (int part = 0; part < lons.length; part++) {
+         int count = this.longitudes[part].length;
+         lons[part] = new double[count];
+         lats[part] = new double[count];
+
+         for (int point = 0; point < count; point++) {
+            int from = flip[part] ? count - 1 - point : point;
+            lons[part][point] = this.longitudes[part][from];
+            lats[part][point] = this.latitudes[part][from];
+         }
+      }
+
+      OsmWaterFeature reversed = new OsmWaterFeature(this.featureId, this.lineGeometry, this.pointGeometry, this.oceanHint, this.kind,
+         lons, lats, this.widthMeters, this.dropMeters);
+      reversed.attachTileBounds(this.tileSouth, this.tileWest, this.tileNorth, this.tileEast);
+      return reversed;
+   }
+
+   private static double positiveDimension(double value) {
+      return Double.isFinite(value) && value > 0.0 && value <= 100000.0 ? value : Double.NaN;
+   }
+
    public boolean oceanHint() {
       return this.oceanHint;
    }
@@ -123,7 +174,7 @@ public final class OsmWaterFeature {
    }
 
    public boolean flowingWater() {
-      return !this.pointGeometry && (this.lineGeometry || this.kind.flowing());
+      return !this.pointGeometry && !this.waterfall() && (this.lineGeometry || this.kind.flowing());
    }
 
    public int partCount() {
@@ -158,12 +209,42 @@ public final class OsmWaterFeature {
       return this.maxLat;
    }
 
+   void attachTileBounds(double south, double west, double north, double east) {
+      if (Double.isFinite(south) && Double.isFinite(west) && Double.isFinite(north) && Double.isFinite(east)) {
+         this.tileSouth = south;
+         this.tileWest = west;
+         this.tileNorth = north;
+         this.tileEast = east;
+      }
+   }
+
+   /** Whether the bounds of the vector tile this fragment came from are known. */
+   public boolean hasTileBounds() {
+      return !Double.isNaN(this.tileSouth);
+   }
+
+   public double tileSouth() {
+      return this.tileSouth;
+   }
+
+   public double tileWest() {
+      return this.tileWest;
+   }
+
+   public double tileNorth() {
+      return this.tileNorth;
+   }
+
+   public double tileEast() {
+      return this.tileEast;
+   }
+
    public boolean intersects(double south, double west, double north, double east) {
       return this.maxLon >= west && this.minLon <= east && this.maxLat >= south && this.minLat <= north;
    }
 
    public boolean containsBlock(int blockX, int blockZ, WorldProjection projection) {
-      if (projection.worldScale() <= 0.0) {
+      if (projection.worldScale() <= 0.0 || this.waterfall()) {
          return false;
       } else if (this.crossesWorldSeam(projection)) {
          return false;
@@ -179,7 +260,7 @@ public final class OsmWaterFeature {
    }
 
    public boolean containsLonLat(double lon, double lat) {
-      if (this.lineGeometry || this.pointGeometry || lon < this.minLon || lon > this.maxLon || lat < this.minLat || lat > this.maxLat) {
+      if (this.lineGeometry || this.pointGeometry || this.waterfall() || lon < this.minLon || lon > this.maxLon || lat < this.minLat || lat > this.maxLat) {
          return false;
       } else {
          boolean inside = false;
@@ -208,65 +289,146 @@ public final class OsmWaterFeature {
    }
 
    /**
-    * Half the channel width a centreline of this feature's kind occupies at this projection's scale, in
-    * blocks; a block whose centre is within this distance of the line is water. Unknown kinds keep the
-    * historical half-block line.
+    * Sets {@code inside[i] = containsLonLat(longitudes[i], lat)} for every
+    * {@code i} in {@code [from, to]}. Longitudes must not decrease. The edges
+    * are crossed once for the whole row and each cell counts the sorted
+    * crossing longitudes at or east of it, with the same arithmetic as the
+    * per-point test, so both give identical results.
     */
-   public double lineHalfWidthBlocks(WorldProjection projection) {
-      if (!this.lineGeometry) {
-         return 0.0;
+   public void containsLonLatRow(double lat, double[] longitudes, int from, int to, boolean[] inside) {
+      boolean area = !this.lineGeometry && !this.pointGeometry && !this.waterfall();
+      if (!area || lat < this.minLat || lat > this.maxLat) {
+         java.util.Arrays.fill(inside, from, to + 1, false);
+         return;
       }
-      double midLatitude = (this.minLat + this.maxLat) * 0.5;
-      double metersPerBlock = projection.groundMetersPerBlockX(projection.latToBlockZ(midLatitude));
-      return this.kind.centerlineWidthBlocks(metersPerBlock) / 2.0;
+      int edges = 0;
+      for (double[] part : this.longitudes) edges += part.length;
+      double[] crossings = new double[edges];
+      int count = 0;
+      for (int part = 0; part < this.longitudes.length; part++) {
+         double[] lonPart = this.longitudes[part];
+         double[] latPart = this.latitudes[part];
+         int points = lonPart.length;
+         for (int i = 0, j = points - 1; i < points; j = i++) {
+            double lonA = lonPart[i];
+            double latA = latPart[i];
+            double lonB = lonPart[j];
+            double latB = latPart[j];
+            if ((latA > lat) != (latB > lat)) {
+               crossings[count++] = (lonB - lonA) * (lat - latA) / (latB - latA) + lonA;
+            }
+         }
+      }
+      java.util.Arrays.sort(crossings, 0, count);
+      int west = 0;
+      for (int i = from; i <= to; i++) {
+         double lon = longitudes[i];
+         if (i > from && lon < longitudes[i - 1]) {
+            throw new IllegalArgumentException("Row longitudes must not decrease");
+         }
+         while (west < count && crossings[west] < lon) {
+            west++;
+         }
+         inside[i] = lon >= this.minLon && lon <= this.maxLon && ((count - west) & 1) != 0;
+      }
    }
 
    private boolean touchesBlockLine(int blockX, int blockZ, WorldProjection projection) {
       double queryX = blockX;
       double queryZ = blockZ;
-      double halfWidth = this.lineHalfWidthBlocks(projection);
-      double maxDistanceSq = halfWidth * halfWidth + 1.0E-6;
-      double rejectBlocks = halfWidth + LINE_REJECT_SLACK_BLOCKS;
-      double blocksPerDegree = projection.equatorialBlocksPerDegree();
-      // Reject in degrees before paying for any projection: one block is exactly
-      // 1/blocksPerDegree degrees of longitude and at most that much latitude.
-      double rejectDegrees = rejectBlocks / blocksPerDegree;
-      double lon = projection.blockXToLon(blockX);
-      if (lon < this.minLon - rejectDegrees || lon > this.maxLon + rejectDegrees) {
+      double maxDistanceSq = LINE_HALF_WIDTH_BLOCKS * LINE_HALF_WIDTH_BLOCKS + 1.0E-6;
+      LineIndex index = this.lineIndex(projection);
+      if (queryX < index.minX || queryX > index.maxX || queryZ < index.minZ || queryZ > index.maxZ) {
          return false;
       }
-      double lat = projection.blockZToLat(blockZ);
-      boolean latRejects = this.latRejectsAllowed(lat);
-      if (latRejects && (lat < this.minLat - rejectDegrees || lat > this.maxLat + rejectDegrees)) {
+      int[] candidates = index.buckets.get(LineIndex.bucketKey(Math.floorDiv(blockX, LineIndex.BUCKET), Math.floorDiv(blockZ, LineIndex.BUCKET)));
+      if (candidates == null) {
          return false;
       }
-
-      for (int part = 0; part < this.longitudes.length; part++) {
-         double[] lonPart = this.longitudes[part];
-         double[] latPart = this.latitudes[part];
-
-         for (int point = 1; point < lonPart.length; point++) {
-            double lonA = lonPart[point - 1];
-            double lonB = lonPart[point];
-            if (lon < Math.min(lonA, lonB) - rejectDegrees || lon > Math.max(lonA, lonB) + rejectDegrees) {
-               continue;
-            }
-            double latA = latPart[point - 1];
-            double latB = latPart[point];
-            if (latRejects && (lat < Math.min(latA, latB) - rejectDegrees || lat > Math.max(latA, latB) + rejectDegrees)) {
-               continue;
-            }
-            double startX = projection.lonToBlockX(lonA);
-            double startZ = projection.latToBlockZ(latA);
-            double endX = projection.lonToBlockX(lonB);
-            double endZ = projection.latToBlockZ(latB);
-            if (distanceToSegmentSq(queryX, queryZ, startX, startZ, endX, endZ) <= maxDistanceSq) {
-               return true;
-            }
+      double[] segments = index.segments;
+      for (int candidate : candidates) {
+         int offset = candidate * 4;
+         if (distanceToSegmentSq(queryX, queryZ, segments[offset], segments[offset + 1], segments[offset + 2], segments[offset + 3]) <= maxDistanceSq) {
+            return true;
          }
       }
 
       return false;
+   }
+
+   /**
+    * Projected line segments bucketed on a 16-block grid, built once per world scale. Every segment
+    * is registered in each bucket its line-width-expanded bounds overlap, so a query tests exactly the
+    * segments that can be within reach and returns the same result as a scan of all segments.
+    */
+   private LineIndex lineIndex(WorldProjection projection) {
+      LineIndex index = this.lineIndex;
+      if (index != null && index.projection.equals(projection)) {
+         return index;
+      }
+            int segmentCount = 0;
+      for (double[] part : this.longitudes) {
+         segmentCount += Math.max(0, part.length - 1);
+      }
+      double[] segments = new double[segmentCount * 4];
+      double reach = LINE_HALF_WIDTH_BLOCKS + 1.0;
+      double lowX = Double.POSITIVE_INFINITY, lowZ = Double.POSITIVE_INFINITY;
+      double highX = Double.NEGATIVE_INFINITY, highZ = Double.NEGATIVE_INFINITY;
+      it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.ints.IntArrayList> buckets =
+         new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
+      int segment = 0;
+      for (int part = 0; part < this.longitudes.length; part++) {
+         double[] lonPart = this.longitudes[part];
+         double[] latPart = this.latitudes[part];
+         for (int point = 1; point < lonPart.length; point++) {
+            double startX = projection.lonToBlockX(lonPart[point - 1]);
+            double startZ = projection.latToBlockZ(latPart[point - 1]);
+            double endX = projection.lonToBlockX(lonPart[point]);
+            double endZ = projection.latToBlockZ(latPart[point]);
+            int offset = segment * 4;
+            segments[offset] = startX;
+            segments[offset + 1] = startZ;
+            segments[offset + 2] = endX;
+            segments[offset + 3] = endZ;
+            double minX = Math.min(startX, endX) - reach, maxX = Math.max(startX, endX) + reach;
+            double minZ = Math.min(startZ, endZ) - reach, maxZ = Math.max(startZ, endZ) + reach;
+            lowX = Math.min(lowX, minX);
+            highX = Math.max(highX, maxX);
+            lowZ = Math.min(lowZ, minZ);
+            highZ = Math.max(highZ, maxZ);
+            int bucketMinX = (int)Math.floor(minX / LineIndex.BUCKET), bucketMaxX = (int)Math.floor(maxX / LineIndex.BUCKET);
+            int bucketMinZ = (int)Math.floor(minZ / LineIndex.BUCKET), bucketMaxZ = (int)Math.floor(maxZ / LineIndex.BUCKET);
+            for (int bz = bucketMinZ; bz <= bucketMaxZ; bz++) {
+               for (int bx = bucketMinX; bx <= bucketMaxX; bx++) {
+                  buckets.computeIfAbsent(LineIndex.bucketKey(bx, bz), ignored -> new it.unimi.dsi.fastutil.ints.IntArrayList(2)).add(segment);
+               }
+            }
+            segment++;
+         }
+      }
+      it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]> frozen = new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>(buckets.size());
+      for (it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry<it.unimi.dsi.fastutil.ints.IntArrayList> entry : buckets.long2ObjectEntrySet()) {
+         frozen.put(entry.getLongKey(), entry.getValue().toIntArray());
+      }
+      index = new LineIndex(projection, segments, frozen, lowX, lowZ, highX, highZ);
+      this.lineIndex = index;
+      return index;
+   }
+
+   private record LineIndex(
+      WorldProjection projection,
+      double[] segments,
+      it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]> buckets,
+      double minX,
+      double minZ,
+      double maxX,
+      double maxZ
+   ) {
+      static final int BUCKET = 16;
+
+      static long bucketKey(int x, int z) {
+         return (long)x << 32 ^ z & 0xFFFFFFFFL;
+      }
    }
 
    public boolean crossesWorldSeam(WorldProjection projection) {
@@ -286,226 +448,6 @@ public final class OsmWaterFeature {
          }
       }
       return false;
-   }
-
-   private boolean latRejectsAllowed(double queryLat) {
-      return Math.abs(queryLat) < LAT_REJECT_LIMIT_DEGREES
-         && this.maxLat < LAT_REJECT_LIMIT_DEGREES
-         && this.minLat > -LAT_REJECT_LIMIT_DEGREES;
-   }
-
-   /**
-    * Creates a scanner that answers {@link #containsBlock} for many blocks sharing a Z coordinate.
-    * The scanner is single-threaded and must be re-created when {@code projection} changes. Seam-crossing
-    * features are always dry, matching {@link #containsBlock}'s seam skip.
-    */
-   public RowScanner rowScanner(WorldProjection projection) {
-      return new RowScanner(this, projection);
-   }
-
-   /**
-    * Row-sweep evaluator for {@link #containsBlock}. Line geometry is projected once and only the
-    * segments whose Z range can reach the current row are tested per block; polygon geometry keeps
-    * the sorted ray-cast crossings of the current row so each block is a binary search. Rasterizing
-    * a tile therefore costs O(rows x vertices) instead of O(blocks x vertices) while returning exactly
-    * what {@code containsBlock} returns for every block, including seam skips and centered origins.
-    */
-   public static final class RowScanner {
-      private final OsmWaterFeature feature;
-      private final WorldProjection projection;
-      private final double blocksPerDegree;
-      private final boolean alwaysDry;
-      private final double[] segmentStartX;
-      private final double[] segmentStartZ;
-      private final double[] segmentEndX;
-      private final double[] segmentEndZ;
-      private final double minBlockX;
-      private final double maxBlockX;
-      private final double minBlockZ;
-      private final double maxBlockZ;
-      private final int[] activeSegments;
-      private int activeCount;
-      private final double[] crossings;
-      private int crossingCount;
-      private boolean rowDry = true;
-      private double rowZ;
-      private final double lineMaxDistanceSq;
-      private final double lineRejectBlocks;
-
-      private RowScanner(OsmWaterFeature feature, WorldProjection projection) {
-         this.feature = feature;
-         this.projection = projection;
-         this.blocksPerDegree = projection.equatorialBlocksPerDegree();
-         this.alwaysDry = !(projection.worldScale() > 0.0) || feature.pointGeometry || feature.crossesWorldSeam(projection);
-         double halfWidth = feature.lineGeometry ? feature.lineHalfWidthBlocks(projection) : 0.0;
-         this.lineMaxDistanceSq = halfWidth * halfWidth + 1.0E-6;
-         this.lineRejectBlocks = halfWidth + LINE_REJECT_SLACK_BLOCKS;
-         if (!this.alwaysDry && feature.lineGeometry) {
-            int segmentCount = 0;
-            for (double[] part : feature.longitudes) {
-               segmentCount += Math.max(0, part.length - 1);
-            }
-            this.segmentStartX = new double[segmentCount];
-            this.segmentStartZ = new double[segmentCount];
-            this.segmentEndX = new double[segmentCount];
-            this.segmentEndZ = new double[segmentCount];
-            this.activeSegments = new int[segmentCount];
-            this.crossings = null;
-            double lowX = Double.POSITIVE_INFINITY;
-            double highX = Double.NEGATIVE_INFINITY;
-            double lowZ = Double.POSITIVE_INFINITY;
-            double highZ = Double.NEGATIVE_INFINITY;
-            int cursor = 0;
-            for (int part = 0; part < feature.longitudes.length; part++) {
-               double[] lonPart = feature.longitudes[part];
-               double[] latPart = feature.latitudes[part];
-               for (int point = 1; point < lonPart.length; point++) {
-                  // Same expressions as touchesBlockLine so the projected doubles match bit for bit.
-                  double startX = projection.lonToBlockX(lonPart[point - 1]);
-                  double startZ = projection.latToBlockZ(latPart[point - 1]);
-                  double endX = projection.lonToBlockX(lonPart[point]);
-                  double endZ = projection.latToBlockZ(latPart[point]);
-                  this.segmentStartX[cursor] = startX;
-                  this.segmentStartZ[cursor] = startZ;
-                  this.segmentEndX[cursor] = endX;
-                  this.segmentEndZ[cursor] = endZ;
-                  cursor++;
-                  lowX = Math.min(lowX, Math.min(startX, endX));
-                  highX = Math.max(highX, Math.max(startX, endX));
-                  lowZ = Math.min(lowZ, Math.min(startZ, endZ));
-                  highZ = Math.max(highZ, Math.max(startZ, endZ));
-               }
-            }
-            this.minBlockX = lowX;
-            this.maxBlockX = highX;
-            this.minBlockZ = lowZ;
-            this.maxBlockZ = highZ;
-         } else {
-            this.segmentStartX = null;
-            this.segmentStartZ = null;
-            this.segmentEndX = null;
-            this.segmentEndZ = null;
-            this.activeSegments = null;
-            int edgeCount = 0;
-            for (double[] part : feature.longitudes) {
-               edgeCount += part.length;
-            }
-            this.crossings = this.alwaysDry ? null : new double[edgeCount];
-            this.minBlockX = 0.0;
-            this.maxBlockX = 0.0;
-            this.minBlockZ = 0.0;
-            this.maxBlockZ = 0.0;
-         }
-      }
-
-      /** Selects the row of blocks at {@code blockZ}; must precede {@link #contains}. */
-      public void beginRow(int blockZ) {
-         if (this.alwaysDry) {
-            this.rowDry = true;
-            return;
-         }
-         if (this.feature.lineGeometry) {
-            this.beginLineRow(blockZ);
-         } else {
-            this.beginPolygonRow(blockZ);
-         }
-      }
-
-      /** Equivalent to {@code feature.containsBlock(blockX, rowBlockZ, projection)}. */
-      public boolean contains(int blockX) {
-         if (this.rowDry) {
-            return false;
-         }
-         return this.feature.lineGeometry ? this.lineContains(blockX) : this.polygonContains(blockX);
-      }
-
-      private void beginLineRow(int blockZ) {
-         double queryZ = blockZ;
-         this.rowZ = queryZ;
-         if (queryZ < this.minBlockZ - this.lineRejectBlocks || queryZ > this.maxBlockZ + this.lineRejectBlocks) {
-            this.rowDry = true;
-            return;
-         }
-         int count = 0;
-         for (int segment = 0; segment < this.segmentStartZ.length; segment++) {
-            double startZ = this.segmentStartZ[segment];
-            double endZ = this.segmentEndZ[segment];
-            if (queryZ >= Math.min(startZ, endZ) - this.lineRejectBlocks && queryZ <= Math.max(startZ, endZ) + this.lineRejectBlocks) {
-               this.activeSegments[count++] = segment;
-            }
-         }
-         this.activeCount = count;
-         this.rowDry = count == 0;
-      }
-
-      private boolean lineContains(int blockX) {
-         double queryX = blockX;
-         if (queryX < this.minBlockX - this.lineRejectBlocks || queryX > this.maxBlockX + this.lineRejectBlocks) {
-            return false;
-         }
-         for (int i = 0; i < this.activeCount; i++) {
-            int segment = this.activeSegments[i];
-            double startX = this.segmentStartX[segment];
-            double endX = this.segmentEndX[segment];
-            if (queryX < Math.min(startX, endX) - this.lineRejectBlocks || queryX > Math.max(startX, endX) + this.lineRejectBlocks) {
-               continue;
-            }
-            if (distanceToSegmentSq(
-                  queryX, this.rowZ, startX, this.segmentStartZ[segment], endX, this.segmentEndZ[segment]
-               )
-               <= this.lineMaxDistanceSq) {
-               return true;
-            }
-         }
-         return false;
-      }
-
-      private void beginPolygonRow(int blockZ) {
-         double lat = this.projection.blockZToLat(blockZ);
-         if (lat < this.feature.minLat || lat > this.feature.maxLat) {
-            this.rowDry = true;
-            return;
-         }
-         int count = 0;
-         for (int part = 0; part < this.feature.longitudes.length; part++) {
-            double[] lonPart = this.feature.longitudes[part];
-            double[] latPart = this.feature.latitudes[part];
-            int points = lonPart.length;
-            for (int i = 0, j = points - 1; i < points; j = i++) {
-               double latA = latPart[i];
-               double latB = latPart[j];
-               if ((latA > lat) != (latB > lat)) {
-                  double lonA = lonPart[i];
-                  double lonB = lonPart[j];
-                  // Identical expression to containsLonLat so the crossing doubles match.
-                  this.crossings[count++] = (lonB - lonA) * (lat - latA) / (latB - latA) + lonA;
-               }
-            }
-         }
-         Arrays.sort(this.crossings, 0, count);
-         this.crossingCount = count;
-         this.rowDry = count == 0;
-      }
-
-      private boolean polygonContains(int blockX) {
-         double lon = this.projection.blockXToLon(blockX);
-         if (lon < this.feature.minLon || lon > this.feature.maxLon) {
-            return false;
-         }
-         // containsLonLat toggles once per crossing with lon <= crossLon, so the answer is the
-         // parity of the crossings at or beyond lon.
-         int low = 0;
-         int high = this.crossingCount;
-         while (low < high) {
-            int mid = (low + high) >>> 1;
-            if (this.crossings[mid] < lon) {
-               low = mid + 1;
-            } else {
-               high = mid;
-            }
-         }
-         return ((this.crossingCount - low) & 1) != 0;
-      }
    }
 
    private static double distanceToSegmentSq(double px, double pz, double ax, double az, double bx, double bz) {

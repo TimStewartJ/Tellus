@@ -23,4 +23,18 @@ class LercU8DecoderTest {
          assertTrue(!raster.valid(index) || raster.pixels()[index] == 0);
       }
    }
+
+   @Test
+   void decodesOnInterruptedThreadAndKeepsTheInterrupt() throws Exception {
+      LercU8Decoder decoder = new LercU8Decoder();
+      Thread.currentThread().interrupt();
+      try {
+         // The interpreter would otherwise abandon the call (and its allocator state) mid-decode.
+         assertEquals(256 * 256, decoder.decode(EMPTY_ARCGIS_TILE).pixels().length);
+         assertTrue(Thread.currentThread().isInterrupted(), "the caller's interrupt must survive the decode");
+      } finally {
+         Thread.interrupted();
+      }
+      assertEquals(256, decoder.decode(EMPTY_ARCGIS_TILE).width());
+   }
 }

@@ -218,6 +218,11 @@ class TellusLodGeneratorColumnTest {
 
    private record TestBiomeWrapper(String name) implements IDhApiBiomeWrapper {
       @Override
+      public String getSerialString() {
+         return this.name;
+      }
+
+      @Override
       public Object getWrappedMcObject() {
          return this.name;
       }

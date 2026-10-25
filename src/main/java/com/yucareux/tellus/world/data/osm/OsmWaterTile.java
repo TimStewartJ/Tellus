@@ -27,6 +27,7 @@ public final class OsmWaterTile {
       this.tileWest = tileWest;
       this.tileNorth = tileNorth;
       this.tileEast = tileEast;
+      for (OsmWaterFeature feature : this.features) feature.attachTileBounds(tileSouth, tileWest, tileNorth, tileEast);
       this.bucketFeatureIndices = this.buildSpatialIndex();
    }
 

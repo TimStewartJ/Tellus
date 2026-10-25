@@ -3,23 +3,18 @@ package com.yucareux.tellus.worldgen;
 import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.world.data.osm.OsmWaterFeature;
 import com.yucareux.tellus.world.data.osm.OsmWaterKind;
-import java.util.concurrent.TimeUnit;
-import net.minecraft.SharedConstants;
-import net.minecraft.server.Bootstrap;
-import net.minecraft.world.level.block.LiquidBlock;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class WaterSurfaceResolverTest {
    @Test
    void waterDemSamplesUseTheSameAutomaticLatitudeTransformAsTerrain() {
       EarthGeneratorSettings settings = EarthGeneratorSettings.DEFAULT;
-      double blockZ = settings.projection().latToBlockZ(20.72);
+      double blockZ = WorldProjection.global(settings.worldScale()).latToBlockZ(20.72);
       double elevationMeters = 1_500.0;
       int expected = TerrainHeightTransform.blockOffset(
          elevationMeters,
@@ -243,11 +238,17 @@ class WaterSurfaceResolverTest {
    }
 
    @Test
-   void limitsNaturalizedInlandBanksToOneBlockOfRisePerBlock() {
-      assertEquals(81, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 10, 5, true));
-      assertEquals(82, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 20, 5, true));
-      assertEquals(85, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 50, 5, true));
-      assertEquals(84, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 20, 5, false));
+   void inlandBankRecoversOriginalTerrainWithoutAnOuterCliffRing() {
+      int previous = 80;
+      for (int distance = 0; distance <= 5; distance++) {
+         int limited = WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, distance * 10, 5, true);
+         int unrestricted = WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, distance * 10, 5, false);
+         assertTrue(limited >= previous && limited <= 90);
+         assertTrue(unrestricted >= limited && unrestricted <= 90);
+         previous = limited;
+      }
+      assertEquals(90, previous, "The blend must meet the original terrain at its outer edge");
+      assertEquals(90, WaterSurfaceResolver.naturalizedInlandBankSurface(90, 80, 60, 5, true));
       assertEquals(79, WaterSurfaceResolver.naturalizedInlandBankSurface(79, 80, 10, 5, true));
    }
 
@@ -277,73 +278,12 @@ class WaterSurfaceResolverTest {
    }
 
    @Test
-   void waterfallDropsBecomeBoundedFallingCurtainsWithoutFluidTicks() {
-      assumeFalse(
-         isMinecraftForge(),
-         "Forge's raw JUnit bootstrap cannot initialize vanilla block registries"
-      );
-      SharedConstants.tryDetectVersion();
-      Bootstrap.bootStrap();
-      int[] terrain = new int[256];
-      int[] water = new int[256];
-      byte[] flags = new byte[256];
-      terrain[0] = 80;
-      water[0] = 96;
-      flags[0] = 3;
-      WaterSurfaceResolver.WaterChunkData data =
-         WaterSurfaceResolver.WaterChunkData.fromArrays(
-            terrain, water, flags, false
-         );
+   void schedulesOnlyTheUpstreamSourceForConfirmedWaterfalls() {
+      WaterSurfaceResolver.WaterfallInfo waterfall = new WaterSurfaceResolver.WaterfallInfo(true, 80, 96);
 
-      assertEquals(96, WaterfallCurtain.topY(data, 0, 0, 80, 319));
-      assertEquals(
-         8, WaterfallCurtain.blockState().getValue(LiquidBlock.LEVEL)
-      );
-      assertFalse(WaterfallCurtain.blockState().getFluidState().isSource());
-      assertEquals(WaterfallCurtain.NONE, WaterfallCurtain.topY(data, 1, 0, 80, 319));
-      assertEquals(90, WaterfallCurtain.topY(data, 0, 0, 80, 90));
-      assertEquals(WaterfallCurtain.NONE, WaterfallCurtain.topY(data, 0, 0, 81, 319));
-      int[] curtainTops = WaterfallCurtain.tops(data, terrain, 319);
-      assertEquals(96, curtainTops[0]);
-      assertEquals(WaterfallCurtain.NONE, curtainTops[1]);
-      WaterSurfaceResolver.WaterfallInfo waterfall =
-         new WaterSurfaceResolver.WaterfallInfo(true, 80, 96);
-      for (int y = 81; y <= curtainTops[0]; y++) {
-         assertTrue(WaterfallCurtain.contains(y, waterfall));
-      }
-      assertFalse(WaterfallCurtain.contains(80, waterfall));
-      assertFalse(WaterfallCurtain.contains(97, waterfall));
-   }
-
-   @Test
-   void unresolvedWaterfallRegionsStopDelayingVanillaFlow() {
-      long startedAt = 1_000L;
-
-      assertTrue(
-         WaterSurfaceResolver.waterfallRegionLoadMayRemainPending(
-            startedAt,
-            startedAt + TimeUnit.SECONDS.toNanos(14L)
-         )
-      );
-      assertFalse(
-         WaterSurfaceResolver.waterfallRegionLoadMayRemainPending(
-            startedAt,
-            startedAt + TimeUnit.SECONDS.toNanos(15L)
-         )
-      );
-   }
-
-   private static boolean isMinecraftForge() {
-      try {
-         Class.forName(
-            "net.minecraftforge.fml.ModList",
-            false,
-            WaterSurfaceResolverTest.class.getClassLoader()
-         );
-         return true;
-      } catch (ClassNotFoundException ignored) {
-         return false;
-      }
+      assertTrue(WaterSurfaceResolver.shouldScheduleFlowSource(96, waterfall));
+      assertFalse(WaterSurfaceResolver.shouldScheduleFlowSource(95, waterfall));
+      assertFalse(WaterSurfaceResolver.shouldScheduleFlowSource(96, new WaterSurfaceResolver.WaterfallInfo(false, 80, 96)));
    }
 
    @Test

@@ -9,6 +9,7 @@ import com.dylibso.chicory.wasm.types.FunctionType;
 import com.dylibso.chicory.wasm.types.ValType;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.util.Objects;
 
 /**
@@ -34,6 +35,27 @@ final class LercU8Decoder {
          throw new IOException("Empty LERC payload");
       }
 
+      // The interpreter abandons a call as soon as its thread is interrupted, which can leave the
+      // module's allocator half-updated. A decode takes milliseconds, so it runs to completion and
+      // the caller's interrupt is restored afterwards.
+      boolean interrupted = Thread.interrupted();
+      try {
+         return this.decodeWithInstance(blob);
+      } catch (RuntimeException error) {
+         // A trap, or an interrupt that arrived mid-call, leaves the instance in an unknown state.
+         this.instance = null;
+         if (Thread.currentThread().isInterrupted()) {
+            throw (IOException)new InterruptedIOException("LERC decode interrupted").initCause(error);
+         }
+         throw new IOException("LERC decoder failed", error);
+      } finally {
+         if (interrupted) {
+            Thread.currentThread().interrupt();
+         }
+      }
+   }
+
+   private DecodedRaster decodeWithInstance(byte[] blob) throws IOException {
       Instance wasm = this.instance();
       Memory memory = wasm.memory();
       int infoAllocation = this.malloc(wasm, normalizedLength(blob.length) + normalizedLength(INFO_BYTES) + normalizedLength(RANGE_BYTES));

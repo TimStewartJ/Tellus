@@ -28,6 +28,12 @@ public final class SnowTransitionPolicy {
       SnowTransitionPolicy.SourceSampler sourceSampler,
       long worldSeed
    ) {
+      // Smooth only within mapped snow cover. Nearby snow cannot supply a
+      // missing local source or extend deep snow into other land-cover classes.
+      if (!localSnowSource) {
+         return false;
+      }
+
       double sourceCoverage = sampleSourceCoverage(worldX, worldZ, localSnowSource, sourceSampler, worldSeed);
       if (sourceCoverage <= 0.0 || !SnowSlopePolicy.shouldCover(worldX, worldZ, slopeDegrees)) {
          return false;

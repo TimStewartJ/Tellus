@@ -22,14 +22,24 @@ final class LakeBedProfile {
    }
 
    static int depth(double shoreDistanceBlocks, int worldX, int worldZ) {
-      if (!(shoreDistanceBlocks > SHORE_SHELF_END_BLOCKS)) {
-         return 1;
-      }
-      if (shoreDistanceBlocks <= SHALLOW_SLOPE_END_BLOCKS) {
-         return 3;
-      }
+      return depth(shoreDistanceBlocks, worldX, worldZ, 30.0);
+   }
+
+   /**
+    * How much deeper lake interiors are at a world scale: half again as deep at 1:1 as at 1:30 and beyond, where a
+    * dozen blocks already stand for hundreds of metres of water.
+    */
+   static double interiorFactor(double worldScale) {
+      double scale = Math.max(1.0, worldScale);
+      return 1.0 + 0.6 * Math.max(0.0, Math.min(1.0, 1.0 - Math.log(scale) / Math.log(30.0)));
+   }
+
+   static int depth(double shoreDistanceBlocks, int worldX, int worldZ, double worldScale) {
+      double shelf = 2.5 + InlandWaterProfile.noise(worldX, worldZ, 61, 0x451EB32L) * 1.5;
+      double slope = 0.35 + 0.16 * InlandWaterProfile.noise(worldX, worldZ, 29, 0x65CA72BL);
+      double shelfDepth = 1.0 + Math.max(0.0, shoreDistanceBlocks - shelf) * slope;
       if (shoreDistanceBlocks <= INNER_SHELF_END_BLOCKS) {
-         return 4;
+         return clamp((int)Math.round(shelfDepth), 1, 4);
       }
 
       double progress = smootherstep(
@@ -42,10 +52,12 @@ final class LakeBedProfile {
          PRIMARY_SALT
       );
       double secondary = valueNoise(worldX, worldZ, SECONDARY_NOISE_CELL_BLOCKS, SECONDARY_SALT);
+      double factor = interiorFactor(worldScale);
       double targetDepth = INTERIOR_BASE_DEPTH + primary * 2.25 + secondary * 0.75;
-      targetDepth = clamp(targetDepth, INTERIOR_MIN_DEPTH, INTERIOR_MAX_DEPTH);
-      int depth = (int)Math.round(4.0 + (targetDepth - 4.0) * progress);
-      return clamp(depth, 4, INTERIOR_MAX_DEPTH);
+      targetDepth = clamp(targetDepth, INTERIOR_MIN_DEPTH, INTERIOR_MAX_DEPTH) * factor;
+      double innerDepth = clamp(1.0 + (INNER_SHELF_END_BLOCKS - shelf) * slope, 1.0, 4.0);
+      int depth = (int)Math.round(innerDepth + (targetDepth - innerDepth) * progress);
+      return clamp(depth, 1, (int)Math.ceil(INTERIOR_MAX_DEPTH * factor));
    }
 
    /**
@@ -56,12 +68,16 @@ final class LakeBedProfile {
     * broad terrain slabs immediately below the water surface.
     */
    static int sampledDepth(int shoreDistanceCells, int sampleSpacingBlocks, int worldX, int worldZ) {
+      return sampledDepth(shoreDistanceCells, sampleSpacingBlocks, worldX, worldZ, 30.0);
+   }
+
+   static int sampledDepth(int shoreDistanceCells, int sampleSpacingBlocks, int worldX, int worldZ, double worldScale) {
       int spacing = Math.max(1, sampleSpacingBlocks);
       double shoreDistanceBlocks = shoreDistanceCells < 0
          ? maximumShoreInfluenceBlocks()
          : (shoreDistanceCells + 0.5) * spacing;
       return Math.max(
-         depth(shoreDistanceBlocks, worldX, worldZ),
+         depth(shoreDistanceBlocks, worldX, worldZ, worldScale),
          minimumSampledDepth(spacing)
       );
    }

@@ -314,19 +314,7 @@ public final class TerrainPreloadPackage {
          )
          : this.terrainHeights[nearest];
       int coverClass = Byte.toUnsignedInt(this.coverClasses[nearest]);
-      int visualCoverClass = LandCoverTransition.selectVisualClass(
-         coverClass,
-         Byte.toUnsignedInt(this.coverClasses[index00]),
-         Byte.toUnsignedInt(this.coverClasses[index10]),
-         Byte.toUnsignedInt(this.coverClasses[index01]),
-         Byte.toUnsignedInt(this.coverClasses[index11]),
-         tx,
-         tz,
-         1.0,
-         blockX,
-         blockZ,
-         this.gridStep
-      );
+      int visualCoverClass = this.sampleVisualCoverClass(coverClass, gridX, gridZ, blockX, blockZ);
       byte landMask = this.landMaskClasses[nearest];
       int flags = Byte.toUnsignedInt(this.elevationFlags[nearest]);
       return new TerrainPreloadPackage.Sample(
@@ -354,6 +342,36 @@ public final class TerrainPreloadPackage {
 
    private int index(int x, int z) {
       return z * this.gridWidth + x;
+   }
+
+   /** The streamed sources' visual land cover, read from the preloaded grid with the same warp and blend. */
+   private int sampleVisualCoverClass(int coverClass, double gridX, double gridZ, int blockX, int blockZ) {
+      if (LandCoverTransition.isHardClass(coverClass)) {
+         return coverClass;
+      }
+      double warpedX = gridX + LandCoverTransition.warpPixelsX(blockX, blockZ, this.gridStep, 1.0);
+      double warpedZ = gridZ + LandCoverTransition.warpPixelsZ(blockX, blockZ, this.gridStep, 1.0);
+      int warpedClass = this.coverClassAt((int)Math.round(warpedX), (int)Math.round(warpedZ));
+      int baseClass = LandCoverTransition.isHardClass(warpedClass) ? coverClass : warpedClass;
+      int x0 = (int)Math.floor(warpedX);
+      int z0 = (int)Math.floor(warpedZ);
+      return LandCoverTransition.selectVisualClass(
+         baseClass,
+         this.coverClassAt(x0, z0),
+         this.coverClassAt(x0 + 1, z0),
+         this.coverClassAt(x0, z0 + 1),
+         this.coverClassAt(x0 + 1, z0 + 1),
+         warpedX - x0,
+         warpedZ - z0,
+         1.0,
+         blockX,
+         blockZ,
+         this.gridStep
+      );
+   }
+
+   private int coverClassAt(int gridX, int gridZ) {
+      return Byte.toUnsignedInt(this.coverClasses[this.index(clamp(gridX, 0, this.gridWidth - 1), clamp(gridZ, 0, this.gridDepth - 1))]);
    }
 
    private static int interpolateHeight(int h00, int h10, int h01, int h11, double tx, double tz) {

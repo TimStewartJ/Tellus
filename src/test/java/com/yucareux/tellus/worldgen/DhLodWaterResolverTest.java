@@ -13,26 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DhLodWaterResolverTest {
    @Test
-   void groupsSampleOffsetsByRowForTheScanner() {
-      // Pairs (x, z): z values 3, -1, 3, 0, -1 -> grouped by z, stable within equal z.
-      int[] offsets = {5, 3, 7, -1, 9, 3, 1, 0, 2, -1};
-      int[] order = DhLodWaterResolver.rowGroupedSampleOffsetOrder(offsets);
-      assertEquals(5, order.length);
-      int previousZ = Integer.MIN_VALUE;
-      for (int pair : order) {
-         int z = offsets[pair * 2 + 1];
-         assertTrue(z >= previousZ, "pairs must be ordered by z offset");
-         previousZ = z;
-      }
-      assertEquals(1, order[0]);
-      assertEquals(4, order[1]);
-      assertEquals(3, order[2]);
-      assertEquals(0, order[3]);
-      assertEquals(2, order[4]);
-      assertEquals(0, DhLodWaterResolver.rowGroupedSampleOffsetOrder(new int[0]).length);
-   }
-
-   @Test
    void preservesLandlockedOceanSurfaceBelowGlobalSeaLevel() {
       assertEquals(36, DhLodWaterResolver.resolvedOceanWaterSurface(36, Integer.MIN_VALUE));
       assertEquals(40, DhLodWaterResolver.resolvedOceanWaterSurface(36, 40));
@@ -64,50 +44,6 @@ class DhLodWaterResolverTest {
       assertFalse(
          DhLodWaterResolver.shouldRetryPendingCoverage(
             TellusOsmWaterSource.CoverageStatus.FAILED, OsmQueryMode.NON_BLOCKING
-         )
-      );
-      assertFalse(
-         DhLodWaterResolver.shouldRetryPendingCoverage(
-            TellusOsmWaterSource.CoverageStatus.PENDING,
-            OsmQueryMode.NON_BLOCKING,
-            DhLodWaterResolver.ResolutionMode.COARSE_CACHE_ONLY
-         )
-      );
-      assertTrue(
-         DhLodWaterResolver.shouldRetryPendingCoverage(
-            TellusOsmWaterSource.CoverageStatus.PENDING,
-            OsmQueryMode.NON_BLOCKING,
-            DhLodWaterResolver.ResolutionMode.EXACT
-         )
-      );
-   }
-
-   @Test
-   void coarseWaterDegradesInsteadOfRejectingIncompleteCoverage() {
-      assertFalse(
-         DhLodWaterResolver.shouldRejectIncompleteCoverage(
-            false, DhLodWaterResolver.ResolutionMode.COARSE_CACHE_ONLY
-         )
-      );
-      assertTrue(
-         DhLodWaterResolver.shouldRejectIncompleteCoverage(false, DhLodWaterResolver.ResolutionMode.EXACT)
-      );
-      assertFalse(
-         DhLodWaterResolver.shouldRejectIncompleteCoverage(
-            false, DhLodWaterResolver.ResolutionMode.EXACT, true
-         )
-      );
-      assertFalse(
-         DhLodWaterResolver.shouldRejectIncompleteCoverage(
-            false, DhLodWaterResolver.ResolutionMode.MANAGED_CACHE_ONLY, false
-         )
-      );
-      assertFalse(
-         DhLodWaterResolver.shouldRetryPendingCoverage(
-            TellusOsmWaterSource.CoverageStatus.PENDING,
-            OsmQueryMode.NON_BLOCKING,
-            DhLodWaterResolver.ResolutionMode.EXACT,
-            true
          )
       );
    }
@@ -594,7 +530,7 @@ class DhLodWaterResolverTest {
    }
 
    @Test
-   void approximateFastLodsKeepTheirLegacyConstantDepth() {
+   void fastFallbackLakeBedsStayWithinTheSharedInteriorDepthRange() {
       int[] terrain = new int[]{0};
       int[] water = new int[]{80};
       boolean[] hasWater = new boolean[]{true};
@@ -616,11 +552,13 @@ class DhLodWaterResolverTest {
          false
       );
 
-      assertEquals(60, terrain[0]);
+      int depth = water[0] - terrain[0];
+      assertTrue(depth >= LakeBedProfile.minimumInteriorDepth());
+      assertTrue(depth <= LakeBedProfile.maximumInteriorDepth());
    }
 
    @Test
-   void detailedLakeBedsDoNotChangeFastLodRiverDepths() {
+   void fallbackRiverBedsUseTheShallowSharedProfile() {
       int[] terrain = new int[]{0};
       int[] water = new int[]{80};
       boolean[] hasWater = new boolean[]{true};
@@ -644,7 +582,8 @@ class DhLodWaterResolverTest {
          true
       );
 
-      assertEquals(60, terrain[0]);
-      assertFalse(detailed[0]);
+      int depth = water[0] - terrain[0];
+      assertTrue(depth >= 1 && depth <= 6, "A river must not inherit a twenty-block lake trench");
+      assertTrue(detailed[0], "Later fallback passes must preserve the resolved river bed");
    }
 }

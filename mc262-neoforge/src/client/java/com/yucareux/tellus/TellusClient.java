@@ -14,7 +14,6 @@ import com.yucareux.tellus.platform.TellusClientPlatform;
 import com.yucareux.tellus.world.realtime.SnowGrid;
 import com.yucareux.tellus.world.realtime.TemperatureGrid;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
-import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -26,13 +25,10 @@ import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.network.event.RegisterClientPayloadHandlersEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
-import org.lwjgl.glfw.GLFW;
 
 public final class TellusClient {
    private static final KeyMapping.Category KEY_CATEGORY = new KeyMapping.Category(Tellus.id("controls"));
-   private static final KeyMapping OPEN_MAP_KEY = new KeyMapping(
-      "key.tellus.open_map", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_M, KEY_CATEGORY
-   );
+   private static final KeyMapping OPEN_MAP_KEY = com.yucareux.tellus.client.ClientInputCompat.openMapKey(KEY_CATEGORY);
    private static int managedTerrainViewUpdateTicks;
    private TellusClient() {
    }

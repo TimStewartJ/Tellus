@@ -1,0 +1,25 @@
+// Shared source overrides for both Minecraft 26.3 loaders.
+ext.tellus263Sources = [
+	overriddenSharedMainSources: [
+		'com/yucareux/tellus/compat/MinecraftClockAccess.java',
+		'com/yucareux/tellus/compat/MinecraftRelease.java',
+		'com/yucareux/tellus/compat/MinecraftVersionCompat.java',
+		'com/yucareux/tellus/mixin/HeightRangePlacementMixin.java',
+		'com/yucareux/tellus/worldgen/TellusBiomeSourceBridge.java',
+		'com/yucareux/tellus/worldgen/TellusChunkGeneratorBridge.java',
+		'com/yucareux/tellus/worldgen/UndergroundFeatureClassifier.java',
+		'com/yucareux/tellus/worldgen/WorldgenApi.java',
+		'com/yucareux/tellus/worldgen/caves/TellusCaveCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusConfiguredCarvers.java',
+		'com/yucareux/tellus/worldgen/caves/TellusEmptyBeardifier.java',
+		'com/yucareux/tellus/worldgen/caves/TellusNoiseSettingsAdapter.java',
+		'com/yucareux/tellus/worldgen/caves/TellusRavineCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusVanillaCarverRunner.java',
+		'com/yucareux/tellus/worldgen/caves/VanillaNoiseFieldSampler.java',
+	],
+	overriddenSharedClientSources: [
+		'com/yucareux/tellus/client/ClientInputCompat.java',
+		'com/yucareux/tellus/client/preview/PreviewRenderCompat.java',
+	],
+	overriddenSharedMainResources: ['data/tellus/dimension_type/earth.json', 'data/tellus/dimension_type/earth_dynamic.json'],
+]

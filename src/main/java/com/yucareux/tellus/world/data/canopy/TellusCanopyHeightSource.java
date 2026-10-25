@@ -3,6 +3,7 @@ package com.yucareux.tellus.world.data.canopy;
 import com.yucareux.tellus.compat.MinecraftRelease;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import com.google.common.util.concurrent.Uninterruptibles;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheFiles;
@@ -11,9 +12,11 @@ import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
 import com.yucareux.tellus.platform.TellusPlatform;
 import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
+import com.yucareux.tellus.world.data.source.SourceInterrupts;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import com.yucareux.tellus.worldgen.WorldProjection;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -55,7 +58,10 @@ public final class TellusCanopyHeightSource implements TellusCacheHandle {
    private static final double MIN_LATITUDE = -60.0;
    private static final double MAX_LATITUDE = 84.0;
    private static final int MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-   private static final int MEMORY_TILE_COUNT = intProperty("tellus.canopyHeight.memoryTiles", 64, 4, 1024);
+   // About 130 KB per decoded tile. Distant Horizons prepares and generates dozens of sections at once, each
+   // reading a few tiles; a smaller cache evicts prefetched tiles before they are read, and a re-decode
+   // in the WebAssembly interpreter costs far more than the memory.
+   private static final int MEMORY_TILE_COUNT = intProperty("tellus.canopyHeight.memoryTiles", 256, 4, 1024);
    private static final long DISK_CACHE_BYTES =
       (long)intProperty("tellus.canopyHeight.diskCacheMiB", 256, 16, 4096) * 1024L * 1024L;
    private static final int CONNECT_TIMEOUT_SECONDS = intProperty("tellus.canopyHeight.connectTimeoutSeconds", 10, 1, 120);
@@ -64,9 +70,10 @@ public final class TellusCanopyHeightSource implements TellusCacheHandle {
    private static final int MAX_AREA_TILE_COUNT = intProperty("tellus.canopyHeight.maxAreaTiles", 4096, 64, 65536);
    private static final int DECODER_COUNT = intProperty(
       "tellus.canopyHeight.decodeThreads",
-      Math.min(4, Math.max(1, Runtime.getRuntime().availableProcessors())),
+      // Distant Horizons generates with every core; four interpreters left LOD workers queueing for a decoder.
+      Math.min(8, Math.max(1, Runtime.getRuntime().availableProcessors() / 2)),
       1,
-      8
+      16
    );
    private static final long FAILURE_RETRY_NANOS = TimeUnit.SECONDS.toNanos(30L);
 
@@ -306,30 +313,40 @@ public final class TellusCanopyHeightSource implements TellusCacheHandle {
    }
 
    private RasterTile tile(TileKey key, LookupMode lookupMode) {
-      RasterTile memoryTile = this.cache.getIfPresent(key);
-      if (memoryTile != null || lookupMode == LookupMode.MEMORY_ONLY) {
-         return memoryTile;
-      }
+      for (int attempt = 0; ; attempt++) {
+         RasterTile memoryTile = this.cache.getIfPresent(key);
+         if (memoryTile != null || lookupMode == LookupMode.MEMORY_ONLY) {
+            return memoryTile;
+         }
 
-      Long retryAt = this.failedUntil.getIfPresent(key);
-      if (retryAt != null && System.nanoTime() < retryAt) {
-         return null;
-      }
-
-      try {
-         return this.cache.get(key, () -> this.loadTile(key, lookupMode));
-      } catch (ExecutionException | RuntimeException error) {
-         if (lookupMode != LookupMode.BLOCKING) {
+         Long retryAt = this.failedUntil.getIfPresent(key);
+         if (retryAt != null && System.nanoTime() < retryAt) {
             return null;
          }
-         this.failedUntil.put(key, System.nanoTime() + FAILURE_RETRY_NANOS);
-         Throwable cause = error instanceof ExecutionException && error.getCause() != null ? error.getCause() : error;
-         if (this.serviceFailureLogged.compareAndSet(false, true)) {
-            Tellus.LOGGER.warn("ETH canopy-height tiles are currently unavailable; procedural trees will use biome fallbacks", cause);
-         } else {
-            Tellus.LOGGER.debug("Failed to load ETH canopy tile {}", key, cause);
+
+         try {
+            return this.cache.get(key, () -> this.loadTile(key, lookupMode));
+         } catch (ExecutionException | RuntimeException error) {
+            if (lookupMode != LookupMode.BLOCKING) {
+               return null;
+            }
+            Throwable cause = error.getCause() != null ? error.getCause() : error;
+            if (SourceInterrupts.isInterruption(cause)) {
+               // A cancelled request is not a service failure. Concurrent requests share one load,
+               // so a request that was not cancelled itself loads the tile again.
+               if (attempt == 0 && !Thread.currentThread().isInterrupted()) {
+                  continue;
+               }
+               return null;
+            }
+            this.failedUntil.put(key, System.nanoTime() + FAILURE_RETRY_NANOS);
+            if (this.serviceFailureLogged.compareAndSet(false, true)) {
+               Tellus.LOGGER.warn("ETH canopy-height tiles are currently unavailable; procedural trees will use biome fallbacks", cause);
+            } else {
+               Tellus.LOGGER.debug("Failed to load ETH canopy tile {}", key, cause);
+            }
+            return null;
          }
-         return null;
       }
    }
 
@@ -339,11 +356,14 @@ public final class TellusCanopyHeightSource implements TellusCacheHandle {
          try {
             long cachedSize = Files.size(cachePath);
             if (cachedSize > 0L && cachedSize <= MAX_RESPONSE_BYTES) {
-               byte[] bytes = Files.readAllBytes(cachePath);
+               byte[] bytes = readCachedTile(cachePath);
                return RasterTile.from(this.decode(bytes));
             }
             throw new IOException("Unexpected cached ETH canopy tile size " + cachedSize);
          } catch (IOException | RuntimeException error) {
+            if (SourceInterrupts.isInterruption(error)) {
+               throw error;
+            }
             Tellus.LOGGER.debug("Discarding invalid cached ETH canopy tile {}", cachePath, error);
             Files.deleteIfExists(cachePath);
          }
@@ -364,18 +384,25 @@ public final class TellusCanopyHeightSource implements TellusCacheHandle {
    }
 
    private LercU8Decoder.DecodedRaster decode(byte[] bytes) throws IOException {
-      LercU8Decoder decoder;
-      try {
-         decoder = this.decoders.take();
-      } catch (InterruptedException error) {
-         Thread.currentThread().interrupt();
-         throw new IOException("Interrupted while waiting for an ETH canopy-height decoder", error);
-      }
-
+      // Decodes take milliseconds, so waiting for a decoder is not a cancellation point: a tile
+      // loaded for several requests completes even if the loading request is cancelled.
+      LercU8Decoder decoder = Uninterruptibles.takeUninterruptibly(this.decoders);
       try {
          return decoder.decode(bytes);
       } finally {
          this.decoders.offer(decoder);
+      }
+   }
+
+   private static byte[] readCachedTile(Path path) throws IOException {
+      // An interrupt closes the file channel mid-read; a small local read finishes first instead.
+      boolean interrupted = Thread.interrupted();
+      try {
+         return Files.readAllBytes(path);
+      } finally {
+         if (interrupted) {
+            Thread.currentThread().interrupt();
+         }
       }
    }
 
@@ -401,7 +428,7 @@ public final class TellusCanopyHeightSource implements TellusCacheHandle {
             return body;
          } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while downloading ETH canopy tile", error);
+            throw (IOException)new InterruptedIOException("Interrupted while downloading ETH canopy tile").initCause(error);
          } catch (IOException error) {
             lastError = error;
          }

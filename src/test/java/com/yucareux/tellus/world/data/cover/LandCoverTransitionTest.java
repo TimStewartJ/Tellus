@@ -17,27 +17,66 @@ class LandCoverTransitionTest {
    }
 
    @Test
-   void keepsProtectedCenterClassesOutOfVisualTransitions() {
+   void keepsSemanticHardClassesOutOfVisualDithering() {
       assertEquals(80, select(80, 10, 10, 10, 10, 0.5, 0.5, 12, 8));
-      assertEquals(0, select(0, 10, 60, 30, 40, 0.5, 0.5, 12, 8));
+      assertEquals(10, select(10, 10, 80, 10, 80, 0.5, 0.5, 12, 8));
       assertEquals(95, select(95, 10, 60, 30, 40, 0.5, 0.5, 12, 8));
+      assertEquals(0, select(0, 10, 60, 30, 40, 0.5, 0.5, 12, 8));
    }
 
    @Test
-   void excludesProtectedNeighborsWithoutDisablingTerrestrialTransitions() {
-      Set<Integer> selectedClasses = new HashSet<>();
-      for (int z = -64; z <= 64; z++) {
-         for (int x = -64; x <= 64; x++) {
-            selectedClasses.add(select(10, 10, 80, 60, 80, 0.5, 0.5, x, z));
+   void hardNeighboursLendTheirWeightToTheCenterInsteadOfStoppingTheBlend() {
+      // A meadow beside a lake still blends with the forest on its other side.
+      Set<Integer> selected = new HashSet<>();
+      for (int z = 0; z < 64; z++) {
+         for (int x = 0; x < 64; x++) {
+            selected.add(select(30, 30, 10, 80, 10, 0.5, 0.5, x, z));
          }
       }
-      assertEquals(Set.of(10, 60), selectedClasses);
+      assertEquals(Set.of(10, 30), selected);
    }
 
    @Test
-   void transitionsBuiltUpAndTreeCoverAsVisualSurfaceClasses() {
-      assertEquals(30, select(50, 30, 30, 30, 30, 0.5, 0.5, 12, 8));
-      assertEquals(60, select(10, 60, 60, 60, 60, 0.5, 0.5, 12, 8));
+   void townsBlendIntoTheSurroundingCountry() {
+      Set<Integer> selected = new HashSet<>();
+      for (int z = 0; z < 64; z++) {
+         for (int x = 0; x < 64; x++) {
+            selected.add(select(50, 50, 10, 50, 10, 0.5, 0.5, x, z));
+            selected.add(select(10, 50, 10, 50, 10, 0.5, 0.5, x, z));
+         }
+      }
+      assertEquals(Set.of(10, 50), selected, "built-up land must take part in the blend");
+   }
+
+   @Test
+   void warpBendsBordersByAboutAPixelAndIsStable() {
+      double maxOffset = 0.0;
+      double sum = 0.0;
+      int samples = 0;
+      for (int z = -400; z <= 400; z += 7) {
+         for (int x = -400; x <= 400; x += 7) {
+            double dx = LandCoverTransition.warpPixelsX(x, z, 10.0, 1.0);
+            double dz = LandCoverTransition.warpPixelsZ(x, z, 10.0, 1.0);
+            assertEquals(dx, LandCoverTransition.warpPixelsX(x, z, 10.0, 1.0));
+            maxOffset = Math.max(maxOffset, Math.max(Math.abs(dx), Math.abs(dz)));
+            sum += Math.abs(dx) + Math.abs(dz);
+            samples += 2;
+         }
+      }
+      assertTrue(maxOffset <= 1.6, "warp stays within about a pixel and a half: " + maxOffset);
+      assertTrue(sum / samples > 0.2, "warp must actually move borders: " + sum / samples);
+      assertEquals(0.0, LandCoverTransition.warpPixelsX(12, 34, 10.0, 0.0));
+   }
+
+   @Test
+   void neighbouringPixelCellsKeepOneClassOrder() {
+      // The same corner weights must pick the same class whichever corner holds it, or a straight
+      // seam appears along every pixel-centre line.
+      for (int z = 0; z < 32; z++) {
+         for (int x = 0; x < 32; x++) {
+            assertEquals(select(10, 10, 60, 10, 60, 0.5, 0.5, x, z), select(10, 60, 10, 60, 10, 0.5, 0.5, x, z));
+         }
+      }
    }
 
    @Test

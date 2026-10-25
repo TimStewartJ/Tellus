@@ -11,7 +11,9 @@ import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.world.data.pmtiles.PmTilesSafety;
 import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
+import com.yucareux.tellus.world.data.source.SourceInterrupts;
 import com.yucareux.tellus.worldgen.WorldProjection;
+import com.yucareux.tellus.worldgen.landmark.LandmarkCatalog;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.Feature;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.GeomType;
@@ -123,7 +125,8 @@ public final class TellusOsmBuildingSource implements TellusCacheHandle {
                   }
                }
 
-               return new BuildingQueryResult(features, hadCacheMiss);
+               // A landmark model stands in for these buildings everywhere: chunks, LODs, previews, structure checks.
+               return new BuildingQueryResult(LandmarkCatalog.withoutSuppressedBuildings(features), hadCacheMiss);
             }
          }
       } else {
@@ -292,6 +295,7 @@ public final class TellusOsmBuildingSource implements TellusCacheHandle {
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_BUILDINGS, OsmPerf.TileLoadPath.PARSED_DISK);
                return parsed;
             } catch (RuntimeException | IOException error) {
+               SourceInterrupts.throwIfInterruption(error);
                Tellus.LOGGER.debug("Invalid parsed Overture building cache tile {}, refetching", key, error);
 
                try {
@@ -311,6 +315,7 @@ public final class TellusOsmBuildingSource implements TellusCacheHandle {
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_BUILDINGS, OsmPerf.TileLoadPath.RAW_DISK);
                return parsed;
             } catch (RuntimeException | IOException error) {
+               SourceInterrupts.throwIfInterruption(error);
                Tellus.LOGGER.debug("Invalid Overture building cache tile {}, refetching", key, error);
 
                try {

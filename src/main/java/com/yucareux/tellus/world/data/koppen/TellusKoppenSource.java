@@ -2,14 +2,13 @@ package com.yucareux.tellus.world.data.koppen;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
-import com.yucareux.tellus.cache.LastValueMemo;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.Tellus;
-import com.yucareux.tellus.world.data.CategoricalTransition;
 import com.yucareux.tellus.worldgen.WorldProjection;
+import com.yucareux.tellus.worldgen.SurfacePatchNoise;
 import java.io.ByteArrayInputStream;
 import java.io.EOFException;
 import java.io.IOException;
@@ -38,21 +37,24 @@ public final class TellusKoppenSource implements TellusCacheHandle {
    private static final int SMOOTH_RADIUS_PIXELS = 2;
    private static final double WARP_AMPLITUDE_METERS = 800.0;
    private static final double WARP_WAVELENGTH_METERS = 12000.0;
+   /** The raster's 30" pixel, about 926 m: a fixed size keeps the warp independent of the loaded raster. */
+   private static final double PIXEL_WARP_REFERENCE_METERS = 926.0;
+   private static final double PIXEL_WARP_WAVELENGTH_PIXELS = 1.5;
+   private static final double PIXEL_WARP_AMPLITUDE_PIXELS = 0.45;
+   private static final long PIXEL_WARP_SALT = 0x7E3A15C9B42D86F1L;
+   private static final long DITHER_SEED = 5883890050026909207L;
    private static final long WARP_SEED_X = 2611923443488327891L;
    private static final long WARP_SEED_Z = 1376283091369227076L;
    private static final String[] KOPPEN_CODES = new String[31];
-   private static final CategoricalTransition.NoiseProfile TRANSITION_PROFILE = new CategoricalTransition.NoiseProfile(
-      0.1,
-      8.0,
-      128.0,
-      0.47,
-      0.82,
-      0.18,
-      1.25,
-      0.02,
-      5883890050026909207L,
-      -3447218538618069729L,
-      7066193155524758245L
+   /** Tundra: warmest month below 10 °C. */
+   public static final int CLASS_ET = 29;
+   /** Ice cap: warmest month below 0 °C. */
+   public static final int CLASS_EF = 30;
+   private static final ThreadLocal<TellusKoppenSource.KoppenBlendScratch> DITHER_SCRATCH = ThreadLocal.withInitial(
+      TellusKoppenSource.KoppenBlendScratch::new
+   );
+   private static final ThreadLocal<TellusKoppenSource.SmoothedValueCache> SMOOTHED_CACHE = ThreadLocal.withInitial(
+      TellusKoppenSource.SmoothedValueCache::new
    );
    private final Path cachePath = TellusPlatform.gameDir().resolve("tellus/cache/koppen/koppen_geiger_0p00833333.tif");
    private volatile TellusKoppenSource.GeoTiffRaster raster;
@@ -68,12 +70,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       if (center == null) {
          return null;
       } else {
-         double sourceCellBlocks = raster.pixelSizeMeters() / Math.max(
-            projection.worldScale(), Double.MIN_NORMAL
-         );
-         return raster == TellusKoppenSource.GeoTiffRaster.MISSING
-            ? null
-            : raster.sampleDithered(center, blockX, blockZ, sourceCellBlocks);
+         return raster == TellusKoppenSource.GeoTiffRaster.MISSING ? null : raster.sampleDithered(center, blockX, blockZ);
       }
    }
 
@@ -97,6 +94,23 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
    }
 
+   /**
+    * The regional climate: {@link #sampleSmoothedCode} without its 1 km staircase. The mode-filtered
+    * classes of the surrounding pixels are dithered like {@link #sampleDitheredCode}, so a coherent
+    * arid region ends in the same organic kind of border as the climate itself.
+    */
+   public String sampleCoherentCode(double blockX, double blockZ, WorldProjection projection) {
+      TellusKoppenSource.GeoTiffRaster raster = this.raster();
+      TellusKoppenSource.PixelSample center = this.toPixelSample(blockX, blockZ, projection);
+      if (center == null) {
+         return null;
+      } else {
+         return raster == TellusKoppenSource.GeoTiffRaster.MISSING
+            ? null
+            : raster.sampleSmoothedDithered(center, blockX, blockZ, SMOOTH_RADIUS_PIXELS);
+      }
+   }
+
    public String findNearestCode(double blockX, double blockZ, WorldProjection projection) {
       TellusKoppenSource.GeoTiffRaster raster = this.raster();
       TellusKoppenSource.Pixel center = this.toPixel(blockX, blockZ, projection);
@@ -108,6 +122,27 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          int radius = raster.radiusForMeters(SEARCH_RADIUS_METERS);
          return raster.findNearest(center, radius);
       }
+   }
+
+   /** Raster geometry for scans over raw pixels, or null while the raster is unavailable. */
+   public TellusKoppenSource.PixelGrid pixelGrid() {
+      TellusKoppenSource.GeoTiffRaster raster = this.raster();
+      return raster == TellusKoppenSource.GeoTiffRaster.MISSING
+         ? null
+         : new TellusKoppenSource.PixelGrid(raster.tieLon, raster.tieLat, raster.pixelScaleX, raster.pixelScaleY, raster.width, raster.height);
+   }
+
+   /** Class index of one raw pixel ({@link #CLASS_ET}, {@link #CLASS_EF}, ...), or 0 outside the data. */
+   public int classIndexAtPixel(int pixelX, int pixelY) {
+      return this.raster().sampleValue(pixelX, pixelY);
+   }
+
+   /**
+    * Copies a window of raw class indices into {@code out}, row by row and {@code width} wide,
+    * with 0 outside the data. Reads each raster tile once, for scans over many pixels.
+    */
+   public void readClassWindow(int pixelX, int pixelY, int width, int height, byte[] out) {
+      this.raster().readWindow(pixelX, pixelY, width, height, out);
    }
 
    private TellusKoppenSource.Pixel toPixel(double blockX, double blockZ, WorldProjection projection) {
@@ -166,6 +201,15 @@ public final class TellusKoppenSource implements TellusCacheHandle {
                double nz = blockZ / wavelengthBlocks;
                double offsetX = valueNoise(nx, nz, WARP_SEED_X) * amplitudeBlocks;
                double offsetZ = valueNoise(nx + 37.0, nz - 59.0, WARP_SEED_Z) * amplitudeBlocks;
+               // The broad warp bends borders over kilometres but leaves each 1 km raster step;
+               // a pixel-scale octave turns the steps themselves into irregular wiggles.
+               double pixelBlocks = PIXEL_WARP_REFERENCE_METERS / worldScale;
+               if (pixelBlocks > 2.0) {
+                  double detailBlocks = pixelBlocks * PIXEL_WARP_WAVELENGTH_PIXELS;
+                  double detailAmplitude = pixelBlocks * PIXEL_WARP_AMPLITUDE_PIXELS;
+                  offsetX += valueNoise(blockX / detailBlocks - 13.0, blockZ / detailBlocks + 71.0, WARP_SEED_X ^ PIXEL_WARP_SALT) * detailAmplitude;
+                  offsetZ += valueNoise(blockX / detailBlocks + 89.0, blockZ / detailBlocks - 5.0, WARP_SEED_Z ^ PIXEL_WARP_SALT) * detailAmplitude;
+               }
                return new TellusKoppenSource.WarpedCoords(blockX + offsetX, blockZ + offsetZ);
             }
          }
@@ -203,40 +247,6 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       long z = (value ^ value >>> 33) * -49064778989728563L;
       z = (z ^ z >>> 33) * -4265267296055464877L;
       return z ^ z >>> 33;
-   }
-
-   static int selectTransitionValue(
-      int centerValue,
-      int value00,
-      int value10,
-      int value01,
-      int value11,
-      double fractionX,
-      double fractionY,
-      double blockX,
-      double blockZ,
-      double sourceCellBlocks
-   ) {
-      return CategoricalTransition.selectBilinear(
-         centerValue,
-         value00,
-         value10,
-         value01,
-         value11,
-         fractionX,
-         fractionY,
-         1.0,
-         blockX,
-         blockZ,
-         sourceCellBlocks,
-         1,
-         KOPPEN_CODES.length - 1,
-         TRANSITION_PROFILE
-      );
-   }
-
-   static double transitionPatchBlocks(double sourceCellBlocks) {
-      return TRANSITION_PROFILE.patchBlocks(sourceCellBlocks);
    }
 
    private TellusKoppenSource.GeoTiffRaster loadRaster() {
@@ -355,12 +365,17 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       private static final int COMPRESSION_LZW = 5;
       private static final int COMPRESSION_DEFLATE = 8;
       private static final int MAX_TILE_CACHE = 64;
+      private static final int RECENT_TILE_BITS = 4;
+      private static final int RECENT_TILES = 1 << RECENT_TILE_BITS;
       private static final int MAX_RASTER_DIMENSION = 100_000;
       private static final int MAX_TILE_DIMENSION = 4096;
       private static final int MAX_TILE_SAMPLES = 16 * 1024 * 1024;
       private static final int MAX_TIFF_ARRAY_ENTRIES = 100_000;
       private static final int MAX_COMPRESSED_TILE_BYTES = 64 * 1024 * 1024;
+      private static final java.util.concurrent.atomic.AtomicInteger NEXT_CACHE_ID = new java.util.concurrent.atomic.AtomicInteger();
       private static final TellusKoppenSource.GeoTiffRaster MISSING = new TellusKoppenSource.GeoTiffRaster();
+      /** Identifies this raster in per-thread caches without keeping a closed raster reachable. */
+      private final int cacheId = NEXT_CACHE_ID.incrementAndGet();
       private final Path path;
       private final FileChannel channel;
       private final int width;
@@ -377,8 +392,11 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       private final double tieLat;
       private final double pixelSizeMeters;
       private final Cache<Integer, byte[]> tileCache;
-      private final LastValueMemo<Integer, byte[]> tileMemo = new LastValueMemo<>();
-      private final ThreadLocal<TransitionCell> transitionCell = ThreadLocal.withInitial(TransitionCell::new);
+      // Tiles read recently, without the bounded cache's locks and access-order bookkeeping: every LOD
+      // column reads the climate here, and that bookkeeping cost more than the reads.
+      private final java.util.concurrent.atomic.AtomicReferenceArray<TellusKoppenSource.RecentTile> recentTiles =
+         new java.util.concurrent.atomic.AtomicReferenceArray<>(RECENT_TILES);
+      private volatile boolean closed;
 
       private GeoTiffRaster() {
          this.path = null;
@@ -448,7 +466,10 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
       void close() {
          if (this.channel != null) {
-            this.tileMemo.invalidateAll();
+            this.closed = true;
+            for (int slot = 0; slot < RECENT_TILES; slot++) {
+               this.recentTiles.set(slot, null);
+            }
             this.tileCache.invalidateAll();
             this.tileCache.cleanUp();
 
@@ -480,78 +501,122 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
       String sampleSmoothed(TellusKoppenSource.Pixel center, int radius) {
          if (center != null && radius > 0) {
-            int[] counts = new int[TellusKoppenSource.KOPPEN_CODES.length];
-            int centerValue = this.sampleValue(center.x, center.y);
-
-            for (int dy = -radius; dy <= radius; dy++) {
-               for (int dx = -radius; dx <= radius; dx++) {
-                  if (dx * dx + dy * dy <= radius * radius) {
-                     int value = this.sampleValue(center.x + dx, center.y + dy);
-                     if (value > 0 && value < counts.length) {
-                        counts[value]++;
-                     }
-                  }
-               }
-            }
-
-            int bestIndex = -1;
-            int bestCount = -1;
-
-            for (int i = 1; i < counts.length; i++) {
-               int count = counts[i];
-               if (count > bestCount) {
-                  bestCount = count;
-                  bestIndex = i;
-               } else if (count == bestCount && count > 0 && i == centerValue) {
-                  bestIndex = i;
-               }
-            }
-
+            int bestIndex = this.smoothedValue(center.x, center.y, radius);
             return bestIndex <= 0 ? null : TellusKoppenSource.KOPPEN_CODES[bestIndex];
          } else {
             return this.sample(center);
          }
       }
 
-      String sampleDithered(
-         TellusKoppenSource.PixelSample center, double blockX, double blockZ, double sourceCellBlocks
-      ) {
+      /** The most common class within {@code radius} pixels, ties going to the pixel's own class; 0 if none. */
+      private int smoothedValue(int pixelX, int pixelY, int radius) {
+         TellusKoppenSource.SmoothedValueCache cache = SMOOTHED_CACHE.get();
+         int cached = cache.get(this, pixelX, pixelY, radius);
+         if (cached >= 0) {
+            return cached;
+         }
+
+         int side = 2 * radius + 1;
+         byte[] window = cache.window(side * side);
+         this.readWindow(pixelX - radius, pixelY - radius, side, side, window);
+         int value = modeInWindow(window, side, radius, radius, radius, cache.counts);
+         cache.put(this, pixelX, pixelY, radius, value);
+         return value;
+      }
+
+      /** Mode of the disk of {@code radius} around ({@code cx}, {@code cy}) in a window {@code side} pixels wide. */
+      private static int modeInWindow(byte[] window, int side, int cx, int cy, int radius, int[] counts) {
+         java.util.Arrays.fill(counts, 0);
+         int centerValue = Byte.toUnsignedInt(window[cy * side + cx]);
+         for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+               if (dx * dx + dy * dy <= radius * radius) {
+                  int value = Byte.toUnsignedInt(window[(cy + dy) * side + cx + dx]);
+                  if (value > 0 && value < counts.length) {
+                     counts[value]++;
+                  }
+               }
+            }
+         }
+
+         int bestIndex = 0;
+         int bestCount = 0;
+         for (int i = 1; i < counts.length; i++) {
+            int count = counts[i];
+            if (count > bestCount) {
+               bestCount = count;
+               bestIndex = i;
+            } else if (count == bestCount && count > 0 && i == centerValue) {
+               bestIndex = i;
+            }
+         }
+         return bestIndex;
+      }
+
+      /**
+       * The mode-filtered class of the four pixels around the point, picked by the clustered
+       * dither {@link #sampleDithered} uses, so a smoothed climate region ends in an organic border.
+       * The four disks are read from one window, usually a single tile access.
+       */
+      String sampleSmoothedDithered(TellusKoppenSource.PixelSample center, double blockX, double blockZ, int radius) {
+         if (center == null) {
+            return null;
+         }
+         double blendX = center.x + center.fracX - 0.5;
+         double blendY = center.y + center.fracY - 0.5;
+         int x0 = Mth.floor(blendX);
+         int y0 = Mth.floor(blendY);
+         double fx = blendX - x0;
+         double fy = blendY - y0;
+         TellusKoppenSource.SmoothedValueCache cache = SMOOTHED_CACHE.get();
+         int side = 2 * radius + 2;
+         byte[] window = cache.window(side * side);
+         this.readWindow(x0 - radius, y0 - radius, side, side, window);
+         int value00 = modeInWindow(window, side, radius, radius, radius, cache.counts);
+         int value10 = modeInWindow(window, side, radius + 1, radius, radius, cache.counts);
+         int value01 = modeInWindow(window, side, radius, radius + 1, radius, cache.counts);
+         int value11 = modeInWindow(window, side, radius + 1, radius + 1, radius, cache.counts);
+         int centerValue = center.x == x0 ? (center.y == y0 ? value00 : value01) : (center.y == y0 ? value10 : value11);
+         if (centerValue <= 0 || centerValue >= TellusKoppenSource.KOPPEN_CODES.length) {
+            return null;
+         }
+         TellusKoppenSource.KoppenBlendScratch scratch = DITHER_SCRATCH.get();
+         scratch.reset();
+         scratch.add(value00, (1.0 - fx) * (1.0 - fy));
+         scratch.add(value10, fx * (1.0 - fy));
+         scratch.add(value01, (1.0 - fx) * fy);
+         scratch.add(value11, fx * fy);
+         double threshold = SurfacePatchNoise.uniform(Mth.floor(blockX), Mth.floor(blockZ), DITHER_SEED);
+         int selectedValue = scratch.pickWeighted(centerValue, threshold);
+         return selectedValue > 0 && selectedValue < TellusKoppenSource.KOPPEN_CODES.length ? TellusKoppenSource.KOPPEN_CODES[selectedValue] : null;
+      }
+
+      String sampleDithered(TellusKoppenSource.PixelSample center, double blockX, double blockZ) {
          if (center == null) {
             return null;
          } else {
-            double blendX = center.x + center.fracX - 0.5;
-            double blendY = center.y + center.fracY - 0.5;
-            int x0 = Mth.floor(blendX);
-            int y0 = Mth.floor(blendY);
-            int x1 = x0 + 1;
-            int y1 = y0 + 1;
-            TransitionCell cell = this.transitionCell.get();
-            if (!cell.matches(x0, y0)) {
-               cell.update(
-                  x0,
-                  y0,
-                  this.sampleValue(x0, y0),
-                  this.sampleValue(x1, y0),
-                  this.sampleValue(x0, y1),
-                  this.sampleValue(x1, y1)
-               );
-            }
-            int centerValue = cell.value(center.x == x0, center.y == y0);
+            int centerValue = this.sampleValue(center.x, center.y);
             if (centerValue > 0 && centerValue < TellusKoppenSource.KOPPEN_CODES.length) {
+               double blendX = center.x + center.fracX - 0.5;
+               double blendY = center.y + center.fracY - 0.5;
+               int x0 = Mth.floor(blendX);
+               int y0 = Mth.floor(blendY);
+               int x1 = x0 + 1;
+               int y1 = y0 + 1;
                double fx = blendX - x0;
                double fy = blendY - y0;
-               int selectedValue = selectTransitionValue(
-                  centerValue,
-                  cell.value00,
-                  cell.value10,
-                  cell.value01,
-                  cell.value11,
-                  fx,
-                  fy,
-                  blockX,
-                  blockZ,
-                  sourceCellBlocks
-               );
+               double inverseFx = 1.0 - fx;
+               double inverseFy = 1.0 - fy;
+               TellusKoppenSource.KoppenBlendScratch scratch = DITHER_SCRATCH.get();
+               scratch.reset();
+               scratch.add(this.sampleValue(x0, y0), inverseFx * inverseFy);
+               scratch.add(this.sampleValue(x1, y0), fx * inverseFy);
+               scratch.add(this.sampleValue(x0, y1), inverseFx * fy);
+               scratch.add(this.sampleValue(x1, y1), fx * fy);
+               // Clustered rather than per-cell random, so a climate border becomes
+               // an irregular edge with outlying groves instead of 4x4 confetti.
+               double threshold = SurfacePatchNoise.uniform(Mth.floor(blockX), Mth.floor(blockZ), DITHER_SEED);
+               int selectedValue = scratch.pickWeighted(centerValue, threshold);
                return selectedValue > 0 && selectedValue < TellusKoppenSource.KOPPEN_CODES.length ? TellusKoppenSource.KOPPEN_CODES[selectedValue] : null;
             } else {
                return null;
@@ -630,14 +695,60 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          }
       }
 
+      void readWindow(int windowX, int windowY, int windowWidth, int windowHeight, byte[] out) {
+         java.util.Arrays.fill(out, 0, windowWidth * windowHeight, (byte)0);
+         int fromX = Math.max(0, windowX);
+         int toX = Math.min(this.width, windowX + windowWidth);
+         int fromY = Math.max(0, windowY);
+         int toY = Math.min(this.height, windowY + windowHeight);
+         if (this == MISSING || fromX >= toX || fromY >= toY) {
+            return;
+         }
+
+         for (int tileY = fromY / this.tileHeight; tileY <= (toY - 1) / this.tileHeight; tileY++) {
+            for (int tileX = fromX / this.tileWidth; tileX <= (toX - 1) / this.tileWidth; tileX++) {
+               byte[] tile;
+               try {
+                  tile = this.getTile(tileY * this.tilesPerRow + tileX);
+               } catch (IOException error) {
+                  if (error instanceof ClosedByInterruptException || Thread.currentThread().isInterrupted()) {
+                     Thread.currentThread().interrupt();
+                     return;
+                  }
+
+                  Tellus.LOGGER.warn("Failed to read Koppen tile {} in {}", tileY * this.tilesPerRow + tileX, this.path, error);
+                  continue;
+               }
+
+               int startX = Math.max(fromX, tileX * this.tileWidth);
+               int endX = Math.min(toX, (tileX + 1) * this.tileWidth);
+               int startY = Math.max(fromY, tileY * this.tileHeight);
+               int endY = Math.min(toY, (tileY + 1) * this.tileHeight);
+               for (int y = startY; y < endY; y++) {
+                  System.arraycopy(
+                     tile,
+                     (startX - tileX * this.tileWidth) + (y - tileY * this.tileHeight) * this.tileWidth,
+                     out,
+                     (y - windowY) * windowWidth + (startX - windowX),
+                     endX - startX
+                  );
+               }
+            }
+         }
+      }
+
       private byte[] getTile(int tileIndex) throws IOException {
-         Integer key = tileIndex;
-         byte[] memoized = this.tileMemo.get(key);
-         if (memoized != null) {
-            return memoized;
+         int slot = (tileIndex * 0x9E3779B9) >>> (32 - RECENT_TILE_BITS);
+         TellusKoppenSource.RecentTile recent = this.recentTiles.get(slot);
+         if (recent != null && recent.index() == tileIndex) {
+            return recent.data();
          }
          try {
-            return this.tileMemo.put(key, this.tileCache.get(key, () -> this.readTile(tileIndex)));
+            byte[] tile = this.tileCache.get(tileIndex, () -> this.readTile(tileIndex));
+            if (!this.closed) {
+               this.recentTiles.set(slot, new TellusKoppenSource.RecentTile(tileIndex, tile));
+            }
+            return tile;
          } catch (ExecutionException error) {
             Throwable cause = error.getCause();
             if (cause instanceof IOException io) {
@@ -1073,35 +1184,134 @@ public final class TellusKoppenSource implements TellusCacheHandle {
             }
          }
       }
+   }
 
-      private static final class TransitionCell {
-         private int x0 = Integer.MIN_VALUE;
-         private int y0 = Integer.MIN_VALUE;
-         private int value00;
-         private int value10;
-         private int value01;
-         private int value11;
+   /** Recent mode-filtered pixels per thread: neighbouring columns share the same few Köppen pixels. */
+   private static final class SmoothedValueCache {
+      private static final int SIZE = 64;
+      private final int[] rasters = new int[SIZE];
+      private final long[] keys = new long[SIZE];
+      private final int[] radii = new int[SIZE];
+      private final int[] values = new int[SIZE];
+      private final int[] counts = new int[TellusKoppenSource.KOPPEN_CODES.length];
+      private byte[] window = new byte[0];
 
-         private boolean matches(int x0, int y0) {
-            return this.x0 == x0 && this.y0 == y0;
+      private byte[] window(int length) {
+         if (this.window.length < length) {
+            this.window = new byte[length];
+         }
+         return this.window;
+      }
+
+      private int get(TellusKoppenSource.GeoTiffRaster raster, int pixelX, int pixelY, int radius) {
+         long key = key(pixelX, pixelY);
+         int slot = slot(key);
+         return this.rasters[slot] == raster.cacheId && this.keys[slot] == key && this.radii[slot] == radius ? this.values[slot] : -1;
+      }
+
+      private void put(TellusKoppenSource.GeoTiffRaster raster, int pixelX, int pixelY, int radius, int value) {
+         long key = key(pixelX, pixelY);
+         int slot = slot(key);
+         this.rasters[slot] = raster.cacheId;
+         this.keys[slot] = key;
+         this.radii[slot] = radius;
+         this.values[slot] = value;
+      }
+
+      private static long key(int pixelX, int pixelY) {
+         return (long)pixelX << 32 | pixelY & 0xFFFFFFFFL;
+      }
+
+      private static int slot(long key) {
+         long mixed = key * -7046029254386353131L;
+         return (int)(mixed >>> 58);
+      }
+   }
+
+   private static final class KoppenBlendScratch {
+      private final double[] weights = new double[TellusKoppenSource.KOPPEN_CODES.length];
+      private final int[] used = new int[TellusKoppenSource.KOPPEN_CODES.length];
+      private int usedCount;
+
+      private void reset() {
+         for (int i = 0; i < this.usedCount; i++) {
+            this.weights[this.used[i]] = 0.0;
          }
 
-         private void update(
-            int x0, int y0, int value00, int value10, int value01, int value11
-         ) {
-            this.x0 = x0;
-            this.y0 = y0;
-            this.value00 = value00;
-            this.value10 = value10;
-            this.value01 = value01;
-            this.value11 = value11;
-         }
+         this.usedCount = 0;
+      }
 
-         private int value(boolean west, boolean north) {
-            return north
-               ? (west ? this.value00 : this.value10)
-               : (west ? this.value01 : this.value11);
+      private void add(int value, double weight) {
+         if (value > 0 && value < this.weights.length && weight > 0.0) {
+            if (!(this.weights[value] > 0.0)) {
+               this.used[this.usedCount++] = value;
+            }
+
+            this.weights[value] += weight;
          }
+      }
+
+      private int pickWeighted(int fallbackValue, double threshold) {
+         if (this.usedCount == 0) {
+            return fallbackValue;
+         } else {
+            double total = 0.0;
+
+            for (int i = 0; i < this.usedCount; i++) {
+               total += this.weights[this.used[i]];
+            }
+
+            if (!(total > 0.0)) {
+               return fallbackValue;
+            } else {
+               // A spatially smooth threshold needs one class order everywhere;
+               // insertion order flips between pixel cells and would leave
+               // straight seams along the pixel-centre lines.
+               for (int i = 1; i < this.usedCount; i++) {
+                  int value = this.used[i];
+                  int j = i - 1;
+                  while (j >= 0 && this.used[j] > value) {
+                     this.used[j + 1] = this.used[j];
+                     j--;
+                  }
+                  this.used[j + 1] = value;
+               }
+
+               double target = Mth.clamp(threshold, 0.0, 0.9999999999999999) * total;
+               double cumulative = 0.0;
+               int lastValue = fallbackValue;
+
+               for (int i = 0; i < this.usedCount; i++) {
+                  int value = this.used[i];
+                  lastValue = value;
+                  cumulative += this.weights[value];
+                  if (target < cumulative || i + 1 == this.usedCount) {
+                     return value;
+                  }
+               }
+
+               return lastValue;
+            }
+         }
+      }
+   }
+
+   /** Pixel grid of the raster: pixel (0, 0) has its north-west corner at the origin. */
+   public record PixelGrid(double originLongitude, double originLatitude, double pixelWidthDegrees, double pixelHeightDegrees, int width, int height) {
+      public int pixelX(double longitude) {
+         return (int)Math.floor((longitude - this.originLongitude) / this.pixelWidthDegrees);
+      }
+
+      public int pixelY(double latitude) {
+         return (int)Math.floor((this.originLatitude - latitude) / this.pixelHeightDegrees);
+      }
+
+      public double centerLongitude(int pixelX) {
+         return this.originLongitude + (pixelX + 0.5) * this.pixelWidthDegrees;
+      }
+
+      public double centerLatitude(int pixelY) {
+         return this.originLatitude - (pixelY + 0.5) * this.pixelHeightDegrees;
       }
    }
 
@@ -1112,5 +1322,8 @@ public final class TellusKoppenSource implements TellusCacheHandle {
    }
 
    private record WarpedCoords(double x, double z) {
+   }
+
+   private record RecentTile(int index, byte[] data) {
    }
 }

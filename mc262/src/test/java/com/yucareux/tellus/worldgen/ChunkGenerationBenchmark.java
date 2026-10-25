@@ -82,7 +82,6 @@ public final class ChunkGenerationBenchmark {
       java.lang.reflect.Field worldSeed = EarthChunkGenerator.class.getDeclaredField("worldSeed");
       worldSeed.setAccessible(true);
       worldSeed.setLong(generator, options.seed());
-      generator.initializeParallelCarverPreparation((RegistryAccess)registries);
 
       int minY = generator.getMinY();
       int height = generator.getGenDepth();

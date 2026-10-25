@@ -6,7 +6,6 @@ import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
-import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
 import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.world.data.osm.OsmPerf;
 import com.yucareux.tellus.world.data.osm.OsmQueryMode;
@@ -47,6 +46,11 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
    private static final int WATER_QUERY_MAX_TILES = intProperty("tellus.dhWaterMaxQueryTiles", 64, 1, 4096);
    private static final int WATER_QUERY_MIN_TILES = intProperty("tellus.dhWaterMinQueryTiles", 4, 1, WATER_QUERY_MAX_TILES);
    private static final int WATER_QUERY_FULL_DETAIL = intProperty("tellus.dhWaterFullQueryMaxDetail", 6, 0, 24);
+   private static final int WATER_QUERY_TILE_WIDTH_CELLS = intProperty("tellus.dhWaterQueryTileWidthCells", 64, 1, 4096);
+   private static final int PLANNED_WATER_MAX_CELL_SIZE = 1 << intProperty("tellus.dhWaterPlannerMaxDetail", 3, 0, 24);
+   // Planning cost follows the ground area a section spans, so at large world scales the planner
+   // stops at the same ground cell size as at 1:1 (8 blocks at 1:8, 2 at the default 1:30).
+   private static final int PLANNED_WATER_MAX_CELL_METERS = intProperty("tellus.dhWaterPlannerMaxCellMeters", 64, 1, 1 << 20);
    private static final int[] SAMPLE_OFFSETS_SINGLE = new int[]{0, 0};
    private static final int[] SAMPLE_OFFSETS_CELL_2 = new int[]{-1, -1, 0, -1, -1, 0, 0, 0};
    private static final int[] SAMPLE_OFFSETS_SMALL_GRID = new int[]{-1, -1, 0, -1, 1, -1, -1, 0, 0, 0, 1, 0, -1, 1, 0, 1, 1, 1};
@@ -58,6 +62,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
    private final TellusOsmWaterSource osmWaterSource;
    private final WaterSurfaceResolver fullWaterResolver;
    private final Cache<DhLodWaterResolver.AreaKey, DhLodWaterResolver.RasterizedWaterArea> rasterCache;
+   private final Cache<InlandAreaKey, InlandArea> inlandAreas = CacheBuilder.newBuilder().maximumSize(96).build();
    private final AtomicLong cacheGeneration = new AtomicLong();
    private final ThreadLocal<InlandWaterFlowAnalyzer.Workspace> flowWorkspace = ThreadLocal.withInitial(
       InlandWaterFlowAnalyzer.Workspace::new
@@ -92,6 +97,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
    public void clearCache() {
       this.cacheGeneration.incrementAndGet();
       this.rasterCache.invalidateAll();
+      this.inlandAreas.invalidateAll();
       this.rasterCache.cleanUp();
    }
 
@@ -106,21 +112,105 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       int[] coverClasses,
       boolean useDetailedWaterResolver
    ) {
-      return this.resolveArea(
-         baseX,
-         baseZ,
-         lodSizePoints,
-         cellSize,
-         worldXs,
-         worldZs,
-         baseTerrainSurface,
-         coverClasses,
-         useDetailedWaterResolver,
-         DhLodWaterResolver.ResolutionMode.EXACT
-      );
+      int area = Math.multiplyExact(lodSizePoints, lodSizePoints);
+      if (cellSize < 1 || worldXs.length != lodSizePoints || worldZs.length != lodSizePoints
+         || baseTerrainSurface.length != area || coverClasses.length != area)
+         throw new IllegalArgumentException("Invalid DH water area input dimensions");
+      // Block plans read the terrain at native resolution along every waterway, so their cost grows with the
+      // ground area a LOD covers. Distant LODs rasterize lakes and the sea at their own cell size, and take their
+      // rivers from the river network at a matching detail level: the same levels, only rivers wide enough to show.
+      if (!this.settings.enableWater() || area == 0 || coarseCell(cellSize)) {
+         AreaResult grid = this.resolveAreaGrid(baseX, baseZ, lodSizePoints, cellSize, worldXs, worldZs,
+            baseTerrainSurface, coverClasses, useDetailedWaterResolver);
+         if (this.settings.enableWater() && area > 0) this.overlayCoarseRivers(grid, lodSizePoints, cellSize, worldXs, worldZs);
+         return grid;
+      }
+      long started = HydrologyMetrics.now();
+      InlandArea planned;
+      boolean regular = true;
+      for (int i = 1; i < lodSizePoints; i++)
+         regular &= worldXs[i] - (long)worldXs[0] == (long)i * cellSize && worldZs[i] - (long)worldZs[0] == (long)i * cellSize;
+      try {
+         InlandAreaKey key = new InlandAreaKey(worldXs[0], worldZs[0], lodSizePoints, cellSize,
+            this.cacheGeneration.get(), this.fullWaterResolver.currentCacheGeneration());
+         planned = regular ? this.inlandAreas.get(key, () -> this.buildInlandArea(lodSizePoints, cellSize, worldXs, worldZs))
+            : this.buildInlandArea(lodSizePoints, cellSize, worldXs, worldZs);
+      } catch (ExecutionException | UncheckedExecutionException error) {
+         if (error.getCause() instanceof RuntimeException cause) throw cause;
+         throw new IllegalStateException("Unable to resolve inland LOD water", error.getCause());
+      }
+      // An entirely inland area needs only the common hydrology plan. Mixed
+      // coastal areas retain the existing coastal solver and its neighborhood.
+      AreaResult result = planned.legacyRequired
+         ? this.resolveAreaGrid(baseX, baseZ, lodSizePoints, cellSize, worldXs, worldZs,
+            baseTerrainSurface, coverClasses, useDetailedWaterResolver)
+         : new AreaResult(baseTerrainSurface.clone(), baseTerrainSurface.clone(), new boolean[area], new boolean[area]);
+      for (int index = 0; index < area; index++) {
+         InlandHydrologyPlanner.Column column = planned.columns[index];
+         if (column == null || !column.managed() || result.ocean()[index]) continue;
+         column = column.forTerrain(baseTerrainSurface[index]);
+         if (planned.band[index] && !column.wet() && !result.hasWater()[index]) {
+            // Coastal land keeps the coastal terrain, cut or raised as a planned bank beside it wants.
+            if (column.bank()) {
+               int base = baseTerrainSurface[index], shaped = result.terrainSurface()[index];
+               shaped = column.terrain() < base ? Math.min(shaped, column.terrain()) : Math.max(shaped, column.terrain());
+               result.terrainSurface()[index] = shaped;
+               result.waterSurface()[index] = shaped;
+            }
+            continue;
+         }
+         result.terrainSurface()[index] = column.terrain();
+         result.waterSurface()[index] = column.water();
+         result.hasWater()[index] = column.wet();
+         result.falling()[index] = column.falling();
+      }
+      HydrologyMetrics.lod(started, planned.legacyRequired);
+      return result;
    }
 
-   public DhLodWaterResolver.AreaResult resolveArea(
+   /** Whether a LOD cell is too coarse for block plans. */
+   private boolean coarseCell(int cellSize) {
+      return cellSize > PLANNED_WATER_MAX_CELL_SIZE || cellSize * this.settings.worldScale() > PLANNED_WATER_MAX_CELL_METERS;
+   }
+
+   /** Adds the rivers of the coarse river network to the dry, non-ocean cells of a distant LOD area. */
+   private void overlayCoarseRivers(AreaResult result, int lodSizePoints, int cellSize, int[] worldXs, int[] worldZs) {
+      for (int z = 0; z < lodSizePoints; z++) {
+         throwIfCancelled();
+         for (int x = 0; x < lodSizePoints; x++) {
+            int index = z * lodSizePoints + x;
+            if (result.ocean()[index] || result.hasWater()[index]) continue;
+            InlandHydrologyPlanner.Column river = this.fullWaterResolver.plannedCoarseRiver(worldXs[x], worldZs[z], cellSize);
+            if (river == null) continue;
+            result.hasWater()[index] = true;
+            result.waterSurface()[index] = river.water();
+            result.terrainSurface()[index] = Math.min(result.terrainSurface()[index], river.terrain());
+            result.falling()[index] = false;
+         }
+      }
+   }
+
+   private InlandArea buildInlandArea(int points, int cellSize, int[] xs, int[] zs) {
+      InlandHydrologyPlanner.Column[] columns = new InlandHydrologyPlanner.Column[points * points];
+      boolean[] band = new boolean[points * points];
+      boolean legacy = false;
+      for (int z = 0; z < points; z++) {
+         throwIfCancelled();
+         for (int x = 0; x < points; x++) {
+            InlandHydrologyPlanner.Column column = this.fullWaterResolver.plannedInlandFootprint(xs[x], zs[z], 0, cellSize, false);
+            columns[z * points + x] = column;
+            // The coastal band keeps the coastal solver's sea and terrain; planned water is laid over them.
+            band[z * points + x] = this.fullWaterResolver.inCoastalBand(xs[x], zs[z]);
+            legacy |= column == null || !column.managed() || band[z * points + x];
+         }
+      }
+      return new InlandArea(columns, band, legacy);
+   }
+
+   private record InlandAreaKey(int x, int z, int points, int cellSize, long generation, long sourceGeneration) {}
+   private record InlandArea(InlandHydrologyPlanner.Column[] columns, boolean[] band, boolean legacyRequired) {}
+
+   private DhLodWaterResolver.AreaResult resolveAreaGrid(
       int baseX,
       int baseZ,
       int lodSizePoints,
@@ -129,24 +219,18 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       int[] worldZs,
       int[] baseTerrainSurface,
       int[] coverClasses,
-      boolean useDetailedWaterResolver,
-      DhLodWaterResolver.ResolutionMode resolutionMode
+      boolean useDetailedWaterResolver
    ) {
-      boolean coarseCacheOnly = resolutionMode == DhLodWaterResolver.ResolutionMode.COARSE_CACHE_ONLY;
-      boolean allowIncomplete = resolutionMode != DhLodWaterResolver.ResolutionMode.EXACT
-         || ManagedTerrainNetworkPolicy.isCacheOnly();
       int area = lodSizePoints * lodSizePoints;
       if (area == 0) {
-         return new DhLodWaterResolver.AreaResult(new int[0], new int[0], new boolean[0], new boolean[0], false);
+         return new DhLodWaterResolver.AreaResult(new int[0], new int[0], new boolean[0], new boolean[0]);
       } else if (worldXs.length != lodSizePoints
          || worldZs.length != lodSizePoints
          || baseTerrainSurface.length != area
          || coverClasses.length != area) {
          throw new IllegalArgumentException("Invalid DH water area input dimensions");
       } else {
-         DhLodWaterResolver.RasterizedWaterArea rasterized = this.rasterizedWaterArea(
-            baseX, baseZ, lodSizePoints, cellSize, resolutionMode
-         );
+         DhLodWaterResolver.RasterizedWaterArea rasterized = this.rasterizedWaterArea(baseX, baseZ, lodSizePoints, cellSize);
          int[] terrainSurface = Arrays.copyOf(baseTerrainSurface, area);
          int[] waterSurface = Arrays.copyOf(baseTerrainSurface, area);
          int[] minimumWaterSurface = new int[area];
@@ -171,13 +255,14 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          long[] waterBodyKeys = rasterized.waterBodyKeys();
          int[] waterBodySurfaceHints = rasterized.waterBodySurfaceHints();
          boolean rasterIncomplete = rasterized.incomplete();
-         // Ocean cells can only come from ocean polygons, and the padded area query saw none: every
-         // cell is land to the coast field, whose distance is only consumed for ocean cells anyway.
-         // Skipping the per-cell sample saves up to 64 macro-tile resolutions per detail-6 tile.
-         boolean sampleCoast = osmWaterEnabled && rasterized.oceanFeaturesPresent();
          int seaLevel = this.generator.getSeaLevel();
          TellusLandMaskSource.LandMaskSampler landMaskSampler = this.landMaskSource.newSampler();
          double previewResolutionMeters = Math.max(worldScale, cellSize * worldScale);
+         // No ocean feature reaches this area, so no column is ocean and the coast field (whose
+         // tiles and halo cover far more map than a distant inland section) has nothing to add.
+         OceanCoastSample inlandCoast = osmWaterEnabled && !rasterized.oceanNearby()
+            ? this.fullWaterResolver.inlandCoastSample()
+            : null;
          boolean anyWater = false;
          Arrays.fill(minimumWaterSurface, Integer.MIN_VALUE);
 
@@ -191,22 +276,19 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                int worldX = worldXs[localX];
                int coverClass = coverClasses[index];
                int surface = terrainSurface[index];
-               OceanCoastSample coastSample = sampleCoast ? this.fullWaterResolver.oceanCoastSample(worldX, worldZ) : null;
+               OceanCoastSample coastSample = !osmWaterEnabled ? null
+                  : inlandCoast != null ? inlandCoast
+                  : this.fullWaterResolver.oceanCoastSample(worldX, worldZ, cellSize);
                if (coastSample != null && !coastSample.complete()) {
-                  if (shouldRejectIncompleteCoverage(false, resolutionMode, allowIncomplete)) {
-                     throw new OceanCoverageUnavailableException(coastSample.coverageStatus(), worldX, worldZ);
-                  }
-                  coastSample = null;
-                  rasterIncomplete = true;
-                  sampleCoast = false;
+                  throw new OceanCoverageUnavailableException(coastSample.coverageStatus(), worldX, worldZ);
                }
                boolean overtureOcean = coastSample != null && coastSample.ocean();
                boolean overtureWater = osmWaterEnabled && renderWater[index] && !rasterizedOcean[index];
-               boolean esaWater = (!osmWaterEnabled || allowIncomplete && rasterIncomplete) && coverClass == ESA_WATER;
+               boolean esaWater = !osmWaterEnabled && coverClass == ESA_WATER;
                if (coastSample != null) {
                   oceanCoastDistance[index] = coastSample.coastDistance();
                }
-               if (osmWaterEnabled && (!rasterIncomplete || overtureOcean || overtureWater)) {
+               if (osmWaterEnabled) {
                   boolean cellHasWater = overtureOcean || overtureWater;
                   hasWater[index] = cellHasWater;
                   ocean[index] = overtureOcean;
@@ -228,12 +310,9 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                   || isKnownOceanMask(landMaskSample) && (coverClass == ESA_NO_DATA || coverClass == ESA_WATER);
                boolean demLandOverride = oceanMaskCandidate
                   && this.generator.resolveLodMapterhornLandOverride(worldX, worldZ, previewResolutionMeters);
-               boolean strictOsmClassification = osmWaterEnabled && !rasterIncomplete;
                boolean cellOcean = !demLandOverride
-                  && shouldClassifyWaterCellAsOcean(strictOsmClassification, overtureWater, sampledOceanCell)
-                  && classifyWaterCellAsOcean(
-                     oceanHint, strictOsmClassification, landMaskSample, surface, coverClass, seaLevel
-                  );
+                  && shouldClassifyWaterCellAsOcean(osmWaterEnabled, overtureWater, sampledOceanCell)
+                  && classifyWaterCellAsOcean(oceanHint, osmWaterEnabled, landMaskSample, surface, coverClass, seaLevel);
                boolean cellHasWater = !demLandOverride && (overtureWater || cellOcean || esaWater);
                if (!demLandOverride && !cellHasWater && sampledOceanCell && (belowSeaLevel || isKnownOceanMask(landMaskSample))) {
                   cellHasWater = true;
@@ -262,7 +341,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          }
 
          if (!anyWater) {
-            return new DhLodWaterResolver.AreaResult(terrainSurface, waterSurface, hasWater, ocean, rasterIncomplete);
+            return new DhLodWaterResolver.AreaResult(terrainSurface, waterSurface, hasWater, ocean);
          }
 
          this.assignWaterSurfaces(
@@ -290,9 +369,8 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          this.applyInlandOceanSurfaceTransition(
             waterSurface, hasWater, ocean, waterfall, demFlowWater, lodSizePoints, cellSize
          );
-         // Polygon reaches may intentionally require deep excavation. Their
-         // DEM-driven classification already happened in the shared flow
-         // analyzer, so the generic lake cut/slope filters must not undo it.
+         // Flowing water has already been bounded by the shared reach solver.
+         // Lake-only validity filters must not punch holes in those channels.
          removeSteepNonFlowInlandWater(
             waterSurface,
             baseTerrainSurface,
@@ -332,13 +410,9 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	                  } else if (directLineWater[index]) {
 	                     surface = WaterSurfaceResolver.directLineRiverTerrainSurface(cellWaterSurface);
 	                  } else if (ocean[index]) {
-	                     surface = coarseCacheOnly
-	                        ? this.generator.resolveLodOceanTerrainSurface(
-	                           worldX, worldZ, cellWaterSurface, previewResolutionMeters
-	                        )
-	                        : this.fullWaterResolver.resolveOceanTerrainSurface(
-	                           worldX, worldZ, cellWaterSurface, previewResolutionMeters
-	                        );
+	                     surface = this.fullWaterResolver.resolveOceanTerrainSurface(
+                           worldX, worldZ, cellWaterSurface, previewResolutionMeters, cellSize
+                        );
                   } else {
                      surface = simpleInlandWaterTerrainSurface(cellWaterSurface);
                   }
@@ -367,7 +441,8 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
             worldZs,
             lodSizePoints,
             cellSize,
-            useDetailedWaterResolver
+            useDetailedWaterResolver,
+            this.settings.worldScale()
          );
          applyOceanLodDepthCompression(terrainSurface, waterSurface, ocean, oceanCoastDistance);
          markLodWaterfallProtection(
@@ -423,12 +498,17 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                adaptiveBlendRadius,
                waterfallProtection,
                lodSizePoints,
-               cellSize
+               cellSize,
+               worldXs,
+               worldZs
             );
          }
 
+         InlandWaterProfile.finishColumns(terrainSurface, waterSurface, hasWater, ocean, lodSizePoints,
+            InlandWaterProfile.coastalLand(ocean, lodSizePoints,
+               blendCells(Math.max(this.settings.oceanShorelineBlend(), this.fullWaterResolver.inlandFlowParameters().maxAdaptiveBlendBlocks()), cellSize)));
          this.applyExperimentalOceanDepthCap(terrainSurface, waterSurface, ocean);
-         return new DhLodWaterResolver.AreaResult(terrainSurface, waterSurface, hasWater, ocean, rasterIncomplete);
+         return new DhLodWaterResolver.AreaResult(terrainSurface, waterSurface, hasWater, ocean);
       }
    }
 
@@ -495,201 +575,88 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	      int seaLevel,
 	      int cellSize
    ) {
+
       int area = lodSizePoints * lodSizePoints;
       boolean[] visited = new boolean[area];
-      int[] queue = new int[area];
-      int[] componentCells = new int[area];
-      int[] polygonCells = new int[area];
-      int[] borderHeights = new int[area];
-      int[] componentSurfaceHints = new int[area];
+      int[] cells = new int[area];
+      int[] flowCells = new int[area];
+      int[] borders = new int[area * 4];
       int[] waterfallTop = new int[area];
-
+      for (int cell = 0; cell < area; cell++) {
+         waterSurface[cell] = ocean[cell]
+            ? resolvedOceanWaterSurface(waterSurface[cell], minimumWaterSurface[cell]) : baseTerrainSurface[cell];
+      }
       for (int start = 0; start < area; start++) {
-         if (!hasWater[start]) {
-            waterSurface[start] = baseTerrainSurface[start];
-         } else if (ocean[start]) {
-            waterSurface[start] = resolvedOceanWaterSurface(waterSurface[start], minimumWaterSurface[start]);
-            visited[start] = true;
-         } else if (!visited[start]) {
-            int queueHead = 0;
-            int queueTail = 0;
-            int componentCount = 0;
-            int borderCount = 0;
-            int minBorderHeight = Integer.MAX_VALUE;
-            int minComponentTerrain = Integer.MAX_VALUE;
-            int maxComponentTerrain = Integer.MIN_VALUE;
-            int lineWaterCount = 0;
-            int areaWaterCount = 0;
-            int flowingWaterCount = 0;
-            int minComponentX = Integer.MAX_VALUE;
-            int maxComponentX = Integer.MIN_VALUE;
-            int minComponentZ = Integer.MAX_VALUE;
-            int maxComponentZ = Integer.MIN_VALUE;
-            long componentWaterBodyKey = 0L;
-            int componentWaterSurfaceHint = Integer.MIN_VALUE;
-            int componentSurfaceHintCount = 0;
-            int lastComponentSurfaceHint = Integer.MIN_VALUE;
-            long componentTerrainSum = 0L;
-            int minSurface = minimumWaterSurface[start];
-            visited[start] = true;
-            queue[queueTail++] = start;
-
-            while (queueHead < queueTail) {
-               int index = queue[queueHead++];
-               componentCells[componentCount++] = index;
-               int componentTerrain = baseTerrainSurface[index];
-               minComponentTerrain = Math.min(minComponentTerrain, componentTerrain);
-               maxComponentTerrain = Math.max(maxComponentTerrain, componentTerrain);
-               componentTerrainSum += componentTerrain;
-               minSurface = Math.max(minSurface, minimumWaterSurface[index]);
-               if (lineWater[index]) {
-                  lineWaterCount++;
+         if (!hasWater[start] || ocean[start] || visited[start]) {
+            continue;
+         }
+         int count = 1;
+         int borderCount = 0;
+         int flowCount = 0;
+         long sum = 0;
+         cells[0] = start;
+         visited[start] = true;
+         for (int cursor = 0; cursor < count; cursor++) {
+            int cell = cells[cursor];
+            sum += baseTerrainSurface[cell];
+            int x = cell % lodSizePoints;
+            int z = cell / lodSizePoints;
+            for (int n = 0; n < NEIGHBOR_OFFSETS.length; n += 2) {
+               int nx = x + NEIGHBOR_OFFSETS[n];
+               int nz = z + NEIGHBOR_OFFSETS[n + 1];
+               if (nx < 0 || nz < 0 || nx >= lodSizePoints || nz >= lodSizePoints) {
+                  continue;
                }
-               if (areaWater[index] && !waterfallProtection[index]) {
-                  polygonCells[areaWaterCount++] = index;
-               }
-               if (flowingWater[index]) {
-                  flowingWaterCount++;
-               }
-
-               long waterBodyKey = waterBodyKeys[index];
-               if (waterBodyKey != 0L
-                  && (componentWaterBodyKey == 0L || Long.compareUnsigned(waterBodyKey, componentWaterBodyKey) < 0)) {
-                  componentWaterBodyKey = waterBodyKey;
-               }
-
-               int waterBodySurfaceHint = waterBodySurfaceHints[index];
-               if (waterBodySurfaceHint != Integer.MIN_VALUE && waterBodySurfaceHint != lastComponentSurfaceHint) {
-                  componentSurfaceHints[componentSurfaceHintCount++] = waterBodySurfaceHint;
-                  lastComponentSurfaceHint = waterBodySurfaceHint;
-               }
-
-               int x = index % lodSizePoints;
-               int z = index / lodSizePoints;
-               minComponentX = Math.min(minComponentX, x);
-               maxComponentX = Math.max(maxComponentX, x);
-               minComponentZ = Math.min(minComponentZ, z);
-               maxComponentZ = Math.max(maxComponentZ, z);
-
-               for (int n = 0; n < NEIGHBOR_OFFSETS.length; n += 2) {
-                  int nx = x + NEIGHBOR_OFFSETS[n];
-                  int nz = z + NEIGHBOR_OFFSETS[n + 1];
-                  if (nx >= 0 && nz >= 0 && nx < lodSizePoints && nz < lodSizePoints) {
-                     int neighbor = nz * lodSizePoints + nx;
-                     if (hasWater[neighbor] && !ocean[neighbor]) {
-                        if (!visited[neighbor]) {
-                           visited[neighbor] = true;
-                           queue[queueTail++] = neighbor;
-                        }
-                     } else {
-                        // Treat ocean neighbors as borders at their resolved surface so isolated inland-water
-                        // cells embedded in ocean (coastal misclassification) inherit a flat surface
-                        // instead of falling through to per-cell bathymetry depth.
-                        int borderHeight = ocean[neighbor] ? waterSurface[neighbor] : baseTerrainSurface[neighbor];
-                        minBorderHeight = Math.min(minBorderHeight, borderHeight);
-                        if (borderCount < borderHeights.length) {
-                           borderHeights[borderCount++] = borderHeight;
-                        }
-                     }
+               int neighbor = nz * lodSizePoints + nx;
+               if (hasWater[neighbor] && !ocean[neighbor]) {
+                  if (!visited[neighbor]) {
+                     visited[neighbor] = true;
+                     cells[count++] = neighbor;
                   }
-               }
-            }
-
-            boolean componentBelowSea = maxComponentTerrain != Integer.MIN_VALUE && maxComponentTerrain <= seaLevel;
-            int noBorderSurface = fallbackInlandComponentSurface(componentCount, componentTerrainSum, maxComponentTerrain, seaLevel);
-            int componentSurface = borderCount > 0 ? percentile(borderHeights, borderCount, 0.1) : noBorderSurface;
-	            boolean flowDominated = WaterSurfaceResolver.isFlowDominatedWaterComponent(componentCount, flowingWaterCount);
-	            boolean lineOnlyRiver = lineWaterCount > 0 && areaWaterCount == 0;
-	            if (lineOnlyRiver) {
-	               for (int i = 0; i < componentCount; i++) {
-	                  int cell = componentCells[i];
-	                  directLineWater[cell] = true;
-	                  demFlowWater[cell] = false;
-	                  waterSurface[cell] = WaterSurfaceResolver.directLineRiverWaterSurface(baseTerrainSurface[cell]);
-	               }
-	            } else if (!flowDominated) {
-	               componentWaterSurfaceHint = aggregateFeatureSurfaceHints(
-	                  componentSurfaceHints, componentSurfaceHintCount
-	               );
-	               if (componentWaterSurfaceHint != Integer.MIN_VALUE) {
-	                  componentWaterSurfaceHint = this.fullWaterResolver.resolveFastStableLakeSurface(
-	                     componentWaterBodyKey, componentWaterSurfaceHint, sourceGeneration
-	                  );
-	               }
-	               componentSurface = resolvedInlandComponentSurface(
-	                  componentSurface, componentWaterSurfaceHint, minSurface, minBorderHeight, componentBelowSea, seaLevel
-	               );
-               for (int i = 0; i < componentCount; i++) {
-                  int cell = componentCells[i];
-                  directLineWater[cell] = waterfallProtection[cell]
-                     || WaterSurfaceResolver.shouldUseDirectLineWaterCell(lineWater[cell], areaWater[cell]);
-                  waterSurface[cell] = directLineWater[cell]
-                     ? WaterSurfaceResolver.directLineRiverWaterSurface(baseTerrainSurface[cell])
-                     : componentSurface;
-               }
-            } else {
-               for (int i = 0; i < componentCount; i++) {
-                  int cell = componentCells[i];
-                  if (waterfallProtection[cell]
-                     || WaterSurfaceResolver.shouldUseDirectLineWaterCell(lineWater[cell], areaWater[cell])) {
-                     directLineWater[cell] = true;
-                     demFlowWater[cell] = false;
-                     waterSurface[cell] = WaterSurfaceResolver.directLineRiverWaterSurface(baseTerrainSurface[cell]);
-                     continue;
-                  }
-                  demFlowWater[cell] = true;
-                  int x = cell % lodSizePoints;
-                  int z = cell / lodSizePoints;
-                  int ceiling = baseTerrainSurface[cell];
-                  for (int offset = 0; offset < NEIGHBOR_OFFSETS.length; offset += 2) {
-                     int nx = x + NEIGHBOR_OFFSETS[offset];
-                     int nz = z + NEIGHBOR_OFFSETS[offset + 1];
-                     if (nx < 0 || nz < 0 || nx >= lodSizePoints || nz >= lodSizePoints) {
-                        continue;
-                     }
-                     int neighbor = nz * lodSizePoints + nx;
-                     if (ocean[neighbor]) {
-                        ceiling = Math.min(ceiling, waterSurface[neighbor]);
-                     } else if (!hasWater[neighbor]) {
-                        ceiling = Math.min(ceiling, baseTerrainSurface[neighbor]);
-                     }
-                  }
-                  directLineWater[cell] = false;
-                  waterSurface[cell] = ceiling;
-               }
-               int componentWidthCells = Math.max(
-                  1,
-                  Math.min(maxComponentX - minComponentX + 1, maxComponentZ - minComponentZ + 1)
-               );
-               InlandWaterFlowAnalyzer.analyze(
-                  lodSizePoints,
-                  polygonCells,
-                  areaWaterCount,
-                  baseTerrainSurface,
-                  waterSurface,
-                  ocean,
-                  Math.max(1, cellSize),
-                  componentWidthCells * Math.max(1, cellSize),
-                  this.fullWaterResolver.inlandFlowParameters(),
-                  waterSurface,
-                  hasWater,
-                  waterfall,
-                  waterfallTop,
-                  flowCorrection,
-                  adaptiveBlendRadius,
-                  waterfallProtection,
-                  this.flowWorkspace.get()
-               );
-               for (int i = 0; i < areaWaterCount; i++) {
-                  int cell = polygonCells[i];
-                  if (waterfall[cell]) {
-                     // Fast LODs have no fluid simulation, so retain a water
-                     // column from the preserved DEM floor to the upstream top.
-                     hasWater[cell] = true;
-                  }
+               } else {
+                  borders[borderCount++] = ocean[neighbor] ? waterSurface[neighbor] : baseTerrainSurface[neighbor];
                }
             }
          }
+         int fallback = borderCount == 0 ? (int)(sum / count) : percentile(borders, borderCount, 0.1);
+         for (int cursor = 0; cursor < count; cursor++) {
+            int cell = cells[cursor];
+            if (waterfallProtection[cell]) {
+               directLineWater[cell] = true;
+               waterSurface[cell] = WaterSurfaceResolver.directLineRiverWaterSurface(baseTerrainSurface[cell]);
+            } else if (flowingWater[cell] || lineWater[cell]) {
+               demFlowWater[cell] = true;
+               flowCells[flowCount++] = cell;
+               int ceiling = baseTerrainSurface[cell];
+               int x = cell % lodSizePoints;
+               int z = cell / lodSizePoints;
+               for (int n = 0; n < NEIGHBOR_OFFSETS.length; n += 2) {
+                  int nx = x + NEIGHBOR_OFFSETS[n];
+                  int nz = z + NEIGHBOR_OFFSETS[n + 1];
+                  if (nx < 0 || nz < 0 || nx >= lodSizePoints || nz >= lodSizePoints) {
+                     continue;
+                  }
+                  int neighbor = nz * lodSizePoints + nx;
+                  if (ocean[neighbor]) {
+                     ceiling = Math.min(ceiling, waterSurface[neighbor]);
+                  } else if (!hasWater[neighbor]) {
+                     ceiling = Math.min(ceiling, baseTerrainSurface[neighbor]);
+                  } else if (!flowingWater[neighbor] && !lineWater[neighbor]
+                     && waterBodySurfaceHints[neighbor] != Integer.MIN_VALUE) {
+                     ceiling = Math.min(ceiling, waterBodySurfaceHints[neighbor]);
+                  }
+               }
+               waterSurface[cell] = ceiling;
+            } else {
+               // A feature has one level even when an area clips it differently
+               // or its inlet shares a connected component with a river.
+               waterSurface[cell] = stableInlandComponentSurface(fallback, waterBodySurfaceHints[cell]);
+            }
+         }
+         InlandWaterFlowAnalyzer.analyze(lodSizePoints, flowCells, flowCount, baseTerrainSurface,
+            waterSurface, ocean, Math.max(1, cellSize), 1, this.fullWaterResolver.inlandFlowParameters(),
+            waterSurface, hasWater, waterfall, waterfallTop, flowCorrection, adaptiveBlendRadius,
+            waterfallProtection, this.flowWorkspace.get());
       }
    }
 
@@ -1048,24 +1015,20 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       }
    }
 
-   private DhLodWaterResolver.RasterizedWaterArea rasterizedWaterArea(
-      int baseX, int baseZ, int lodSizePoints, int cellSize, DhLodWaterResolver.ResolutionMode resolutionMode
-   ) {
+   private DhLodWaterResolver.RasterizedWaterArea rasterizedWaterArea(int baseX, int baseZ, int lodSizePoints, int cellSize) {
       int area = lodSizePoints * lodSizePoints;
       if (!this.settings.enableWater() || area == 0) {
          return DhLodWaterResolver.RasterizedWaterArea.dry(area);
       } else {
          long generation = this.cacheGeneration.get();
-         DhLodWaterResolver.AreaKey key = new DhLodWaterResolver.AreaKey(
-            baseX, baseZ, lodSizePoints, cellSize, generation, resolutionMode
-         );
+         DhLodWaterResolver.AreaKey key = new DhLodWaterResolver.AreaKey(baseX, baseZ, lodSizePoints, cellSize, generation);
          DhLodWaterResolver.RasterizedWaterArea cached = this.rasterCache.getIfPresent(key);
          if (cached != null) {
             return cached;
          } else {
             try {
                DhLodWaterResolver.RasterizedWaterArea built = this.rasterCache.get(
-                  key, () -> this.buildRasterizedWaterArea(baseX, baseZ, lodSizePoints, cellSize, resolutionMode)
+                  key, () -> this.buildRasterizedWaterArea(baseX, baseZ, lodSizePoints, cellSize)
                );
                if (built.incomplete()) {
                   this.rasterCache.invalidate(key);
@@ -1085,10 +1048,9 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       }
    }
 
-   private DhLodWaterResolver.RasterizedWaterArea buildRasterizedWaterArea(
-      int baseX, int baseZ, int lodSizePoints, int cellSize, DhLodWaterResolver.ResolutionMode resolutionMode
-   ) {
+   private DhLodWaterResolver.RasterizedWaterArea buildRasterizedWaterArea(int baseX, int baseZ, int lodSizePoints, int cellSize) {
       int area = lodSizePoints * lodSizePoints;
+      boolean coarse = this.coarseCell(cellSize);
       long sourceGeneration = this.fullWaterResolver.currentCacheGeneration();
       int cellOffset = cellSize >> 1;
       int halfCell = cellSize >> 1;
@@ -1098,11 +1060,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       int maxBlockZ = baseZ + (lodSizePoints - 1) * cellSize + cellOffset + halfCell - 1;
       double worldScale = this.settings.worldScale();
       long queryStartNs = OsmPerf.now();
-      boolean cacheOnly = resolutionMode != DhLodWaterResolver.ResolutionMode.EXACT
-         || ManagedTerrainNetworkPolicy.isCacheOnly();
-      OsmQueryMode queryMode = cacheOnly || this.settings.distantHorizonsOsmNonBlockingFetch()
-         ? OsmQueryMode.NON_BLOCKING
-         : OsmQueryMode.BLOCKING;
+      OsmQueryMode queryMode = this.settings.distantHorizonsOsmNonBlockingFetch() ? OsmQueryMode.NON_BLOCKING : OsmQueryMode.BLOCKING;
       TellusOsmWaterSource.WaterQueryResult result = this.osmWaterSource
          .waterForAreaWithStatus(
             minBlockX,
@@ -1112,9 +1070,10 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
             this.projection,
             WaterfallNoCarveZone.queryMarginBlocks(worldScale),
             queryMode,
-            waterQueryTileBudget(cellSize)
+            waterQueryTileBudget(cellSize),
+            waterQueryMinTileWidthBlocks(cellSize)
          );
-      if (shouldRetryPendingCoverage(result.coverageStatus(), queryMode, resolutionMode, cacheOnly)) {
+      if (shouldRetryPendingCoverage(result.coverageStatus(), queryMode)) {
          result = this.osmWaterSource.waterForAreaWithStatus(
             minBlockX,
             minBlockZ,
@@ -1123,21 +1082,19 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
             this.projection,
             WaterfallNoCarveZone.queryMarginBlocks(worldScale),
             OsmQueryMode.BLOCKING,
-            waterQueryTileBudget(cellSize)
+            waterQueryTileBudget(cellSize),
+            waterQueryMinTileWidthBlocks(cellSize)
          );
       }
       OsmPerf.recordWaterQuery(OsmPerf.elapsedSince(queryStartNs), result.features().size());
-      if (shouldRejectIncompleteCoverage(result.complete(), resolutionMode, cacheOnly)) {
+      if (!result.complete()) {
          throw new OceanCoverageUnavailableException(result.coverageStatus(), minBlockX, minBlockZ);
       }
       List<OsmWaterFeature> features = result.features();
-      boolean incomplete = !result.complete();
-      boolean oceanFeaturesPresent = false;
+      boolean incomplete = false;
+      boolean oceanNearby = false;
       for (OsmWaterFeature feature : features) {
-         if (feature.oceanHint()) {
-            oceanFeaturesPresent = true;
-            break;
-         }
+         oceanNearby |= feature.oceanHint();
       }
       if (features.isEmpty()) {
 	         return incomplete
@@ -1153,7 +1110,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	               emptySurfaceHints(area),
 	               sourceGeneration,
 	               true,
-	               false
+	               true
 	            )
 	            : DhLodWaterResolver.RasterizedWaterArea.dry(area);
       } else {
@@ -1164,16 +1121,18 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          boolean[] flowingSample = new boolean[area];
          boolean[] waterfallNoCarve = new boolean[area];
          long[] waterBodyKeys = new long[area];
-         int[] waterBodySurfaceHints = emptySurfaceHints(area);
+         OsmWaterFeature[] waterBodyFeatures = new OsmWaterFeature[area];
          int[] sampleOffsets = sampleOffsetsForCellSize(cellSize);
          int maxSampleOffset = maxSampleOffset(sampleOffsets);
+         double blocksPerDegree = this.projection.equatorialBlocksPerDegree();
          WaterfallNoCarveZone.markRegularCellGrid(
             waterfallNoCarve, baseX, baseZ, lodSizePoints, cellSize, features, this.projection
          );
 
          for (OsmWaterFeature feature : features) {
             throwIfCancelled();
-            if (!feature.oceanHint() && !WaterfallNoCarveZone.isMarker(feature)) {
+            // Distant rivers come from the river network instead (see overlayCoarseRivers).
+            if (!feature.oceanHint() && !feature.waterfall() && !(coarse && feature.flowingWater())) {
                this.rasterizeFeature(
                feature,
                baseX,
@@ -1183,13 +1142,15 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                cellOffset,
                sampleOffsets,
                maxSampleOffset,
+               worldScale,
+               blocksPerDegree,
                wetSampleMask,
 	               oceanSample,
 	               lineSample,
 	               areaSample,
 	               flowingSample,
 	               waterBodyKeys,
-               waterBodySurfaceHints
+               waterBodyFeatures
                );
             }
          }
@@ -1218,9 +1179,28 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	            renderWater, ocean, lineWater, flowingWater, lodSizePoints, riverGapCells
 	         );
 
+         // Surface hints are only read for rendered water cells. Resolving every queried lake
+         // (including ponds too small to cover a cell) would fetch shoreline terrain for nothing.
+         int[] waterBodySurfaceHints = emptySurfaceHints(area);
+         java.util.IdentityHashMap<OsmWaterFeature, Integer> surfaceByFeature = new java.util.IdentityHashMap<>();
+         double resolutionMeters = Math.max(worldScale, cellSize * worldScale);
+         java.util.function.IntBinaryOperator lodTerrainHeight =
+            (x, z) -> this.generator.resolveLodTerrainSurface(x, z, ESA_NO_DATA, resolutionMeters);
+         for (int i = 0; i < area; i++) {
+            OsmWaterFeature bodyFeature = waterBodyFeatures[i];
+            if (bodyFeature != null && renderWater[i]) {
+               Integer surface = surfaceByFeature.get(bodyFeature);
+               if (surface == null) {
+                  surface = this.fullWaterResolver.estimateFastLakeSurface(bodyFeature, cellSize, lodTerrainHeight);
+                  surfaceByFeature.put(bodyFeature, surface);
+               }
+               waterBodySurfaceHints[i] = surface;
+            }
+         }
+
 	         return new DhLodWaterResolver.RasterizedWaterArea(
 	            renderWater, ocean, oceanSample, lineWater, areaWater, flowingWater, waterfallNoCarve,
-	            waterBodyKeys, waterBodySurfaceHints, sourceGeneration, incomplete, oceanFeaturesPresent
+	            waterBodyKeys, waterBodySurfaceHints, sourceGeneration, incomplete, oceanNearby
 	         );
 	      }
 	   }
@@ -1234,21 +1214,22 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       int cellOffset,
       int[] sampleOffsets,
       int maxSampleOffset,
+      double worldScale,
+      double blocksPerDegree,
       int[] wetSampleMask,
       boolean[] oceanSample,
       boolean[] lineSample,
       boolean[] areaSample,
       boolean[] flowingSample,
       long[] waterBodyKeys,
-      int[] waterBodySurfaceHints
+      OsmWaterFeature[] waterBodyFeatures
    ) {
+	      boolean lineWaterFeature = WaterSurfaceResolver.isLineWaterGeometry(feature);
+	      boolean flowingWaterFeature = isFlowingWaterFeature(feature);
       if (feature.crossesWorldSeam(this.projection)) {
          return;
       }
-	      boolean lineWaterFeature = WaterSurfaceResolver.isLineWaterGeometry(feature);
-	      boolean flowingWaterFeature = isFlowingWaterFeature(feature);
       long waterBodyKey = stableOsmWaterBodyKey(feature);
-      int waterBodySurfaceHint = waterBodyKey == 0L ? Integer.MIN_VALUE : this.fullWaterResolver.estimateFastLakeSurface(feature);
       double lonA = this.projection.lonToBlockX(feature.minLon());
       double lonB = this.projection.lonToBlockX(feature.maxLon());
       double minWorldX = Math.min(lonA, lonB);
@@ -1266,79 +1247,47 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          return;
       }
 
-      // Sweep one sample row at a time: the scanner projects the feature once and keeps only the
-      // segments/crossings that can touch the row, so each sample is a few compares instead of a
-      // full pass over the geometry. Results are identical to feature.containsBlock per sample.
-      OsmWaterFeature.RowScanner scanner = feature.rowScanner(this.projection);
-      int[] rowGroupedOffsets = rowGroupedSampleOffsetOrder(sampleOffsets);
-
       for (int localZ = minCellZ; localZ <= maxCellZ; localZ++) {
          throwIfCancelled();
          int worldZ = baseZ + localZ * cellSize + cellOffset;
          int row = localZ * lodSizePoints;
-         int currentOffsetZ = Integer.MIN_VALUE;
 
-         for (int pair : rowGroupedOffsets) {
-            int offsetX = sampleOffsets[pair * 2];
-            int offsetZ = sampleOffsets[pair * 2 + 1];
-            int sampleBit = 1 << pair;
-            if (offsetZ != currentOffsetZ) {
-               scanner.beginRow(worldZ + offsetZ);
-               currentOffsetZ = offsetZ;
-            }
+         for (int localX = minCellX; localX <= maxCellX; localX++) {
+            int worldX = baseX + localX * cellSize + cellOffset;
+            int index = row + localX;
+            int mask = wetSampleMask[index];
 
-            for (int localX = minCellX; localX <= maxCellX; localX++) {
-               int worldX = baseX + localX * cellSize + cellOffset;
-               if (!scanner.contains(worldX + offsetX)) {
-                  continue;
-               }
-               int index = row + localX;
-               wetSampleMask[index] |= sampleBit;
-               if (feature.oceanHint()) {
-                  oceanSample[index] = true;
-               }
+            for (int offsetIndex = 0, sampleBit = 1; offsetIndex < sampleOffsets.length; offsetIndex += 2, sampleBit <<= 1) {
+               int sampleX = worldX + sampleOffsets[offsetIndex];
+               int sampleZ = worldZ + sampleOffsets[offsetIndex + 1];
+               if (feature.containsBlock(sampleX, sampleZ, this.projection)) {
+                  mask |= sampleBit;
+                  if (feature.oceanHint()) {
+                     oceanSample[index] = true;
+                  }
 
-               if (lineWaterFeature) {
-                  lineSample[index] = true;
-               } else {
-                  areaSample[index] = true;
-               }
-               if (flowingWaterFeature) {
-                  flowingSample[index] = true;
-               }
+	                  if (lineWaterFeature) {
+	                     lineSample[index] = true;
+	                  } else {
+	                     areaSample[index] = true;
+	                  }
+	                  if (flowingWaterFeature) {
+	                     flowingSample[index] = true;
+	                  }
 
-               if (waterBodyKey != 0L) {
-                  long existingKey = waterBodyKeys[index];
-                  if (existingKey == 0L || Long.compareUnsigned(waterBodyKey, existingKey) < 0) {
-                     waterBodyKeys[index] = waterBodyKey;
-                     waterBodySurfaceHints[index] = waterBodySurfaceHint;
-                  } else if (existingKey == waterBodyKey && waterBodySurfaceHint != Integer.MIN_VALUE) {
-                     waterBodySurfaceHints[index] = waterBodySurfaceHints[index] == Integer.MIN_VALUE
-                        ? waterBodySurfaceHint
-                        : Math.min(waterBodySurfaceHints[index], waterBodySurfaceHint);
+                  if (waterBodyKey != 0L) {
+                     long existingKey = waterBodyKeys[index];
+                     if (existingKey == 0L || Long.compareUnsigned(waterBodyKey, existingKey) < 0) {
+                        waterBodyKeys[index] = waterBodyKey;
+                        waterBodyFeatures[index] = feature;
+                     }
                   }
                }
             }
+
+            wetSampleMask[index] = mask;
          }
       }
-   }
-
-   /**
-    * Sample-offset pair indices ordered so pairs sharing a Z offset are adjacent (stable for equal Z),
-    * letting the rasterizer begin each scanner row once per distinct Z offset.
-    */
-   static int[] rowGroupedSampleOffsetOrder(int[] sampleOffsets) {
-      int pairCount = sampleOffsets.length / 2;
-      Integer[] order = new Integer[pairCount];
-      for (int pair = 0; pair < pairCount; pair++) {
-         order[pair] = pair;
-      }
-      Arrays.sort(order, (a, b) -> Integer.compare(sampleOffsets[a * 2 + 1], sampleOffsets[b * 2 + 1]));
-      int[] result = new int[pairCount];
-      for (int i = 0; i < pairCount; i++) {
-         result[i] = order[i];
-      }
-      return result;
    }
 
    static boolean isFlowingWaterFeature(OsmWaterFeature feature) {
@@ -1347,6 +1296,14 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 
    static long stableOsmWaterBodyKey(OsmWaterFeature feature) {
       return feature.flowingWater() || feature.oceanHint() ? 0L : feature.featureId();
+   }
+
+   static void applyInlandDepthProfile(
+      int[] terrainSurface, int[] waterSurface, boolean[] hasWater, boolean[] ocean, boolean[] directLineWater, boolean[] waterfall,
+      boolean[] riverWater, boolean[] detailedInlandWater, int[] worldXs, int[] worldZs, int lodSizePoints, int cellSize, boolean detailed
+   ) {
+      applyInlandDepthProfile(terrainSurface, waterSurface, hasWater, ocean, directLineWater, waterfall, riverWater, detailedInlandWater,
+         worldXs, worldZs, lodSizePoints, cellSize, detailed, 30.0);
    }
 
    static void applyInlandDepthProfile(
@@ -1362,52 +1319,32 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       int[] worldZs,
       int lodSizePoints,
       int cellSize,
-      boolean detailed
+      boolean detailed,
+      double worldScale
    ) {
+
       int area = lodSizePoints * lodSizePoints;
-      if (!detailed) {
-         for (int index = 0; index < area; index++) {
-            if (isProfiledInlandWater(index, hasWater, ocean, directLineWater) && !waterfall[index]) {
-               terrainSurface[index] = waterSurface[index] - simpleInlandWaterDepthForDistance(0);
-            }
-         }
-         return;
-      }
-
-      if (detailedInlandWater == null) {
-         throw new IllegalArgumentException("Detailed LOD water requires a reusable inland mask");
-      }
-      Arrays.fill(detailedInlandWater, false);
-      boolean hasDetailedLake = false;
+      boolean[] inland = new boolean[area];
       for (int index = 0; index < area; index++) {
-         boolean profiledWater = isProfiledInlandWater(index, hasWater, ocean, directLineWater)
-            && !waterfall[index];
-         detailedInlandWater[index] = profiledWater && !riverWater[index];
-         hasDetailedLake |= detailedInlandWater[index];
-         if (profiledWater && riverWater[index]) {
-            terrainSurface[index] = waterSurface[index] - simpleInlandWaterDepthForDistance(0);
+         inland[index] = isProfiledInlandWater(index, hasWater, ocean, directLineWater) && !waterfall[index];
+         if (detailedInlandWater != null) {
+            detailedInlandWater[index] = inland[index];
          }
       }
-      if (!hasDetailedLake) {
-         return;
-      }
-
-      int sampleSpacing = Math.max(1, cellSize);
-      int maximumProfileCells = blendCells(LakeBedProfile.maximumShoreInfluenceBlocks(), sampleSpacing);
-      int[] shoreDistance = lodShoreDistances(detailedInlandWater, lodSizePoints, maximumProfileCells);
-      for (int localZ = 0; localZ < lodSizePoints; localZ++) {
-         int row = localZ * lodSizePoints;
-         for (int localX = 0; localX < lodSizePoints; localX++) {
-            int index = row + localX;
-            if (!detailedInlandWater[index]) {
-               continue;
-            }
-
-            int depth = LakeBedProfile.sampledDepth(
-               shoreDistance[index], sampleSpacing, worldXs[localX], worldZs[localZ]
-            );
-            terrainSurface[index] = waterSurface[index] - Math.max(1, depth);
+      int spacing = Math.max(1, cellSize);
+      int[] distance = lodShoreDistances(inland, lodSizePoints,
+         blendCells(LakeBedProfile.maximumShoreInfluenceBlocks(), spacing));
+      for (int index = 0; index < area; index++) {
+         if (!inland[index]) {
+            continue;
          }
+         int x = worldXs[index % lodSizePoints];
+         int z = worldZs[index / lodSizePoints];
+         double blocks = distance[index] < 0 ? LakeBedProfile.maximumShoreInfluenceBlocks()
+            : (distance[index] + 0.5) * spacing;
+         int depth = riverWater[index] ? WaterSurfaceResolver.riverDepth(blocks, x, z)
+            : LakeBedProfile.sampledDepth(distance[index], spacing, x, z, worldScale);
+         terrainSurface[index] = waterSurface[index] - depth;
       }
    }
 
@@ -1591,10 +1528,6 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
             continue;
          }
          int cut = Math.max(0, baseTerrainSurface[index] - waterSurface[index]);
-         if (cut <= 0 && !correctionRequired[index]) {
-            adaptiveBlendRadius[index] = 0;
-            continue;
-         }
          correctionRequired[index] = true;
          int blendCut = Math.min(cut, parameters.maxProfileCut());
          int x = index % lodSizePoints;
@@ -1670,9 +1603,13 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       int[] adaptiveBlendRadius,
       boolean[] waterfallProtection,
       int lodSizePoints,
-      int cellSize
+      int cellSize,
+      int[] worldXs,
+      int[] worldZs
    ) {
       int area = lodSizePoints * lodSizePoints;
+      boolean[] coastalLand = InlandWaterProfile.coastalLand(ocean, lodSizePoints,
+         blendCells(Math.max(this.settings.oceanShorelineBlend(), this.fullWaterResolver.inlandFlowParameters().maxAdaptiveBlendBlocks()), cellSize));
       int[] remainingInfluence = new int[area];
       int[] sourceRadius = new int[area];
       int[] nearestWaterSurface = new int[area];
@@ -1708,7 +1645,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                continue;
             }
             int neighbor = nz * lodSizePoints + nx;
-            if (hasWater[neighbor] || waterfallProtection[neighbor]) {
+            if (hasWater[neighbor] || coastalLand[neighbor] || waterfallProtection[neighbor]) {
                continue;
             }
             if (initialRemaining > remainingInfluence[neighbor]
@@ -1740,7 +1677,7 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                continue;
             }
             int neighbor = nz * lodSizePoints + nx;
-            if (hasWater[neighbor] || waterfallProtection[neighbor] || nextRemaining <= remainingInfluence[neighbor]) {
+            if (hasWater[neighbor] || coastalLand[neighbor] || waterfallProtection[neighbor] || nextRemaining <= remainingInfluence[neighbor]) {
                continue;
             }
             remainingInfluence[neighbor] = nextRemaining;
@@ -1755,12 +1692,10 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
             continue;
          }
          int distanceCells = sourceRadius[index] - remainingInfluence[index];
-         int naturalized = WaterSurfaceResolver.naturalizedInlandBankSurface(
-            baseTerrainSurface[index],
-            nearestWaterSurface[index],
-            distanceCells * 10,
-            sourceRadius[index],
-            this.settings.shorelineBlendCliffLimit()
+         int naturalized = InlandWaterProfile.bankSurface(
+            baseTerrainSurface[index], nearestWaterSurface[index], distanceCells * (double)cellSize,
+            sourceRadius[index] * cellSize, this.settings.shorelineBlendCliffLimit(),
+            worldXs[index % lodSizePoints], worldZs[index / lodSizePoints]
          );
          if (naturalized < terrainSurface[index]) {
             terrainSurface[index] = naturalized;
@@ -1908,6 +1843,15 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       }
    }
 
+   /**
+    * Distant LODs read water tiles at least one section (64 cells) wide. What a tile drops at that zoom
+    * is under a cell across, neighboring sections share the tiles, and each coarser zoom holds about half
+    * the data per area; at large world scales that is most of the water a 4096-chunk radius downloads.
+    */
+   static int waterQueryMinTileWidthBlocks(int cellSize) {
+      return WATER_QUERY_TILE_WIDTH_CELLS * Math.max(1, cellSize);
+   }
+
    static int waterQueryTileBudget(int cellSize) {
       int detail = 31 - Integer.numberOfLeadingZeros(Math.max(1, cellSize));
       int reduction = Math.max(0, detail - WATER_QUERY_FULL_DETAIL);
@@ -1922,61 +1866,18 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          && queryMode == OsmQueryMode.NON_BLOCKING;
    }
 
-   static boolean shouldRetryPendingCoverage(
-      TellusOsmWaterSource.CoverageStatus coverageStatus,
-      OsmQueryMode queryMode,
-      DhLodWaterResolver.ResolutionMode resolutionMode
-   ) {
-      return shouldRetryPendingCoverage(coverageStatus, queryMode, resolutionMode, false);
-   }
-
-   static boolean shouldRetryPendingCoverage(
-      TellusOsmWaterSource.CoverageStatus coverageStatus,
-      OsmQueryMode queryMode,
-      DhLodWaterResolver.ResolutionMode resolutionMode,
-      boolean cacheOnly
-   ) {
-      return !cacheOnly
-         && resolutionMode == DhLodWaterResolver.ResolutionMode.EXACT
-         && shouldRetryPendingCoverage(coverageStatus, queryMode);
-   }
-
-   static boolean shouldRejectIncompleteCoverage(boolean complete, DhLodWaterResolver.ResolutionMode resolutionMode) {
-      return shouldRejectIncompleteCoverage(complete, resolutionMode, false);
-   }
-
-   static boolean shouldRejectIncompleteCoverage(
-      boolean complete, DhLodWaterResolver.ResolutionMode resolutionMode, boolean cacheOnly
-   ) {
-      return !complete && !cacheOnly && resolutionMode == DhLodWaterResolver.ResolutionMode.EXACT;
-   }
-
-   public enum ResolutionMode {
-      EXACT,
-      MANAGED_CACHE_ONLY,
-      COARSE_CACHE_ONLY
-   }
-
-   public record AreaResult(int[] terrainSurface, int[] waterSurface, boolean[] hasWater, boolean[] ocean, boolean approximate) {
+   public record AreaResult(int[] terrainSurface, int[] waterSurface, boolean[] hasWater, boolean[] ocean, boolean[] falling) {
+      public AreaResult(int[] terrainSurface, int[] waterSurface, boolean[] hasWater, boolean[] ocean) {
+         this(terrainSurface, waterSurface, hasWater, ocean, new boolean[terrainSurface.length]);
+      }
    }
 
    private record LodBlendNode(int index, int remaining, int radius, int waterSurface) {
    }
 
-   private record AreaKey(
-      int baseX,
-      int baseZ,
-      int lodSizePoints,
-      int cellSize,
-      long generation,
-      DhLodWaterResolver.ResolutionMode resolutionMode
-   ) {
+   private record AreaKey(int baseX, int baseZ, int lodSizePoints, int cellSize, long generation) {
    }
 
-	   /**
-	    * @param oceanFeaturesPresent whether the (margin-padded) area query returned any ocean polygon.
-	    *        When false no cell of the area can be ocean, so the coast field never has to be consulted.
-	    */
 	   private record RasterizedWaterArea(
 	      boolean[] renderWater,
 	      boolean[] ocean,
@@ -1989,7 +1890,8 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 	      int[] waterBodySurfaceHints,
 	      long sourceGeneration,
 	      boolean incomplete,
-	      boolean oceanFeaturesPresent
+	      // Whether any ocean feature reaches this area; without one no column can be ocean.
+	      boolean oceanNearby
 	   ) {
 	      private static DhLodWaterResolver.RasterizedWaterArea dry(int area) {
 	         return new DhLodWaterResolver.RasterizedWaterArea(

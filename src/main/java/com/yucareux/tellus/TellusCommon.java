@@ -40,8 +40,12 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -90,7 +94,19 @@ public class TellusCommon {
 
 
    public static void validateRuntime() {
+      configureHttpKeepAlive();
       ExperimentalHeightSupport.validateActiveRuntimeProfileOrThrow();
+   }
+
+   /**
+    * Terrain sources fetch thousands of small HTTP ranges from a handful of hosts. The JDK keeps only five
+    * idle keep-alive sockets per host by default, so parallel downloads keep re-running TCP/TLS handshakes.
+    * Raise the limit unless the user configured it; it applies if no HTTP connection has been pooled yet.
+    */
+   private static void configureHttpKeepAlive() {
+      if (System.getProperty("http.maxConnections") == null) {
+         System.setProperty("http.maxConnections", "32");
+      }
    }
 
    public static void initializeRuntime(TellusRuntimePlatform runtime) {
@@ -262,9 +278,8 @@ public class TellusCommon {
             ChunkGenerator generator = world.getChunkSource().getGenerator();
             logOverworldSettings(server, world, generator);
             if (generator instanceof EarthChunkGenerator earthGenerator) {
-               earthGenerator.initializeParallelCarverPreparation(world.registryAccess());
                ExperimentalHeightSupport.configureWorldBorder(earthGenerator.settings(), world.getWorldBorder());
-               TellusMinecraftCompat.configureInitialSpawn(world, earthGenerator);
+               // No spawn here: MinecraftServerInitialSpawnMixin sets it once when the world is created, so /setworldspawn survives restarts.
                ensureDynamicDimensionPack(server, world.dimensionTypeRegistration(), world.dimensionType(), earthGenerator);
             }
          }

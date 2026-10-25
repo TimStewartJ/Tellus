@@ -264,6 +264,9 @@ public final class PmTilesRangeReader {
          DownloadProgressReporter.requestStarted(expectedBytes);
 
          byte[] var9;
+         // A fully read response leaves the socket to the JDK keep-alive cache; disconnecting would
+         // force a new TCP+TLS handshake (hundreds of ms to S3) for every tile.
+         boolean reusable = false;
          try (InputStream input = openStream(connection, code)) {
             if (code == 200) {
                if (offset != 0L) {
@@ -277,9 +280,12 @@ public final class PmTilesRangeReader {
             }
 
             var9 = readFully(input, length);
+            reusable = expectedBytes == length;
          } finally {
             DownloadProgressReporter.requestFinished();
-            connection.disconnect();
+            if (!reusable) {
+               connection.disconnect();
+            }
          }
 
          return var9;

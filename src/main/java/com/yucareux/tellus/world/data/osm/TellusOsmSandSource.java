@@ -11,6 +11,7 @@ import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.world.data.pmtiles.PmTilesSafety;
 import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
+import com.yucareux.tellus.world.data.source.SourceInterrupts;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import com.yucareux.tellus.worldgen.WorldProjection;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile;
@@ -95,11 +96,19 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
    }
 
    public boolean containsSand(int blockX, int blockZ, WorldProjection projection, OsmQueryMode mode) {
+      return this.containsSand(blockX, blockZ, projection, projection.worldScale(), mode);
+   }
+
+   /**
+    * Sand lookup for a sample spaced {@code resolutionMeters} apart, such as a distant LOD column.
+    * Coarser samples read lower-zoom tiles, which the LOD prefetch loads for the same resolution.
+    */
+   public boolean containsSand(int blockX, int blockZ, WorldProjection projection, double resolutionMeters, OsmQueryMode mode) {
       this.ensureInitialized();
       if (!this.available || projection.worldScale() <= 0.0) {
          return false;
       } else {
-         int zoom = this.queryZoomForScale(projection.worldScale());
+         int zoom = this.queryZoom(projection.worldScale(), resolutionMeters);
          TellusOsmSandSource.TileKey key = tileKeyForBlock(blockX, blockZ, projection, zoom);
          if (key == null) {
             return false;
@@ -232,10 +241,20 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
       double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, WorldProjection projection, int paddingTiles,
       int completedUnits, BiConsumer<Integer, String> progressConsumer
    ) {
+      return this.preloadAreaTiles(
+         minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, projection.worldScale(), paddingTiles, completedUnits, progressConsumer
+      );
+   }
+
+   /** Loads the tiles that {@link #containsSand} reads for samples spaced {@code resolutionMeters} apart. */
+   public int preloadAreaTiles(
+      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, WorldProjection projection, double resolutionMeters,
+      int paddingTiles, int completedUnits, BiConsumer<Integer, String> progressConsumer
+   ) {
       BiConsumer<Integer, String> progress = progressConsumer == null ? (completed, detail) -> {
       } : progressConsumer;
       List<TellusOsmSandSource.TileKey> keys = this.downloadAreaTileKeys(
-         minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, paddingTiles
+         minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, resolutionMeters, paddingTiles
       );
       if (keys.isEmpty()) {
          progress.accept(completedUnits, "Skipping OSM sand tiles because the source is unavailable");
@@ -271,12 +290,19 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
    private List<TellusOsmSandSource.TileKey> downloadAreaTileKeys(
       double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, WorldProjection projection, int paddingTiles
    ) {
+      return this.downloadAreaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, projection, projection.worldScale(), paddingTiles);
+   }
+
+   private List<TellusOsmSandSource.TileKey> downloadAreaTileKeys(
+      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, WorldProjection projection, double resolutionMeters,
+      int paddingTiles
+   ) {
       this.ensureInitialized();
       if (!this.available || projection.worldScale() <= 0.0) {
          return List.of();
       }
 
-      int zoom = this.queryZoomForScale(projection.worldScale());
+      int zoom = this.queryZoom(projection.worldScale(), resolutionMeters);
       TellusOsmSandSource.TileKey first = tileKeyForBlock(Math.min(minBlockX, maxBlockX), Math.min(minBlockZ, maxBlockZ), projection, zoom);
       TellusOsmSandSource.TileKey second = tileKeyForBlock(Math.max(minBlockX, maxBlockX), Math.max(minBlockZ, maxBlockZ), projection, zoom);
       if (first == null || second == null) {
@@ -304,15 +330,25 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
    }
 
    private int queryZoomForScale(double worldScale) {
+      return this.queryZoom(worldScale, worldScale);
+   }
+
+   /**
+    * Finest zoom whose tiles span at least {@code MIN_TILE_WIDTH_BLOCKS} samples. Block samples keep
+    * the full-detail zoom; a distant LOD column spanning many blocks reads a tile sized to its cells,
+    * so a section needs a handful of tiles instead of thousands at large world scales.
+    */
+   private int queryZoom(double worldScale, double resolutionMeters) {
       this.ensureInitialized();
       if (worldScale <= 0.0) {
          return this.minZoom;
       } else {
          double blocksPerDegree = EarthProjection.equatorialBlocksPerDegree(worldScale);
+         double sampleBlocks = Double.isFinite(resolutionMeters) ? Math.max(1.0, resolutionMeters / worldScale) : 1.0;
 
          for (int zoom = this.maxZoom; zoom >= this.minZoom; zoom--) {
             double tileWidthBlocks = 360.0 * blocksPerDegree / (1 << zoom);
-            if (tileWidthBlocks >= MIN_TILE_WIDTH_BLOCKS) {
+            if (tileWidthBlocks >= MIN_TILE_WIDTH_BLOCKS * sampleBlocks) {
                return zoom;
             }
          }
@@ -396,6 +432,7 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_SAND, OsmPerf.TileLoadPath.PARSED_DISK);
                return parsed;
             } catch (RuntimeException | IOException error) {
+               SourceInterrupts.throwIfInterruption(error);
                Tellus.LOGGER.debug("Invalid parsed Overture sand cache tile {}, refetching", key, error);
 
                try {
@@ -415,6 +452,7 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_SAND, OsmPerf.TileLoadPath.RAW_DISK);
                return parsed;
             } catch (RuntimeException | IOException error) {
+               SourceInterrupts.throwIfInterruption(error);
                Tellus.LOGGER.debug("Invalid Overture sand cache tile {}, refetching", key, error);
 
                try {

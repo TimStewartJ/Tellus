@@ -306,7 +306,7 @@ public final class TellusVegetationGenerator {
          referenceY + MAX_SURFACE_RISE
       );
       int minimumY = Math.max(
-         MinecraftVersionCompat.minBuildHeight(level),
+         MinecraftVersionCompat.minY(level),
          referenceY - MAX_SURFACE_DROP
       );
       BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();

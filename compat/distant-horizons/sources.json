@@ -1,0 +1,16 @@
+{
+  "loader": {
+    "upstream": "f0cefb7a994a670ca653e3dd52ff345275018724",
+    "patch": "loader.patch",
+    "sha256": "7911517b0af9185e21dd635f5cbd0c26b0ecc38a54712e370eb948958bc8a24b",
+    "files": 4,
+    "replay_verified": true
+  },
+  "core": {
+    "upstream": "b0a5f3506364485eb9e4cd94b5343304adb6c88c",
+    "patch": "core.patch",
+    "sha256": "620699df32a9a20c2086e79602665d3517a450debbb8fbad32a13cf02c95c517",
+    "files": 17,
+    "replay_verified": true
+  }
+}

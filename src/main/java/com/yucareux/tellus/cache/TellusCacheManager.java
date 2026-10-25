@@ -321,7 +321,12 @@ public final class TellusCacheManager {
       KOPPEN("tellus.cache.section.koppen", new String[]{"tellus/cache/koppen"}, new TellusCacheDomain[]{TellusCacheDomain.KOPPEN}),
       TERRAIN(
          "tellus.cache.section.terrain",
-         new String[]{"tellus/cache/elevation-mapterhorn", "tellus/cache/elevation-tellus", "tellus/cache/elevation-normalized"},
+         new String[]{
+            "tellus/cache/elevation-mapterhorn",
+            "tellus/cache/elevation-mapterhorn-coverage",
+            "tellus/cache/elevation-tellus",
+            "tellus/cache/elevation-normalized"
+         },
          new TellusCacheDomain[]{TellusCacheDomain.TERRAIN, TellusCacheDomain.NORMALIZED_TERRAIN}
       ),
       OPENWATERS(

@@ -14,6 +14,20 @@ Server support note: Tellus must be installed on the server, but is not required
 
 *Note: generative AI was used during the creation of this mod.*
 
+## Supported Minecraft versions
+
+| Minecraft Java Edition | Loaders | Java runtime |
+| --- | --- | --- |
+| 1.20.1 | Fabric, Forge | 17 |
+| 1.21.1 | Fabric, NeoForge | 21 |
+| 1.21.11 | Fabric, NeoForge | 21 |
+| 26.2 | Fabric, NeoForge | 25 |
+| 26.3 | Fabric, NeoForge beta | 25 |
+
+For 26.3, use Fabric Loader 0.19.5 or later with Fabric API 0.160.5+26.3 or later, or NeoForge 26.3.0.3-beta or later for Minecraft 26.3. Distant Horizons 3.3.1 is supported, including the Tellus fork for extended-height worlds and managed terrain downloads.
+
+Build all targets with `./gradlew build`, or only the new targets with `./gradlew -PtellusTargets=mc263,mc263-neoforge build`. See [26.3 compatibility notes](docs/minecraft-26.3.md) for the shared-source layout, validation, and possible follow-up features.
+
 ## Features
 
 - Earth-scale terrain generated from geographic elevation data
@@ -43,7 +57,7 @@ Source: https://github.com/louis-e/arnis
 
 ## Distant Horizons Integration
 
-Tellus integrates with the Distant Horizons (DH) mod to render planet-scale terrain far beyond vanilla view distance. When DH is installed, Tellus registers a DH world-generation override for Tellus worlds (DH API v4+), so distant terrain is built using Tellus data and settings instead of generic vanilla sampling.
+Tellus integrates with Distant Horizons (DH) 3.3 or later using API 7.1. When DH is installed, Tellus registers a world-generation override for Tellus worlds, so distant terrain is built using Tellus data and settings instead of generic vanilla sampling.
 
 - **Fast mode**: Tellus provides a custom LOD generator that samples its elevation, land-cover, climate, and water data directly to build distant terrain quickly and consistently with your world settings.
 - **Detailed mode**: Tellus delegates to DH's chunk-based generator for far terrain, which is more accurate but significantly heavier on performance.
@@ -87,6 +101,7 @@ The cave preparation lane has its own deterministic scaling benchmark; serialize
 ```
 
 Water-region builds sample elevation row by row with the tile raster and Mercator math hoisted per row (`-Dtellus.water.rowSampling=false` restores the per-sample path for A/B comparisons; results are identical). The dense grid margin is the hydrology context only (`tellus.water.flowContextBlocks`, default 192); Overture waterfall markers are queried separately out to `WaterfallNoCarveZone.queryMarginBlocks`, so changing `tellus.water.waterfallNoCarveRadiusChunks` (default 2 at 1:1, scaled down with world scale) no longer changes the grid size.
+The `3.3.1-tellus.1` fork preserves extended-height LODs and Iris compatibility, adds download-aware generation scheduling, and includes DH's 3.3 rendering improvements and 3.3.1 NeoForge translation fix. Use the matching updated Tellus jar with it. See [compatibility and build notes](docs/distant-horizons-3.3.1.md).
 
 ## Commands
 
@@ -194,8 +209,10 @@ This section lets you toggle vanilla structures and world features on or off, su
 - **ESA WorldCover land cover**: Official 10 m categorical COG pixels and internal overview levels, fetched and cached by compressed byte range for biome and vegetation lookups.
 - **ETH canopy height**: On-demand 10 m canopy-height tiles used to keep procedural tree dimensions at a real-world 1:1 vertical scale.
 - **Koppen climate**: Cached climate raster used for biome climate classification.
-- **Mapterhorn terrain**: Cached elevation tiles used for terrain height sampling.
+- **Mapterhorn terrain**: Cached elevation and source-coverage tiles used for terrain height sampling.
 - **OpenWaters bathymetry**: Cached bathymetry tiles used for ocean and underwater terrain.
+- **NOAA OISST v2.1**: Cached sea-surface temperature and sea-ice blocks used for ocean climate.
+- **Preloaded terrain**: Terrain areas prepared with Preload Terrain. Deleting removes them; preload the area again to restore fast generation.
 - **Total**: Combined size of all Tellus caches (read-only).
 - **Delete cache / Delete all cache**: Removes cached data to free disk space; data will be re-downloaded or rebuilt as needed.
 </details>

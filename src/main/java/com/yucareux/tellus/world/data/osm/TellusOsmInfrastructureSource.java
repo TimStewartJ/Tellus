@@ -11,6 +11,7 @@ import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.world.data.pmtiles.PmTilesSafety;
 import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
+import com.yucareux.tellus.world.data.source.SourceInterrupts;
 import com.yucareux.tellus.worldgen.WorldProjection;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.Feature;
@@ -315,6 +316,7 @@ public final class TellusOsmInfrastructureSource implements TellusCacheHandle {
             OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_STREET_LIGHTS, OsmPerf.TileLoadPath.PARSED_DISK);
             return parsed;
          } catch (RuntimeException | IOException error) {
+            SourceInterrupts.throwIfInterruption(error);
             Tellus.LOGGER.debug("Invalid parsed Overture infrastructure cache tile {}, refetching", key, error);
             deleteQuietly(parsedCachePath);
          }
@@ -329,6 +331,7 @@ public final class TellusOsmInfrastructureSource implements TellusCacheHandle {
             OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_STREET_LIGHTS, OsmPerf.TileLoadPath.RAW_DISK);
             return parsed;
          } catch (RuntimeException | IOException error) {
+            SourceInterrupts.throwIfInterruption(error);
             Tellus.LOGGER.debug("Invalid Overture infrastructure cache tile {}, refetching", key, error);
             deleteQuietly(cachePath);
          }

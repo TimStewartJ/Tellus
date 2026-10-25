@@ -1,10 +1,14 @@
 package com.yucareux.tellus.worldgen.building;
 
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 public final class TellusBuildingLighting {
    public static final byte BUILDING_LIGHT_LEVEL = 15;
+   public static final int LOD_WINDOW_DARK = 0;
+   public static final int LOD_WINDOW_WARM = 1;
+   public static final int LOD_WINDOW_COOL = 2;
 
    private TellusBuildingLighting() {
    }
@@ -36,58 +40,71 @@ public final class TellusBuildingLighting {
          && Math.floorMod(localZ - geometry.gridPhaseZ(), geometry.gridSpacingZ()) == 0;
    }
 
-   public static byte resolveLodFacadeLightLevel(
-      BuildingBlueprint blueprint, BlockState facadeBlock, BlockState windowBlock, int boundaryDistance, int worldX, int worldZ, int floorIndex
-   ) {
-      if (facadeBlock != windowBlock || !blueprint.isFacadeCell(boundaryDistance, floorIndex)) {
-         return 0;
+   /**
+    * Night state of a window in a distant-horizons LOD facade: dark, or lit in warm (homes) or cool (offices)
+    * light. Rooms are lit or dark as a whole, so the decision is made once per window bay (once per cell when
+    * cells are wider) and floor, at the share of windows a building of that kind shows lit at night.
+    */
+   public static int resolveLodWindowGlow(BuildingBlueprint blueprint, int worldX, int worldZ, int floorIndex, int cellSize) {
+      BuildingProfile.BuildingCategory category = blueprint.profile().category();
+      double litShare = nightLitWindowShare(category, floorIndex);
+      if (litShare <= 0.0) {
+         return LOD_WINDOW_DARK;
       }
 
-      int setback = blueprint.setbackForFloor(floorIndex);
-      int minWorldX = blueprint.minWorldX() + setback;
-      int maxWorldX = blueprint.maxWorldX() - setback;
-      int minWorldZ = blueprint.minWorldZ() + setback;
-      int edgeCoord = worldX == minWorldX || worldX == maxWorldX ? worldZ - minWorldZ : worldX - minWorldX;
-      int darkStride = facadeDarkStride(blueprint);
-      int darkPhase = positiveFloorMod(mixFloorSeed(blueprint.blueprintSeed(), floorIndex) ^ setback * 37, darkStride);
-      return Math.floorMod(edgeCoord, darkStride) == darkPhase ? 0 : BUILDING_LIGHT_LEVEL;
+      int bay = Math.max(Math.max(1, cellSize), blueprint.profile().windowSpacing());
+      long roll = mixFloorSeed(blueprint.blueprintSeed(), floorIndex)
+         ^ Math.floorDiv(worldX, bay) * -7046029254386353131L
+         ^ Math.floorDiv(worldZ, bay) * -4417276706812531889L;
+      roll = (roll ^ roll >>> 33) * -49064778989728563L;
+      roll = (roll ^ roll >>> 33) * -4265267296055464877L;
+      roll ^= roll >>> 33;
+      if (unitRoll(roll) >= litShare) {
+         return LOD_WINDOW_DARK;
+      }
+      return unitRoll(Long.rotateLeft(roll, 29)) < warmWindowShare(category) ? LOD_WINDOW_WARM : LOD_WINDOW_COOL;
    }
 
-   public static byte resolveLodFacadeLightLevel(
-      BuildingBlueprint blueprint,
-      BlockState facadeBlock,
-      BlockState windowBlock,
-      int boundaryDistance,
-      int worldX,
-      int worldZ,
-      int floorIndex,
-      int cellSize
-   ) {
-      if (cellSize <= 1) {
-         return resolveLodFacadeLightLevel(blueprint, facadeBlock, windowBlock, boundaryDistance, worldX, worldZ, floorIndex);
-      }
+   /**
+    * The light-emitting block a lit LOD window shows: glowstone's amber for warm light, the sea lantern of
+    * Tellus's interior lights for cool light. DH marks both as illuminated, so shader packs make them glow.
+    */
+   public static BlockState lodWindowLightBlock(int glow) {
+      return glow == LOD_WINDOW_WARM ? Blocks.GLOWSTONE.defaultBlockState() : Blocks.SEA_LANTERN.defaultBlockState();
+   }
 
-      if (facadeBlock != windowBlock || !blueprint.isFacadeCell(boundaryDistance, floorIndex)) {
-         return 0;
-      }
+   private static double nightLitWindowShare(BuildingProfile.BuildingCategory category, int floorIndex) {
+      boolean groundFloor = floorIndex == 0;
+      return switch (category) {
+         case HOUSE -> 0.32;
+         case RESIDENTIAL -> 0.4;
+         case HOTEL -> groundFloor ? 0.8 : 0.5;
+         case COMMERCIAL -> groundFloor ? 0.8 : 0.4;
+         case OFFICE -> groundFloor ? 0.5 : 0.3;
+         case HOSPITAL -> 0.6;
+         case TALL_BUILDING, MODERN_SKYSCRAPER -> 0.4;
+         case GLASSY_SKYSCRAPER -> 0.45;
+         case TOWER -> 0.25;
+         case INDUSTRIAL, HISTORIC -> 0.2;
+         case FARM, RELIGIOUS -> 0.15;
+         case GARAGE, WAREHOUSE -> 0.08;
+         case SCHOOL -> 0.06;
+         case GREENHOUSE -> 0.05;
+         case SHED -> 0.03;
+         case GENERIC -> 0.3;
+      };
+   }
 
-      int setback = blueprint.setbackForFloor(floorIndex);
-      int minWorldX = blueprint.minWorldX() + setback;
-      int maxWorldX = blueprint.maxWorldX() - setback;
-      int minWorldZ = blueprint.minWorldZ() + setback;
-      int maxWorldZ = blueprint.maxWorldZ() - setback;
-      int darkStride = facadeDarkStride(blueprint);
-      int darkPhase = positiveFloorMod(mixFloorSeed(blueprint.blueprintSeed(), floorIndex) ^ setback * 37, darkStride);
-      int cellRadius = cellSize >> 1;
-      int cellMinX = worldX - cellRadius;
-      int cellMaxX = cellMinX + cellSize - 1;
-      int cellMinZ = worldZ - cellRadius;
-      int cellMaxZ = cellMinZ + cellSize - 1;
-      boolean touchesNorthSouthFacade = cellMinZ <= minWorldZ && cellMaxZ >= minWorldZ || cellMinZ <= maxWorldZ && cellMaxZ >= maxWorldZ;
-      boolean touchesWestEastFacade = cellMinX <= minWorldX && cellMaxX >= minWorldX || cellMinX <= maxWorldX && cellMaxX >= maxWorldX;
-      boolean hasLitNorthSouthWindow = touchesNorthSouthFacade && hasLitFacadeInterval(cellMinX, cellMaxX, minWorldX, maxWorldX, darkStride, darkPhase);
-      boolean hasLitWestEastWindow = touchesWestEastFacade && hasLitFacadeInterval(cellMinZ, cellMaxZ, minWorldZ, maxWorldZ, darkStride, darkPhase);
-      return hasLitNorthSouthWindow || hasLitWestEastWindow ? BUILDING_LIGHT_LEVEL : 0;
+   private static double warmWindowShare(BuildingProfile.BuildingCategory category) {
+      return switch (category) {
+         case HOUSE, RESIDENTIAL, HOTEL, FARM, SHED, RELIGIOUS, HISTORIC, GENERIC -> 0.85;
+         case COMMERCIAL -> 0.5;
+         default -> 0.2;
+      };
+   }
+
+   private static double unitRoll(long roll) {
+      return (roll >>> 11) * 0x1.0p-53;
    }
 
    // Put some ceiling lights directly behind facades so night windows read as lit,
@@ -159,17 +176,6 @@ public final class TellusBuildingLighting {
       return Long.rotateLeft(blueprintSeed ^ 0x9E3779B97F4A7C15L, floorIndex + 1) + floorIndex * 0x632BE59BD9B4E019L;
    }
 
-   private static int facadeDarkStride(BuildingBlueprint blueprint) {
-      return switch (blueprint.profile().archetype()) {
-         case HOUSE -> 4;
-         case APARTMENT -> 6;
-         case COMMERCIAL -> 10;
-         case INDUSTRIAL -> 8;
-         case TOWER -> 12;
-         case GENERIC -> 7;
-      };
-   }
-
    private static int facadeStripSpacing(BuildingBlueprint blueprint) {
       return switch (blueprint.profile().archetype()) {
          case HOUSE -> 0;
@@ -192,27 +198,6 @@ public final class TellusBuildingLighting {
 
    private static int positiveFloorMod(long value, int modulus) {
       return Math.floorMod((int)(value ^ value >>> 32), modulus);
-   }
-
-   private static boolean hasLitFacadeInterval(int intervalMin, int intervalMax, int facadeMin, int facadeMax, int darkStride, int darkPhase) {
-      int overlapMin = Math.max(intervalMin, facadeMin);
-      int overlapMax = Math.min(intervalMax, facadeMax);
-      if (overlapMin > overlapMax) {
-         return false;
-      }
-
-      int intervalLength = overlapMax - overlapMin + 1;
-      if (intervalLength >= darkStride) {
-         return true;
-      }
-
-      for (int coord = overlapMin; coord <= overlapMax; coord++) {
-         if (Math.floorMod(coord - facadeMin, darkStride) != darkPhase) {
-            return true;
-         }
-      }
-
-      return false;
    }
 
    private record FloorLightingGeometry(

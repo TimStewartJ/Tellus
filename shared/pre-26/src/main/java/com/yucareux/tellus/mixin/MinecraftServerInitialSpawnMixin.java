@@ -25,7 +25,6 @@ public abstract class MinecraftServerInitialSpawnMixin {
          return;
       }
 
-      earthGenerator.initializeParallelCarverPreparation(level.registryAccess());
       BlockPos spawn = earthGenerator.getInitialSpawnPosition(level);
       levelData.setSpawn(spawn, 0.0F);
       if (generateBonusChest) {

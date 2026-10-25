@@ -19,9 +19,9 @@ final class ParsedTileCodec {
    private static final int MAGIC_PLACE = 1347179596;
    private static final int MAGIC_STREET_LIGHT = 1280461908;
    private static final int ROAD_VERSION = 7;
-   // Version 3 retained physical label polygons without their source subtype.
-   // Reparse cached MVT data so those labels cannot keep flooding islands.
-   private static final int WATER_VERSION = 4;
+   // Version 5 retained waterfall geometry and optional dimensions; version 6 merges that with the
+   // fork's watercourse kinds, so tiles cached by either earlier build are reparsed.
+   private static final int WATER_VERSION = 6;
    private static final int BUILDING_VERSION = 4;
    private static final int SAND_VERSION = 1;
    private static final int PLACE_VERSION = 1;
@@ -341,6 +341,8 @@ final class ParsedTileCodec {
             boolean oceanHint = input.readBoolean();
             int kindOrdinal = Byte.toUnsignedInt(input.readByte());
             OsmWaterKind kind = kindOrdinal < WATER_KINDS.length ? WATER_KINDS[kindOrdinal] : OsmWaterKind.UNKNOWN;
+            double widthMeters = input.readDouble();
+            double dropMeters = input.readDouble();
             int partCount = boundedCount(input.readInt(), MAX_FEATURES, "water part");
             if (partCount <= 0) {
                throw new IOException("Water feature has no geometry parts");
@@ -365,7 +367,7 @@ final class ParsedTileCodec {
                }
             }
 
-            features.add(new OsmWaterFeature(featureId, lineGeometry, pointGeometry, oceanHint, kind, longitudes, latitudes));
+            features.add(new OsmWaterFeature(featureId, lineGeometry, pointGeometry, oceanHint, kind, longitudes, latitudes, widthMeters, dropMeters));
          }
 
          return features.isEmpty() ? OsmWaterTile.empty() : new OsmWaterTile(features, tileSouth, tileWest, tileNorth, tileEast);
@@ -391,6 +393,8 @@ final class ParsedTileCodec {
             output.writeByte(feature.pointGeometry() ? 2 : feature.lineGeometry() ? 1 : 0);
             output.writeBoolean(feature.oceanHint());
             output.writeByte(feature.kind().ordinal());
+            output.writeDouble(feature.widthMeters());
+            output.writeDouble(feature.dropMeters());
             output.writeInt(feature.partCount());
 
             for (int part = 0; part < feature.partCount(); part++) {

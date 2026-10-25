@@ -223,6 +223,9 @@ final class PmTilesReader {
          }
 
          byte[] var7;
+         long expectedBytes = connection.getContentLengthLong();
+         // Keep fully read responses reusable by the JDK keep-alive cache (no new TLS handshake per tile).
+         boolean reusable = false;
          DownloadProgressReporter.requestStarted(length);
          try (InputStream input = connection.getInputStream()) {
             if (code == HttpURLConnection.HTTP_OK) {
@@ -233,9 +236,12 @@ final class PmTilesReader {
             }
 
             var7 = readFullyWithProgress(input, length);
+            reusable = expectedBytes == length;
          } finally {
             DownloadProgressReporter.requestFinished();
-            connection.disconnect();
+            if (!reusable) {
+               connection.disconnect();
+            }
          }
 
          return var7;

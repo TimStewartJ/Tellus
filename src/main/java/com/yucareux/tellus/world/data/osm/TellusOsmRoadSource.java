@@ -15,7 +15,9 @@ import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
 import com.yucareux.tellus.world.data.pmtiles.PmTilesSafety;
 import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
+import com.yucareux.tellus.world.data.source.SourceInterrupts;
 import com.yucareux.tellus.worldgen.WorldProjection;
+import com.yucareux.tellus.worldgen.landmark.LandmarkCatalog;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.Feature;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.GeomType;
@@ -137,7 +139,8 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
                   }
                }
 
-               return new TellusOsmRoadSource.RoadQueryResult(roads, hadCacheMiss);
+               // A landmark bridge carries its own deck: the map's bridge roads along it are left out everywhere.
+               return new TellusOsmRoadSource.RoadQueryResult(LandmarkCatalog.withoutReplacedRoads(roads), hadCacheMiss);
             }
          }
       } else {
@@ -447,6 +450,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_ROADS, OsmPerf.TileLoadPath.PARSED_DISK);
                return parsed;
             } catch (RuntimeException | IOException var12) {
+               SourceInterrupts.throwIfInterruption(var12);
                Tellus.LOGGER.debug("Invalid parsed Overture road cache tile {}, refetching", key, var12);
 
                try {
@@ -466,6 +470,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_ROADS, OsmPerf.TileLoadPath.RAW_DISK);
                return parsed;
             } catch (RuntimeException | IOException var11) {
+               SourceInterrupts.throwIfInterruption(var11);
                Tellus.LOGGER.debug("Invalid Overture road cache tile {}, refetching", key, var11);
 
                try {

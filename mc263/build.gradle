@@ -1,0 +1,27 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version '1.16.1'
+	id 'maven-publish'
+}
+
+apply from: rootProject.file('gradle/tellus-263-sources.gradle')
+
+// Native 26.3 adapters live in shared/mc263; terrain and UI logic remain shared.
+ext.tellus = [
+	minecraftVersion: '26.3',
+	loaderVersion: '0.19.5',
+	fabricVersion: '0.160.5+26.3',
+	fabricDependencyConfiguration: 'implementation',
+	javaVersion: 25,
+	distantHorizonsRuntimeProperty: 'mc263_distant_horizons_runtime_path',
+	sharedSourceLayers: ['post-1201', 'mc262', 'mc26', 'mc263', 'fabric'],
+	inheritedJavaProjects: ['mc262'],
+	overriddenInheritedMainSources: ['com/yucareux/tellus/compat/ChunkSerializationCompat.java'],
+	overriddenInheritedMainResources: ['fabric.mod.json', 'tellus.mixins.json'],
+	mapboxVersion: '24.1.1',
+	protobufVersion: '4.28.2',
+	officialMappings: false,
+] + tellus263Sources
+
+apply from: rootProject.file('gradle/tellus-fabric.gradle')
+
+apply from: rootProject.file('gradle/tellus-263-tests.gradle')

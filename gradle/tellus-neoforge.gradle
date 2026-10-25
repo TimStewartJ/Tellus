@@ -12,7 +12,7 @@ def inheritedClientJavaProjects = (config.inheritedClientJavaProjects ?: inherit
 def inheritedResourceProjects = (config.inheritedResourceProjects ?: inheritedJavaProjects) as List
 def inheritedMainResourceProjects = (config.inheritedMainResourceProjects ?: inheritedResourceProjects) as List
 def inheritedClientResourceProjects = (config.inheritedClientResourceProjects ?: inheritedResourceProjects) as List
-def distantHorizonsApiVersion = '7.0.0'
+def distantHorizonsApiVersion = '7.1.0'
 def twelveMonkeysImageioVersion = '3.13.1'
 def distantHorizonsRuntimePath = providers.gradleProperty(config.distantHorizonsRuntimeProperty).orNull
 def usesLegacyAdditionalRuntimeClasspath = minecraftVersion == '1.21.1'
@@ -104,7 +104,14 @@ sourceSets {
 }
 
 neoForge {
-	version = neoForgeVersion
+	if (config.disableRecompilation) {
+		enable {
+			version = neoForgeVersion
+			disableRecompilation = true
+		}
+	} else {
+		version = neoForgeVersion
+	}
 
 	runs {
 		client {
@@ -218,7 +225,9 @@ dependencies {
 	compileOnly "maven.modrinth:DistantHorizonsApi:${distantHorizonsApiVersion}"
 	if (distantHorizonsRuntimePath) {
 		localRuntime files(distantHorizonsRuntimePath)
-	} else if (usesLegacyAdditionalRuntimeClasspath) {
+	}
+	// DH 3.3 relocates its libraries; development runs still need Tellus's XZ classes.
+	if (usesLegacyAdditionalRuntimeClasspath) {
 		additionalRuntimeClasspath 'org.tukaani:xz:1.10'
 	} else {
 		runtimeOnly 'org.tukaani:xz:1.10'

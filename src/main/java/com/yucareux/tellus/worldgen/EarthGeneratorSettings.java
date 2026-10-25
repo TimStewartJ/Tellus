@@ -83,7 +83,8 @@ public record EarthGeneratorSettings(
    boolean hugeRedMushrooms,
    boolean worldScaleAtSpawn,
    boolean centerWorldOnSpawn,
-   boolean ecologicalUnderstory
+   boolean ecologicalUnderstory,
+   int distantHorizonsCityLightsDistance
 ) {
    public static final double DEFAULT_SPAWN_LATITUDE = 27.9881;
    public static final double DEFAULT_SPAWN_LONGITUDE = 86.925;
@@ -130,6 +131,10 @@ public record EarthGeneratorSettings(
     * cover, deadwood) beneath the canopy. Off keeps only Tellus' canopy trees.
     */
    public static final boolean DEFAULT_ECOLOGICAL_UNDERSTORY = true;
+   /** LOD city lights distance (in chunks from the nearest player) that keeps them out to the edge of DH's render distance. */
+   public static final int DH_CITY_LIGHTS_UNLIMITED = 0;
+   public static final int DEFAULT_DH_CITY_LIGHTS_DISTANCE = 1024;
+   private static final int MAX_DH_CITY_LIGHTS_DISTANCE = 1 << 16;
    public static final EarthGeneratorSettings DEFAULT = new EarthGeneratorSettings(
       30.0,
       1.0,
@@ -197,7 +202,8 @@ public record EarthGeneratorSettings(
       false,
       DEFAULT_WORLD_SCALE_AT_SPAWN,
       DEFAULT_CENTER_WORLD_ON_SPAWN,
-      DEFAULT_ECOLOGICAL_UNDERSTORY
+      DEFAULT_ECOLOGICAL_UNDERSTORY,
+      DEFAULT_DH_CITY_LIGHTS_DISTANCE
    );
    private static final MapCodec<EarthGeneratorSettings.BaseToggles> BASE_TOGGLES_CODEC = RecordCodecBuilder.mapCodec(
       instance -> instance.group(
@@ -409,6 +415,9 @@ public record EarthGeneratorSettings(
    private static final MapCodec<Boolean> ECOLOGICAL_UNDERSTORY_CODEC = Codec.BOOL
       .fieldOf("ecological_understory")
       .orElse(DEFAULT_ECOLOGICAL_UNDERSTORY);
+   private static final MapCodec<Integer> DISTANT_HORIZONS_CITY_LIGHTS_DISTANCE_CODEC = Codec.intRange(0, MAX_DH_CITY_LIGHTS_DISTANCE)
+      .fieldOf("distant_horizons_city_lights_distance")
+      .orElse(DEFAULT.distantHorizonsCityLightsDistance());
    private static final MapCodec<Boolean> REALTIME_TIME_CODEC = Codec.BOOL.fieldOf("realtime_time").orElse(DEFAULT.realtimeTime());
    private static final MapCodec<Boolean> REALTIME_WEATHER_CODEC = Codec.BOOL.fieldOf("realtime_weather").orElse(DEFAULT.realtimeWeather());
    private static final MapCodec<Boolean> HISTORICAL_SNOW_CODEC = Codec.BOOL.fieldOf("historical_snow").orElse(DEFAULT.historicalSnow());
@@ -492,6 +501,7 @@ public record EarthGeneratorSettings(
             builder = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.encode(input.distantHorizonsOsmRoadMaxDetail(), ops, builder);
             builder = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.encode(input.distantHorizonsOsmBuildingMaxDetail(), ops, builder);
             builder = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_NON_BLOCKING_FETCH_CODEC.encode(input.distantHorizonsOsmNonBlockingFetch(), ops, builder);
+            builder = EarthGeneratorSettings.DISTANT_HORIZONS_CITY_LIGHTS_DISTANCE_CODEC.encode(input.distantHorizonsCityLightsDistance(), ops, builder);
             builder = EarthGeneratorSettings.REALTIME_TIME_CODEC.encode(input.realtimeTime(), ops, builder);
             builder = EarthGeneratorSettings.REALTIME_WEATHER_CODEC.encode(input.realtimeWeather(), ops, builder);
             builder = EarthGeneratorSettings.HISTORICAL_SNOW_CODEC.encode(input.historicalSnow(), ops, builder);
@@ -536,6 +546,7 @@ public record EarthGeneratorSettings(
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_NON_BLOCKING_FETCH_CODEC.keys(ops));
+            baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_CITY_LIGHTS_DISTANCE_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.REALTIME_TIME_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.REALTIME_WEATHER_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.HISTORICAL_SNOW_CODEC.keys(ops));
@@ -580,6 +591,7 @@ public record EarthGeneratorSettings(
             DataResult<Integer> distantHorizonsOsmRoadMaxDetail = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.decode(ops, input);
             DataResult<Integer> distantHorizonsOsmBuildingMaxDetail = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.decode(ops, input);
             DataResult<Boolean> distantHorizonsOsmNonBlockingFetch = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_NON_BLOCKING_FETCH_CODEC.decode(ops, input);
+            DataResult<Integer> distantHorizonsCityLightsDistance = EarthGeneratorSettings.DISTANT_HORIZONS_CITY_LIGHTS_DISTANCE_CODEC.decode(ops, input);
             DataResult<Boolean> realtimeTime = EarthGeneratorSettings.REALTIME_TIME_CODEC.decode(ops, input);
             DataResult<Boolean> realtimeWeather = EarthGeneratorSettings.REALTIME_WEATHER_CODEC.decode(ops, input);
             DataResult<Boolean> historicalSnow = EarthGeneratorSettings.HISTORICAL_SNOW_CODEC.decode(ops, input);
@@ -643,6 +655,7 @@ public record EarthGeneratorSettings(
             settings = settings.apply2(EarthGeneratorSettings::applyDistantHorizonsOsmRoadMaxDetail, distantHorizonsOsmRoadMaxDetail);
             settings = settings.apply2(EarthGeneratorSettings::applyDistantHorizonsOsmBuildingMaxDetail, distantHorizonsOsmBuildingMaxDetail);
             settings = settings.apply2(EarthGeneratorSettings::applyDistantHorizonsOsmNonBlockingFetch, distantHorizonsOsmNonBlockingFetch);
+            settings = settings.apply2(EarthGeneratorSettings::applyDistantHorizonsCityLightsDistance, distantHorizonsCityLightsDistance);
             settings = settings.apply2(EarthGeneratorSettings::applyEnableRoads, enableRoads);
             settings = settings.apply2(EarthGeneratorSettings::applyEnableBuildings, enableBuildings);
             settings = settings.apply2(EarthGeneratorSettings::applyEnableWater, enableWater);
@@ -703,6 +716,7 @@ public record EarthGeneratorSettings(
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_NON_BLOCKING_FETCH_CODEC.keys(ops));
+            baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_CITY_LIGHTS_DISTANCE_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.REALTIME_TIME_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.REALTIME_WEATHER_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.HISTORICAL_SNOW_CODEC.keys(ops));
@@ -806,7 +820,8 @@ public record EarthGeneratorSettings(
       boolean hugeRedMushrooms,
       boolean worldScaleAtSpawn,
       boolean centerWorldOnSpawn,
-      boolean ecologicalUnderstory
+      boolean ecologicalUnderstory,
+      int distantHorizonsCityLightsDistance
    ) {
       worldScale = clampWorldScale(worldScale);
       randomBiomeDensity = Mth.clamp(randomBiomeDensity, MIN_RANDOM_BIOME_DENSITY, MAX_RANDOM_BIOME_DENSITY);
@@ -814,6 +829,7 @@ public record EarthGeneratorSettings(
       voxyChunkPregenMaxRadius = Mth.clamp(voxyChunkPregenMaxRadius, 0, MAX_VOXY_PREGEN_RADIUS);
       voxyChunkPregenChunksPerTick = Mth.clamp(voxyChunkPregenChunksPerTick, 1, MAX_VOXY_PREGEN_CHUNKS_PER_TICK);
       undergroundDepth = Mth.clamp(undergroundDepth, MIN_UNDERGROUND_DEPTH, MAX_UNDERGROUND_DEPTH);
+      distantHorizonsCityLightsDistance = Mth.clamp(distantHorizonsCityLightsDistance, DH_CITY_LIGHTS_UNLIMITED, MAX_DH_CITY_LIGHTS_DISTANCE);
       if (experimentalIncreaseHeight) {
          terrestrialHeightScale = 1.0;
          oceanicHeightScale = 1.0;
@@ -894,6 +910,7 @@ public record EarthGeneratorSettings(
       this.worldScaleAtSpawn = worldScaleAtSpawn;
       this.centerWorldOnSpawn = centerWorldOnSpawn;
       this.ecologicalUnderstory = ecologicalUnderstory;
+      this.distantHorizonsCityLightsDistance = distantHorizonsCityLightsDistance;
    }
 
    /**
@@ -1226,7 +1243,7 @@ public record EarthGeneratorSettings(
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, strategy, showOverlay, cavesReachSurface,
          this.undergroundDepth, this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1247,7 +1264,7 @@ public record EarthGeneratorSettings(
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, undergroundDepth, this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1266,7 +1283,7 @@ public record EarthGeneratorSettings(
          this.distantHorizonsRenderMode, this.demSelection, this.enableRoads, this.enableBuildings, this.enableWater,
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
-         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, customTrees, this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, customTrees, this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1286,7 +1303,7 @@ public record EarthGeneratorSettings(
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
-         this.automaticHeightScaling, hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.automaticHeightScaling, hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1306,7 +1323,7 @@ public record EarthGeneratorSettings(
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
-         this.automaticHeightScaling, this.hugeRedMushrooms, worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.automaticHeightScaling, this.hugeRedMushrooms, worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1326,7 +1343,7 @@ public record EarthGeneratorSettings(
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
-         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1346,7 +1363,7 @@ public record EarthGeneratorSettings(
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
-         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1366,7 +1383,7 @@ public record EarthGeneratorSettings(
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
-         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, centerWorldOnSpawn, this.ecologicalUnderstory
+         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1386,8 +1403,38 @@ public record EarthGeneratorSettings(
          this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
          this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
          this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
-         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, ecologicalUnderstory
+         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
+   }
+
+   private static EarthGeneratorSettings applyDistantHorizonsCityLightsDistance(EarthGeneratorSettings settings, Integer distanceChunks) {
+      return settings.withDistantHorizonsCityLightsDistance(Objects.requireNonNull(distanceChunks, "distantHorizonsCityLightsDistance"));
+   }
+
+   public EarthGeneratorSettings withDistantHorizonsCityLightsDistance(int distanceChunks) {
+      return new EarthGeneratorSettings(
+         this.worldScale, this.terrestrialHeightScale, this.oceanicHeightScale, this.heightOffset,
+         this.spawnLatitude, this.spawnLongitude, this.minAltitude, this.maxAltitude,
+         this.riverLakeShorelineBlend, this.oceanShorelineBlend, this.shorelineBlendCliffLimit, this.caveGeneration, this.oreDistribution, this.geologicalStonePatches, this.lavaPools,
+         this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
+         this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
+         this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
+         this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
+         this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
+         this.distantHorizonsRenderMode, this.demSelection, this.enableRoads, this.enableBuildings, this.enableWater,
+         this.thinShellTerrain, this.climateBasedBuiltUpTerrain, this.randomBiomes, this.randomBiomeDensity,
+         this.randomBiomeSeed, this.randomBiomeIds, this.experimentalIncreaseHeight, this.terrainStreamingStrategy,
+         this.showTerrainDownloadOverlay, this.cavesReachSurface, this.undergroundDepth, this.customTrees,
+         this.automaticHeightScaling, this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory,
+         distanceChunks
+      );
+   }
+
+   /** True when LOD city lights reach as far as Distant Horizons renders. */
+   public boolean distantHorizonsCityLightsUnlimited() {
+      return this.distantHorizonsCityLightsDistance == DH_CITY_LIGHTS_UNLIMITED;
    }
 
    private static EarthGeneratorSettings.SettingsBase applyVoxyChunkPregenEnabled(EarthGeneratorSettings.SettingsBase settings, Boolean enabled) {
@@ -1467,7 +1514,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1548,7 +1595,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1617,7 +1664,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1686,7 +1733,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1755,7 +1802,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1824,7 +1871,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1893,7 +1940,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -1962,7 +2009,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -2031,7 +2078,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -2100,7 +2147,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -2169,7 +2216,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -2238,7 +2285,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -2325,7 +2372,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -2429,7 +2476,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          this.automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -2498,7 +2545,7 @@ public record EarthGeneratorSettings(
          this.undergroundDepth,
          this.customTrees,
          automaticHeightScaling,
-         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory
+         this.hugeRedMushrooms, this.worldScaleAtSpawn, this.centerWorldOnSpawn, this.ecologicalUnderstory, this.distantHorizonsCityLightsDistance
       );
    }
 
@@ -3241,7 +3288,8 @@ public record EarthGeneratorSettings(
             EarthGeneratorSettings.DEFAULT.hugeRedMushrooms(),
             EarthGeneratorSettings.DEFAULT.worldScaleAtSpawn(),
             EarthGeneratorSettings.DEFAULT.centerWorldOnSpawn(),
-            EarthGeneratorSettings.DEFAULT.ecologicalUnderstory()
+            EarthGeneratorSettings.DEFAULT.ecologicalUnderstory(),
+            EarthGeneratorSettings.DEFAULT.distantHorizonsCityLightsDistance()
          );
       }
    }
