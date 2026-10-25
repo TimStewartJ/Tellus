@@ -133,6 +133,7 @@
   "tellus.experimental_increase_height.controls_disabled.tooltip": "Disabled because Increase Height controls altitude automatically.",
   "tellus.experimental_increase_height.runtime_disabled.tooltip": "Disabled until Minecraft is launched with %s.",
   "tellus.experimental_increase_height.validation_failed": "Increase Height cannot be saved until Minecraft is launched with %s.",
+  "tellus.experimental_increase_height.sable_disabled": "Unavailable while Sable is installed: Sable stores sub-levels outside the coordinate range Increase Height supports.",
   "property.tellus.dem_provider.value.auto": "Automatic",
   "property.tellus.dem_provider.value.terrarium": "Mapterhorn",
   "property.tellus.dem_provider.value.openwaters": "OpenWaters",

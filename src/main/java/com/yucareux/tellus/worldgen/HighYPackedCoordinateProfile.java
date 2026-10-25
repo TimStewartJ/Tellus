@@ -55,7 +55,10 @@ public final class HighYPackedCoordinateProfile {
    public static final int DIMENSION_Y_SIZE = DIMENSION_MAX_Y - DIMENSION_MIN_Y + 1;
 
    private static final String REQUESTED_PROFILE = System.getProperty(PROFILE_PROPERTY, PROFILE_ID).trim();
-   private static final boolean ENABLED = PROFILE_ID.equals(REQUESTED_PROFILE);
+   // Sable keeps sub-level plots at X/Z 20,480,000+, outside this profile. BlockPos initializes this class
+   // before NeoForge's ModList exists, so look for Sable's main class instead of asking the loader.
+   private static final boolean BLOCKED_BY_SABLE = hasSable(HighYPackedCoordinateProfile.class.getClassLoader());
+   private static final boolean ENABLED = PROFILE_ID.equals(REQUESTED_PROFILE) && !BLOCKED_BY_SABLE;
 
    static {
       validateAxisSizes(X_SIZE, Z_SIZE);
@@ -85,6 +88,14 @@ public final class HighYPackedCoordinateProfile {
 
    public static boolean isEnabled() {
       return ENABLED;
+   }
+
+   public static boolean isBlockedBySable() {
+      return BLOCKED_BY_SABLE;
+   }
+
+   static boolean hasSable(ClassLoader loader) {
+      return loader.getResource("dev/ryanhcode/sable/Sable.class") != null;
    }
 
    public static String requestedProfile() {

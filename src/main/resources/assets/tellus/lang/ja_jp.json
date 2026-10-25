@@ -133,6 +133,7 @@
   "tellus.experimental_increase_height.controls_disabled.tooltip": "「高さを拡張」が高度を自動制御するため、この設定は無効です。",
   "tellus.experimental_increase_height.runtime_disabled.tooltip": "%s を付けて Minecraft を起動するまで無効です。",
   "tellus.experimental_increase_height.validation_failed": "%s を付けて Minecraft を起動するまで、高さを拡張は保存できません。",
+  "tellus.experimental_increase_height.sable_disabled": "Sable がインストールされている間は使用できません。Sable はサブレベルを「高さを拡張」が対応する座標範囲の外に保存します。",
   "property.tellus.dem_provider.value.auto": "自動",
   "property.tellus.dem_provider.value.terrarium": "Mapterhorn",
   "property.tellus.dem_provider.value.openwaters": "OpenWaters",
