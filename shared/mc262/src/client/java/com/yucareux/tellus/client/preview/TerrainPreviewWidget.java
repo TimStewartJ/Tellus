@@ -1,6 +1,5 @@
 package com.yucareux.tellus.client.preview;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
@@ -200,7 +199,7 @@ public final class TerrainPreviewWidget extends AbstractWidget implements AutoCl
          this.lastInteractionTime = System.currentTimeMillis();
          return true;
       } else {
-         if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) {
+         if (event.button() == 0) {
             this.dragging = true;
             this.lastInteractionTime = System.currentTimeMillis();
          }
@@ -222,7 +221,7 @@ public final class TerrainPreviewWidget extends AbstractWidget implements AutoCl
          this.cloudButton.mouseClicked(event, doubleClick);
       } else if (this.infoPanelVisible && this.isMouseOverInfoPanel(event.x(), event.y())) {
          this.lastInteractionTime = System.currentTimeMillis();
-      } else if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) {
+      } else if (event.button() == 0) {
          this.dragging = true;
          this.lastInteractionTime = System.currentTimeMillis();
       }

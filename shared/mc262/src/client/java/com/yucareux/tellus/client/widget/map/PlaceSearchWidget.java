@@ -1,7 +1,6 @@
 package com.yucareux.tellus.client.widget.map;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.mojang.blaze3d.platform.InputConstants;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.world.data.source.Geocoder;
 import java.util.ArrayList;
@@ -94,7 +93,7 @@ public class PlaceSearchWidget extends EditBox {
    }
 
    public boolean mouseClicked( MouseButtonEvent event, boolean isPrimary) {
-      if (this.isVisible() && this.shouldShowSuggestions() && event.button() == InputConstants.MOUSE_BUTTON_LEFT) {
+      if (this.isVisible() && this.shouldShowSuggestions() && event.button() == 0) {
          for (Button button : this.suggestionButtons) {
             if (button.mouseClicked(event, isPrimary)) {
                return true;
@@ -126,7 +125,8 @@ public class PlaceSearchWidget extends EditBox {
          return false;
       } else {
          this.pause = false;
-         if (event.isConfirmation()) {
+         int key = event.key();
+         if (key == 257 || key == 335) {
             this.cancelPendingSuggest();
             this.clearSuggestions();
             this.handleAccept();

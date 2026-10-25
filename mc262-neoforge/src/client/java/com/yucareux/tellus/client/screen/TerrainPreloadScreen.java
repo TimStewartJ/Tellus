@@ -1,6 +1,5 @@
 package com.yucareux.tellus.client.screen;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import com.yucareux.tellus.client.widget.map.PlaceSearchWidget;
 import com.yucareux.tellus.client.widget.map.SlippyMap;
 import com.yucareux.tellus.client.widget.map.SlippyMapPoint;
@@ -802,12 +801,12 @@ public class TerrainPreloadScreen extends Screen {
             return false;
          }
 
-         if (button == InputConstants.MOUSE_BUTTON_RIGHT) {
+         if (button == 1) {
             this.centerConsumer.accept(mouse.getLatitude(), mouse.getLongitude());
             return true;
          }
 
-         if (button != InputConstants.MOUSE_BUTTON_LEFT) {
+         if (button != 0) {
             return false;
          }
 
