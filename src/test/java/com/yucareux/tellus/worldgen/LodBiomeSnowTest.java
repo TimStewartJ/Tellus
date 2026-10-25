@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
-import com.yucareux.tellus.compat.TestRegistries;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
 import com.yucareux.tellus.world.data.osm.OsmQueryMode;
 import java.lang.reflect.Field;
@@ -20,6 +19,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.data.registries.VanillaRegistries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.tags.BiomeTags;
@@ -54,7 +54,7 @@ class LodBiomeSnowTest {
       );
       SharedConstants.tryDetectVersion();
       Bootstrap.bootStrap();
-      biomes = TestRegistries.vanilla().lookupOrThrow(Registries.BIOME);
+      biomes = VanillaRegistries.createLookup().lookupOrThrow(Registries.BIOME);
       System.setProperty("tellus.gameDir", gameDirectory.toString());
       System.setProperty("tellus.configDir", gameDirectory.resolve("config").toString());
 

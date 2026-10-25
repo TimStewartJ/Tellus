@@ -25,12 +25,14 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.BiomeResolver;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.Biomes;
+import net.minecraft.world.level.biome.Climate.Sampler;
 
-public final class EarthBiomeSource extends EarthBiomeSourceBase {
+public final class EarthBiomeSource extends BiomeSource {
    public static final MapCodec<EarthBiomeSource> CODEC = RecordCodecBuilder.mapCodec(
       instance -> instance.group(
             RegistryOps.retrieveGetter(Registries.BIOME), EarthGeneratorSettings.CODEC.fieldOf("settings").forGetter(EarthBiomeSource::settings)
@@ -196,8 +198,7 @@ public final class EarthBiomeSource extends EarthBiomeSourceBase {
    }
 
    
-   @Override
-   Holder<Biome> resolveNoiseBiome(int x, int y, int z) {
+   public Holder<Biome> getNoiseBiome(int x, int y, int z,  Sampler sampler) {
       int blockX = QuartPos.toBlock(x);
       int blockY = QuartPos.toBlock(y);
       int blockZ = QuartPos.toBlock(z);
@@ -214,12 +215,12 @@ public final class EarthBiomeSource extends EarthBiomeSourceBase {
       QuartBiomeColumnCache<EarthBiomeSource.ResolvedBiomeColumn> columns = new QuartBiomeColumnCache<>(
          (quartX, quartZ) -> this.resolveBiomeColumn(QuartPos.toBlock(quartX), QuartPos.toBlock(quartZ), false)
       );
-      return resolver((quartX, quartY, quartZ) -> {
+      return (quartX, quartY, quartZ, sampler) -> {
          int blockX = QuartPos.toBlock(quartX);
          int blockY = QuartPos.toBlock(quartY);
          int blockZ = QuartPos.toBlock(quartZ);
          return this.resolveBiomeForColumn(columns.resolve(quartX, quartZ), blockX, blockY, blockZ);
-      });
+      };
    }
 
    /**
@@ -228,8 +229,14 @@ public final class EarthBiomeSource extends EarthBiomeSourceBase {
     * exact local terrain column and inspect every eligible biome quart instead.
     */
    @Override
-   Pair<BlockPos, Holder<Biome>> locateClosestBiome3d(
-      BlockPos origin, int radius, int horizontalInterval, Predicate<Holder<Biome>> predicate
+   public Pair<BlockPos, Holder<Biome>> findClosestBiome3d(
+      BlockPos origin,
+      int radius,
+      int horizontalInterval,
+      int verticalInterval,
+      Predicate<Holder<Biome>> predicate,
+      Sampler sampler,
+      LevelReader level
    ) {
       Objects.requireNonNull(origin, "origin");
       Objects.requireNonNull(predicate, "predicate");
