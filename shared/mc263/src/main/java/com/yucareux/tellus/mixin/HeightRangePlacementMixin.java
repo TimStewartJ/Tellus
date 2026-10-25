@@ -6,8 +6,6 @@ import com.yucareux.tellus.worldgen.OrePlacementDensityPolicy;
 import com.yucareux.tellus.worldgen.UndergroundFeatureClassifier;
 import com.yucareux.tellus.worldgen.UndergroundGenerationDepthPolicy;
 import com.yucareux.tellus.worldgen.caves.TellusCaveDepthMapper;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
@@ -98,9 +96,6 @@ public abstract class HeightRangePlacementMixin {
             earthGenerator, origin, GeologicalStonePlacementPolicy.BLOB_SURFACE_SAMPLE_RADIUS
          )
          : Integer.MAX_VALUE;
-      // Sample every height before emitting any position, as the 26.2 stream did: emitting places the
-      // feature at once, and interleaving that with the height samples would reorder the shared random stream.
-      List<BlockPos> positions = new ArrayList<>(sampleCount);
       for (int sample = 0; sample < sampleCount; sample++) {
          int virtualY = this.height.sample(random, vanillaContext);
          int actualY = TellusCaveDepthMapper.actualYForVirtualFeature(
@@ -115,10 +110,9 @@ public abstract class HeightRangePlacementMixin {
             && !earthGenerator.isUndergroundStructureFeaturePlacementBlocked(
                origin.getX(), actualY, origin.getZ()
             )) {
-            positions.add(origin.atY(actualY));
+            output.accept(origin.atY(actualY));
          }
       }
-      positions.forEach(output);
       callback.cancel();
    }
 
