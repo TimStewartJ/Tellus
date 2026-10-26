@@ -169,20 +169,19 @@ final class RiverAreaCourses {
          List<double[]> points = new ArrayList<>();
          double[] start = sourcePoints.get(s);
          if (start != null) points.add(start);
-         double[] end = null;
          int guard = n;
          while (guard-- > 0) {
             points.add(new double[]{raster.x(at % columns), raster.z(at / columns)});
             if (used[at]) break;
             used[at] = true;
             if (sink[at]) {
-               end = drainTo[at] != null ? drainTo[at] : cover[at] >= 0 ? nearestOn(covering.get(cover[at]), points.get(points.size() - 1)) : null;
+               double[] end = drainTo[at] != null ? drainTo[at] : cover[at] >= 0 ? nearestOn(covering.get(cover[at]), points.get(points.size() - 1)) : null;
+               if (end != null) points.add(end);
                break;
             }
             if (next[at] < 0) break;
             at = next[at];
          }
-         if (end != null) points.add(end);
          double[][] course = smooth(points, raster.cell);
          if (course[0].length >= 2) courses.add(course);
       }

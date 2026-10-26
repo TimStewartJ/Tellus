@@ -15,8 +15,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class LandmarkCatalogTest {
+   // Building a volume logs through Tellus.LOGGER, which initializes TellusCommon's registry keys.
+   private static final String FORGE_BOOTSTRAP = "Forge's raw JUnit bootstrap cannot initialize vanilla registries";
+
    private static final double TOWER_LAT = 48.858261;
    private static final double TOWER_LON = 2.294498;
    private static final String TOWER_BUILDING = "930b868b-1163-4f10-b7ee-d3e3bf82bf7a";
@@ -52,6 +56,7 @@ class LandmarkCatalogTest {
 
    @Test
    void scalesLikeTheMapAroundIt() {
+      assumeFalse(isMinecraftForge(), FORGE_BOOTSTRAP);
       double sec = EarthProjection.heightScaleCorrectionAtLatitude(TOWER_LAT);
       for (double scale : new double[]{5.0, 15.0}) {
          LandmarkPlacement placement = TellusLandmarks.create(scale, true, (x, z) -> 64).placements().get(0);
@@ -85,6 +90,7 @@ class LandmarkCatalogTest {
 
    @Test
    void standsInTheSeaAtItsRealHeight() {
+      assumeFalse(isMinecraftForge(), FORGE_BOOTSTRAP);
       double scale = 1.0;
       LandmarkPlacement placement = TellusLandmarks.create(scale, true, (x, z) -> 200).placements().stream()
          .filter(candidate -> candidate.id().equals("golden_gate_bridge")).findFirst().orElseThrow();
@@ -260,5 +266,14 @@ class LandmarkCatalogTest {
          new double[][]{{lon - side, lon + side, lon + side, lon - side, lon - side}},
          new double[][]{{lat - side, lat - side, lat + side, lat + side, lat - side}}
       );
+   }
+
+   private static boolean isMinecraftForge() {
+      try {
+         Class.forName("net.minecraftforge.fml.ModList", false, LandmarkCatalogTest.class.getClassLoader());
+         return true;
+      } catch (ClassNotFoundException ignored) {
+         return false;
+      }
    }
 }

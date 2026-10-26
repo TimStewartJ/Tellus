@@ -127,7 +127,6 @@ class RiverDataProbeTest {
             TellusOsmWaterSource.WaterQueryResult z = source.waterForAreaWithStatus(cx - radius, cz - radius, cx + radius, cz + radius,
                WorldProjection.global(scale), 0, OsmQueryMode.BLOCKING, 4096, (int)Math.floor(tileBlocks * 0.99));
             Map<OsmWaterKind, int[]> byKind = new EnumMap<>(OsmWaterKind.class);
-            double[] lengthByKind = new double[OsmWaterKind.values().length];
             int widthTags = 0;
             for (OsmWaterFeature f : z.features()) {
                int[] counts = byKind.computeIfAbsent(f.kind(), k -> new int[2]);

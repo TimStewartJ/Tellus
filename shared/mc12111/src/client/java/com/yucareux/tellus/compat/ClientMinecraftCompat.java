@@ -5,7 +5,6 @@ import com.mojang.blaze3d.platform.NativeImage;
 import java.util.Locale;
 import java.util.List;
 import java.util.function.Function;
-import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -109,10 +108,6 @@ public final class ClientMinecraftCompat {
 
    public static <T> Registry<T> registryOrThrow(Frozen access, ResourceKey<? extends Registry<? extends T>> key) {
       return access.lookupOrThrow(key);
-   }
-
-   public static KeyMapping.Category keyCategory(String translationKey) {
-      return KeyMapping.Category.register(Identifier.fromNamespaceAndPath("tellus", "controls"));
    }
 
    public static <T> CycleButton.Builder<T> cycleButtonBuilder(

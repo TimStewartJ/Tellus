@@ -16,6 +16,21 @@ ext.tellusSharedSourceDirs = { Collection<String> layers, String sourcePath ->
 subprojects {
 	group = rootProject.group
 	version = rootProject.version
+
+	// IDEs cannot evaluate the closure excludes that let one source layer override another,
+	// so every file Gradle skips becomes an explicit exclude on its Eclipse source folder.
+	pluginManager.withPlugin('eclipse') {
+		// Buildship applies eclipse before this script runs, and the classpath merger is replaced once Java is applied.
+		plugins.withType(JavaBasePlugin) {
+			eclipse.classpath.file.whenMerged { classpath ->
+				def compiled = sourceSets.collectMany { [it.java, it.resources] }.collectMany { it.files } as Set
+				classpath.entries.findAll { it instanceof org.gradle.plugins.ide.eclipse.model.SourceFolder && it.dir?.isDirectory() }.each { folder ->
+					def skipped = fileTree(folder.dir).files.findAll { !compiled.contains(it) }
+					folder.excludes = (folder.excludes + skipped.collect { folder.dir.toPath().relativize(it.toPath()).toString().replace('\\', '/') }).unique()
+				}
+			}
+		}
+	}
 }
 
 def tellusTargets = [

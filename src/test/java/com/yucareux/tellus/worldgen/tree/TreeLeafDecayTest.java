@@ -41,6 +41,7 @@ class TreeLeafDecayTest {
    private static Method decaying;
 
    @BeforeAll
+   @SuppressWarnings("deprecation") // Binding tags under plain JUnit needs each block's built-in holder.
    static void bootstrapMinecraft() throws Exception {
       assumeFalse(isMinecraftForge(), "Forge's raw JUnit bootstrap cannot initialize vanilla block registries");
       SharedConstants.tryDetectVersion();

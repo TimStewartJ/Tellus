@@ -36,6 +36,7 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.slf4j.Logger;
 
 public final class DistantHorizonsIntegration {
@@ -551,7 +552,7 @@ public final class DistantHorizonsIntegration {
     * illuminated LODs glow, so lit LOD windows (glowstone) and lamps would stay dull.
     */
    private static boolean isMisclassifiedLodLight(BlockState blockState) {
-      return blockState.is(Blocks.GLOWSTONE) || blockState.is(Blocks.REDSTONE_LAMP) && blockState.getLightEmission() > 0;
+      return blockState.is(Blocks.GLOWSTONE) || blockState.is(Blocks.REDSTONE_LAMP) && blockState.getValue(BlockStateProperties.LIT);
    }
 
    private static boolean isCorrectedLodLeafBlock(Block block) {

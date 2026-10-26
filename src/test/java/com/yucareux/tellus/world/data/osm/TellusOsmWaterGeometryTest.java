@@ -1,7 +1,8 @@
 package com.yucareux.tellus.world.data.osm;
 
-import com.yucareux.tellus.worldgen.ScanlinePolygonRasterizer;
 import com.yucareux.tellus.worldgen.WorldProjection;
+
+import com.yucareux.tellus.worldgen.ScanlinePolygonRasterizer;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile;
 import java.io.DataOutputStream;
 import java.io.InputStream;
@@ -9,7 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -76,21 +76,12 @@ class TellusOsmWaterGeometryTest {
       ocean.addValues(value("sea")).addValues(value("physical"));
       ocean.addFeatures(Tile.Feature.newBuilder().setId(2).setType(Tile.GeomType.POLYGON)
          .addAllTags(List.of(0, 2, 1, 3)).addAllGeometry(SQUARE));
-      OsmWaterTile tile = TellusOsmWaterSource.parseVectorTile(Tile.newBuilder().addLayers(ocean).build().toByteArray(), 2, 1, 1);
+      OsmWaterTile tile = TellusOsmWaterSource.parseVectorTile(Tile.newBuilder().addLayers(ocean).build().toByteArray(), 0, 0, 0);
 
       assertEquals(1, tile.features().size());
       assertEquals(2, tile.features().get(0).partCount());
-      // Use a z2 tile: a z0 square spans the projection seam, which world generation deliberately keeps dry.
-      assertWaterAt(tile, tileLatitude(2, 1, 0.5), tileLongitude(2, 1, 0.5), 5.0, false);
-      assertWaterAt(tile, tileLatitude(2, 1, 0.5), tileLongitude(2, 1, 0.125), 5.0, true);
-   }
-
-   private static double tileLongitude(int zoom, int tileX, double fraction) {
-      return (tileX + fraction) / (1 << zoom) * 360.0 - 180.0;
-   }
-
-   private static double tileLatitude(int zoom, int tileY, double fraction) {
-      return Math.toDegrees(Math.atan(Math.sinh(Math.PI * (1.0 - 2.0 * (tileY + fraction) / (1 << zoom)))));
+      assertWaterAt(tile, 0.0, 0.0, 5.0, false);
+      assertWaterAt(tile, 0.0, -135.0, 5.0, true);
    }
 
    @ParameterizedTest
@@ -104,14 +95,19 @@ class TellusOsmWaterGeometryTest {
    }
 
    @Test
-   @Disabled("Fails on upstream Tellus 0.8.4-pre1 (ba36c7e9) as well: its expectations predate upstream's river network rewrite.")
    void preservesPhysicalWaterfallPointsAsProtectionMarkers() {
       OsmWaterTile tile = parseFeature("waterfall", "physical", Tile.GeomType.POINT, List.of(9, 4096, 4096));
 
       assertEquals(1, tile.features().size());
       assertTrue(tile.features().get(0).waterfallMarker());
       assertFalse(tile.features().get(0).containsLonLat(0.0, 0.0));
-      assertTrue(parseFeature("waterfall", "physical", Tile.GeomType.POLYGON, SQUARE).isEmpty());
+
+      // Waterfall areas are kept for hydrology but never rasterized as water surfaces.
+      OsmWaterTile area = parseFeature("waterfall", "physical", Tile.GeomType.POLYGON, SQUARE);
+      assertEquals(1, area.features().size());
+      assertTrue(area.features().get(0).waterfall());
+      assertFalse(area.features().get(0).waterfallMarker());
+      assertFalse(area.features().get(0).containsLonLat(0.0, 0.0));
    }
 
    @Test
@@ -146,11 +142,10 @@ class TellusOsmWaterGeometryTest {
    }
 
    private static void assertWaterAt(OsmWaterTile tile, double latitude, double longitude, double scale, boolean expectedOcean) {
-      WorldProjection projection = WorldProjection.global(scale);
-      int x = (int)Math.round(projection.lonToBlockX(longitude));
-      int z = (int)Math.round(projection.latToBlockZ(latitude));
+      int x = (int)Math.round(longitude * WorldProjection.global(scale).equatorialBlocksPerDegree());
+      int z = (int)Math.round(WorldProjection.global(scale).latToBlockZ(latitude));
       boolean previewWater = tile.features().stream().anyMatch(feature -> feature.containsLonLat(longitude, latitude));
-      boolean lodOcean = tile.features().stream().anyMatch(feature -> feature.oceanHint() && feature.containsBlock(x, z, projection));
+      boolean lodOcean = tile.features().stream().anyMatch(feature -> feature.oceanHint() && feature.containsBlock(x, z, WorldProjection.global(scale)));
       boolean[] rasterWater = {false};
       for (OsmWaterFeature feature : tile.features()) {
          if (feature.lineGeometry() || feature.pointGeometry()) {
@@ -162,8 +157,8 @@ class TellusOsmWaterGeometryTest {
             xs[part] = new double[feature.pointCount(part)];
             zs[part] = new double[feature.pointCount(part)];
             for (int point = 0; point < feature.pointCount(part); point++) {
-               xs[part][point] = projection.lonToBlockX(feature.lonAt(part, point));
-               zs[part][point] = projection.latToBlockZ(feature.latAt(part, point));
+               xs[part][point] = feature.lonAt(part, point) * WorldProjection.global(scale).equatorialBlocksPerDegree();
+               zs[part][point] = WorldProjection.global(scale).latToBlockZ(feature.latAt(part, point));
             }
          }
          ScanlinePolygonRasterizer.fill(xs, zs, x, z, x, z, (worldX, worldZ) -> rasterWater[0] = true);

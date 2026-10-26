@@ -33,6 +33,7 @@ ext.tellus = [
 	overriddenSharedClientResources: ['tellus.client.mixins.json'],
 	overriddenInheritedClientSources: [
 		'com/yucareux/tellus/network/TellusNeoForgeClientNetworking.java',
+		'com/yucareux/tellus/platform/NeoForgeClientVersionCompat.java',
 	],
 	overriddenInheritedMainResources: ['META-INF/neoforge.mods.toml'],
 ]

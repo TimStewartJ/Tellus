@@ -15,6 +15,7 @@
 		"MinecraftServerInitialSpawnMixin",
 		"OceanMonumentBuildingMixin",
 		"OceanMonumentStructureMixin",
+		"ServerMainNewWorldHeightMixin",
 		"WaterSourceConversionMixin"
 	],
 	"injectors": {

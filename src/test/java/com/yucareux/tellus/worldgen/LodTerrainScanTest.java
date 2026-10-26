@@ -4,7 +4,6 @@ import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
 import com.yucareux.tellus.integration.distant_horizons.LodTerrainMetrics;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
-import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;

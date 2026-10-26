@@ -105,6 +105,10 @@ configurations {
 }
 
 dependencies {
+	// Unimined puts Minecraft on the source set classpath directly; IDE importers only read the classpath configurations.
+	compileOnly files(configurations.minecraft, configurations.minecraftLibraries)
+	testCompileOnly files(configurations.testMinecraft, configurations.testMinecraftLibraries)
+
 	shade 'org.tukaani:xz:1.10'
 	shade('io.github.sebasbaumh:mapbox-vector-tile-java:23.2.0') {
 		exclude group: 'org.slf4j', module: 'slf4j-api'
@@ -160,8 +164,6 @@ tasks.named('test').configure {
 	exclude '**/TellusBuildingStylesTest.class'
 	exclude '**/TellusEmptyBeardifierTest.class'
 	exclude '**/TellusVanillaNoiseCaveSamplerTest.class'
-	exclude '**/TellusResolveSourceWarpTest.class'
-	exclude '**/LandmarkCatalogTest.class'
 }
 
 java {

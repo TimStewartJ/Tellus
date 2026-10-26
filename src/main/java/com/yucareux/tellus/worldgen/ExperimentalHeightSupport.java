@@ -27,6 +27,10 @@ public final class ExperimentalHeightSupport {
       return HighYPackedCoordinateProfile.launchPropertyInstruction();
    }
 
+   public static boolean isBlockedBySable() {
+      return HighYPackedCoordinateProfile.isBlockedBySable();
+   }
+
    public static void validateActiveRuntimeProfileOrThrow() {
       if (!HighYPackedCoordinateProfile.isEnabled()) {
          return;
@@ -203,7 +207,9 @@ public final class ExperimentalHeightSupport {
    }
 
    private static void validateRuntimeProfile(List<String> failures) {
-      if (!HighYPackedCoordinateProfile.isEnabled()) {
+      if (HighYPackedCoordinateProfile.isBlockedBySable()) {
+         failures.add("Sable stores sub-levels outside the dense packed-coordinate profile; remove Sable to use Increase Height");
+      } else if (!HighYPackedCoordinateProfile.isEnabled()) {
          String requested = HighYPackedCoordinateProfile.requestedProfile();
          failures.add(
             "launch with "

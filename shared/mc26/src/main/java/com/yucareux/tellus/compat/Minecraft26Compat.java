@@ -3,18 +3,24 @@ package com.yucareux.tellus.compat;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.HighYPackedCoordinateProfile;
 import com.yucareux.tellus.worldgen.RandomBiomeCatalog;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
+import net.minecraft.core.LayeredRegistryAccess;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.RegistryLayer;
+import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Util;
@@ -33,6 +39,11 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.dimension.LevelStem;
+import net.minecraft.world.level.levelgen.WorldDimensions;
+import net.minecraft.world.level.levelgen.WorldGenSettings;
+import net.minecraft.world.level.storage.LevelDataAndDimensions;
+import net.minecraft.world.level.storage.WorldData;
 
 /** Minecraft APIs shared by the 26.2 and 26.3 overlays. */
 public abstract class Minecraft26Compat {
@@ -151,6 +162,23 @@ public abstract class Minecraft26Compat {
 
    public static <T> Registry<T> registry(RegistryAccess access, ResourceKey<? extends Registry<? extends T>> key) {
       return access.lookupOrThrow(key);
+   }
+
+   public static WorldData worldData(WorldStem stem) {
+      return stem.worldDataAndGenSettings().data();
+   }
+
+   public static WorldStem withRegistries(WorldStem stem, LayeredRegistryAccess<RegistryLayer> registries, UnaryOperator<LevelStem> levelStems) {
+      // World gen settings are saved on their own with their own level stems.
+      WorldGenSettings genSettings = stem.worldDataAndGenSettings().genSettings();
+      Map<ResourceKey<LevelStem>, LevelStem> dimensions = new LinkedHashMap<>();
+      genSettings.dimensions().dimensions().forEach((key, levelStem) -> dimensions.put(key, levelStems.apply(levelStem)));
+      return new WorldStem(
+         stem.resourceManager(),
+         stem.dataPackResources(),
+         registries,
+         new LevelDataAndDimensions.WorldDataAndGenSettings(worldData(stem), new WorldGenSettings(genSettings.options(), new WorldDimensions(dimensions)))
+      );
    }
 
    public static <T> T registryValue(Registry<T> registry, ResourceKey<T> key) {

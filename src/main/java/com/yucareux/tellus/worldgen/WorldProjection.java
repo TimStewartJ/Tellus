@@ -104,7 +104,8 @@ public final class WorldProjection {
     * Such a segment must be split or skipped rather than rasterized across the whole world.
     */
    public boolean crossesWorldSeam(double firstBlockX, double secondBlockX) {
-      return this.worldScale > 0.0 && Math.abs(secondBlockX - firstBlockX) > this.worldWidthBlocks() * 0.5;
+      // A global layout never wraps longitude, so a long edge (a world-wide ocean tile) is real geometry.
+      return this.centered && this.worldScale > 0.0 && Math.abs(secondBlockX - firstBlockX) > this.worldWidthBlocks() * 0.5;
    }
 
    public boolean containsHorizontalBlock(double blockX, double blockZ) {

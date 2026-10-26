@@ -56,8 +56,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       OceanFloorProfile.MAX_TRANSITION_BLOCKS
    );
    private static final int INLAND_SHORE_BANK_RAMP_MAX_SLOPE = 2;
-   // Planned bank carving fades out over this many blocks inside the protected coastal band.
-   private static final int INLAND_BANK_MAX_RISE_PER_BLOCK = 1;
    private static final int RIVER_MAX_DEPTH = intProperty("tellus.water.riverMaxDepth", 6, 1, 16);
    private static final int RIVER_DEPTH_DISTANCE_STEP = intProperty("tellus.water.riverDepthDistanceStep", 4, 1, 16);
    private static final int FLOW_CONTEXT_BLOCKS = intProperty("tellus.water.flowContextBlocks", 192, 64, 512);
@@ -1494,7 +1492,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                   oceanHintMask,
                   landMaskLand,
                   lineWaterMask,
-                  areaWaterMask,
                   flowingWaterMask,
                   waterBodyKeys,
                   waterBodySurfaceHints,
@@ -1686,7 +1683,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          rebuildWaterAndLandMasks(waterMask, landMask, oceanComponentMask, inlandWaterMask, directRiverWaterMask, gridArea);
          rebuildWaterMask(shapedWaterMask, oceanComponentMask, inlandWaterMask, gridArea);
          if (this.repairRejectedInlandWaterCells(
-            inlandWaterMask, terraceWaterMask, waterSurface, surfaceHeights, componentIds, components, componentCount
+            inlandWaterMask, terraceWaterMask, waterSurface, surfaceHeights
          )) {
             rebuildWaterAndLandMasks(waterMask, landMask, oceanComponentMask, inlandWaterMask, directRiverWaterMask, gridArea);
             rebuildWaterMask(shapedWaterMask, oceanComponentMask, inlandWaterMask, gridArea);
@@ -1700,7 +1697,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          this.computeWeightedDistance(waterDistanceCost, inlandWaterMask, shoreWater, gridSize, maxDistanceBlocks, DIST_COST_CARDINAL);
          int maxDistanceCost = maxDistanceBlocks * DIST_COST_CARDINAL;
          if (this.repairRejectedInlandWaterCells(
-            inlandWaterMask, terraceWaterMask, waterSurface, surfaceHeights, componentIds, components, componentCount
+            inlandWaterMask, terraceWaterMask, waterSurface, surfaceHeights
          )) {
             rebuildWaterAndLandMasks(waterMask, landMask, oceanComponentMask, inlandWaterMask, directRiverWaterMask, gridArea);
             rebuildWaterMask(shapedWaterMask, oceanComponentMask, inlandWaterMask, gridArea);
@@ -1774,10 +1771,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                   terrainSurface[indexxxxx] = directLineRiverTerrainSurface(waterSurface[indexxxxx]);
                } else if (inlandWaterMask[indexxxxx]) {
                waterFlags[indexxxxx] = WATER_INLAND;
-               int componentId = componentIds[indexxxxx];
-               WaterSurfaceResolver.ComponentData componentx = componentId >= 0 && componentId < componentCount
-                  ? components[componentId]
-                  : null;
                if (waterfallProtectionMask[indexxxxx]) {
                   int floor = surfaceHeights[indexxxxx];
                   int maxFloor = waterSurface[indexxxxx] - OCEAN_MIN_DEPTH;
@@ -1958,7 +1951,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       boolean[] oceanHintMask,
       boolean[] landMaskLand,
       boolean[] lineWaterMask,
-      boolean[] areaWaterMask,
       boolean[] flowingWaterMask,
       long[] waterBodyKeys,
       int[] waterBodySurfaceHints,
@@ -1966,10 +1958,9 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       int[] componentIds
    ) {
       IntArrayList cells = new IntArrayList();
-      IntArrayList areaWaterCells = new IntArrayList();
       IntArrayList borderHeights = new IntArrayList();
       WaterSurfaceResolver.ComponentData component = new WaterSurfaceResolver.ComponentData(
-         componentId, cells, areaWaterCells, borderHeights
+         cells, borderHeights
       );
       cells.add(startIndex);
       componentIds[startIndex] = componentId;
@@ -2007,9 +1998,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
 
          if (lineWaterMask[index]) {
             component.lineWaterCellCount++;
-         }
-         if (areaWaterMask[index]) {
-            areaWaterCells.add(index);
          }
          if (flowingWaterMask[index]) {
             component.flowingWaterCellCount++;
@@ -2273,12 +2261,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
    private long stableLakeSurfaceKey(long waterBodyKey) {
       return waterBodyKey ^ this.regionSalt ^ -4417276706812531889L;
    }
-
-	   private boolean shouldRejectWaterCell(WaterSurfaceResolver.ComponentData component, int rawSurface, int waterSurface) {
-	      return component.riverShape
-	         ? shouldRejectRiverWaterCell(rawSurface, waterSurface, RIVER_MAX_TERRAIN_CUT)
-	         : shouldRejectLakeWaterCell(rawSurface, waterSurface, LAKE_MAX_TERRAIN_CUT);
-	   }
 
    static boolean shouldRejectLakeWaterCell(int rawSurface, int waterSurface, int maxTerrainCut) {
       return rawSurface - waterSurface > maxTerrainCut;
@@ -3290,17 +3272,12 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
 	      boolean[] inlandWaterMask,
 	      boolean[] riverWaterMask,
 	      int[] waterSurface,
-      int[] surfaceHeights,
-      int[] componentIds,
-      WaterSurfaceResolver.ComponentData[] components,
-      int componentCount
+      int[] surfaceHeights
    ) {
       boolean maskChanged = false;
 
 	      for (int index = 0; index < inlandWaterMask.length; index++) {
 	         if (inlandWaterMask[index]) {
-	            int componentId = componentIds[index];
-	            WaterSurfaceResolver.ComponentData component = componentId >= 0 && componentId < componentCount ? components[componentId] : null;
 	            if (riverWaterMask != null && riverWaterMask[index]
                   && shouldRejectRiverWaterCell(surfaceHeights[index], waterSurface[index], RIVER_MAX_TERRAIN_CUT)) {
 	               waterSurface[index] = repairRejectedRiverWaterSurface(waterSurface[index], surfaceHeights[index], RIVER_MAX_TERRAIN_CUT);
@@ -3509,82 +3486,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       int shallowFloor = waterSurface - rampDepth;
       int rampedFloor = Math.max(terrainFloor, shallowFloor);
       return Math.min(rampedFloor, waterSurface - OCEAN_MIN_DEPTH);
-   }
-
-   private void applyShorelineBlend(
-      int[] terrainSurface,
-      int[] baseSurface,
-      int[] waterSurface,
-      boolean[] waterMask,
-      boolean[] landMask,
-      boolean[] cliffLandMask,
-      int gridSize,
-      int blendDistance
-   ) {
-      if (blendDistance > 0) {
-         int gridArea = gridSize * gridSize;
-         WaterSurfaceResolver.RegionScratch scratch = activeScratch();
-         int[] landDistanceCost = scratch.landDistanceCost;
-         int[] nearestSurface = scratch.nearestSurface;
-         boolean[] landSource = scratch.landSource;
-         boolean[] blendLandMask = scratch.blendLandMask;
-         Arrays.fill(landSource, 0, gridArea, false);
-
-         for (int index = 0; index < gridArea; index++) {
-            blendLandMask[index] = landMask[index];
-         }
-
-         IntArrayList shoreLand = scratch.shoreLand;
-         shoreLand.clear();
-
-         for (int index = 0; index < gridArea; index++) {
-            if (waterMask[index]) {
-               int x = index % gridSize;
-               int z = index / gridSize;
-               int sourceSurface = waterSurface[index];
-
-               for (int n = 0; n < NEIGHBOR_OFFSETS.length; n += 2) {
-                  int nx = x + NEIGHBOR_OFFSETS[n];
-                  int nz = z + NEIGHBOR_OFFSETS[n + 1];
-                  if (nx >= 0 && nz >= 0 && nx < gridSize && nz < gridSize) {
-                     int neighbor = nz * gridSize + nx;
-                     if (blendLandMask[neighbor] && !landSource[neighbor]) {
-                        landSource[neighbor] = true;
-                        nearestSurface[neighbor] = sourceSurface;
-                        shoreLand.add(neighbor);
-                     }
-                  }
-               }
-            }
-         }
-
-         if (!shoreLand.isEmpty()) {
-            this.computeWeightedDistanceWithSurface(
-               landDistanceCost, nearestSurface, blendLandMask, shoreLand, gridSize, blendDistance, DIST_COST_CARDINAL
-            );
-            int maxBlendCost = blendDistance * DIST_COST_CARDINAL;
-
-            for (int indexx = 0; indexx < gridArea; indexx++) {
-               if (blendLandMask[indexx]) {
-                  int distanceCost = landDistanceCost[indexx];
-                  if (distanceCost != Integer.MAX_VALUE && distanceCost <= maxBlendCost) {
-                     int sourceSurface = nearestSurface[indexx];
-                     int base = baseSurface[indexx];
-                     int naturalized = naturalizedInlandBankSurface(
-                        base,
-                        sourceSurface,
-                        distanceCost,
-                        blendDistance,
-                        this.settings.shorelineBlendCliffLimit()
-                     );
-                     if (naturalized < terrainSurface[indexx]) {
-                        terrainSurface[indexx] = naturalized;
-                     }
-                  }
-               }
-            }
-         }
-      }
    }
 
    private void applyAdaptiveShorelineBlend(
@@ -4299,9 +4200,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
    }
 
    private static final class ComponentData {
-      private final int id;
       private final IntArrayList cells;
-      private final IntArrayList areaWaterCells;
       private final IntArrayList borderHeights;
       private int minX = Integer.MAX_VALUE;
       private int maxX = Integer.MIN_VALUE;
@@ -4325,10 +4224,8 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       private final IntArrayList surfaceHints = new IntArrayList();
       private int lastSurfaceHint = Integer.MIN_VALUE;
 
-      private ComponentData(int id, IntArrayList cells, IntArrayList areaWaterCells, IntArrayList borderHeights) {
-         this.id = id;
+      private ComponentData(IntArrayList cells, IntArrayList borderHeights) {
          this.cells = cells;
-         this.areaWaterCells = areaWaterCells;
          this.borderHeights = borderHeights;
       }
 
@@ -4475,7 +4372,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
       private int[] adaptiveBlendRadius;
       private int[] adaptiveRemainingInfluence;
       private int[] adaptiveSourceRadius;
-      private boolean[] landSource;
       private final IntArrayList shoreWater = new IntArrayList();
       private final IntArrayList shoreLand = new IntArrayList();
       private final IntArrayList flowCells = new IntArrayList();
@@ -4530,7 +4426,6 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
             this.adaptiveBlendRadius = new int[size];
             this.adaptiveRemainingInfluence = new int[size];
             this.adaptiveSourceRadius = new int[size];
-            this.landSource = new boolean[size];
          }
       }
 

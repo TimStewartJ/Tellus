@@ -1,9 +1,12 @@
 package com.yucareux.tellus.worldgen;
 
+import java.net.URL;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HighYPackedCoordinateBoundaryTest {
    @Test
@@ -30,6 +33,19 @@ class HighYPackedCoordinateBoundaryTest {
          IllegalArgumentException.class,
          () -> HighYPackedCoordinateProfile.pack(0, HighYPackedCoordinateProfile.Y_MIN - 1, 0)
       );
+   }
+
+   @Test
+   void detectsSableFromItsMainClass() {
+      assertFalse(HighYPackedCoordinateProfile.isBlockedBySable());
+
+      ClassLoader withSable = new ClassLoader(null) {
+         @Override
+         protected URL findResource(String name) {
+            return name.equals("dev/ryanhcode/sable/Sable.class") ? HighYPackedCoordinateProfile.class.getResource("HighYPackedCoordinateProfile.class") : null;
+         }
+      };
+      assertTrue(HighYPackedCoordinateProfile.hasSable(withSable));
    }
 
    private static void assertClamped(int x, int y, int z, int expectedX, int expectedY, int expectedZ) {

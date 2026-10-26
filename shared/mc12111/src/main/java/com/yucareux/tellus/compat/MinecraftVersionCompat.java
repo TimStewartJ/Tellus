@@ -9,13 +9,17 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderSet;
+import net.minecraft.core.LayeredRegistryAccess;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.RegistryLayer;
+import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
@@ -37,9 +41,11 @@ import net.minecraft.world.level.chunk.CarvingMask;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ProtoChunk;
 import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.Beardifier;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
+import net.minecraft.world.level.storage.WorldData;
 
 /** Narrow compatibility seam for Minecraft 1.21.11's transitional APIs. */
 public final class MinecraftVersionCompat {
@@ -170,6 +176,15 @@ public final class MinecraftVersionCompat {
 
    public static <T> Registry<T> registry(RegistryAccess access, ResourceKey<? extends Registry<? extends T>> key) {
       return access.lookupOrThrow(key);
+   }
+
+   public static WorldData worldData(WorldStem stem) {
+      return stem.worldData();
+   }
+
+   // Level stems are saved from the registries in this release, so only the registries change.
+   public static WorldStem withRegistries(WorldStem stem, LayeredRegistryAccess<RegistryLayer> registries, UnaryOperator<LevelStem> levelStems) {
+      return new WorldStem(stem.resourceManager(), stem.dataPackResources(), registries, stem.worldData());
    }
 
    public static <T> T registryValue(Registry<T> registry, ResourceKey<T> key) {

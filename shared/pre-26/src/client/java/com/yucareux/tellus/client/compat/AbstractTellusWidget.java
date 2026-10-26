@@ -42,7 +42,7 @@ public abstract class AbstractTellusWidget extends AbstractWidget {
    }
 
    protected void tellusOnClick(double mouseX, double mouseY) {
-      super.onClick(mouseX, mouseY);
+      // AbstractWidget.onClick is empty on every target of this layer, and NeoForge 1.21.1 deprecates calling it.
    }
 
    @Override

@@ -66,7 +66,7 @@ class TellusBuildingInteriorRenderingTest {
       }
       EarthGeneratorSettings settings = EarthGeneratorSettings.class.getDeclaredConstructor(types).newInstance(values);
       assertEquals(1.0, settings.worldScale());
-      try (var ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+      try (@SuppressWarnings("unused") var ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          generator = new EarthChunkGenerator(new FixedBiomeSource(biome), settings);
       }
       Class<?> featureType = Class.forName(EarthChunkGenerator.class.getName() + "$PreparedBuildingFeature");

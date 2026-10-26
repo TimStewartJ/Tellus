@@ -2,7 +2,6 @@ package com.yucareux.tellus;
 
 import com.yucareux.tellus.client.hud.ManagedTerrainDownloadOverlay;
 import com.yucareux.tellus.client.screen.EarthTeleportScreen;
-import com.yucareux.tellus.compat.ClientMinecraftCompat;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainClientState;
 import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainViewDistance;
 import com.yucareux.tellus.network.GeoTpOpenMapPayload;
@@ -11,6 +10,7 @@ import com.yucareux.tellus.network.ManagedTerrainStatusPayload;
 import com.yucareux.tellus.network.ManagedTerrainViewPayload;
 import com.yucareux.tellus.network.TellusNeoForgeClientNetworking;
 import com.yucareux.tellus.network.TellusWeatherPayload;
+import com.yucareux.tellus.platform.NeoForgeClientVersionCompat;
 import com.yucareux.tellus.platform.TellusClientPlatform;
 import com.yucareux.tellus.world.realtime.SnowGrid;
 import com.yucareux.tellus.world.realtime.TemperatureGrid;
@@ -33,7 +33,7 @@ public final class TellusClient {
       "key.tellus.open_map",
       InputConstants.Type.KEYSYM,
       GLFW.GLFW_KEY_M,
-      ClientMinecraftCompat.keyCategory("key.category.tellus.controls")
+      NeoForgeClientVersionCompat.keyCategory()
    );
    private static int managedTerrainViewUpdateTicks;
 
@@ -52,6 +52,7 @@ public final class TellusClient {
    }
 
    private static void registerKeyMappings(RegisterKeyMappingsEvent event) {
+      NeoForgeClientVersionCompat.registerKeyCategory(event);
       event.register(OPEN_MAP_KEY);
    }
 

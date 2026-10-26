@@ -1,14 +1,13 @@
 package com.yucareux.tellus.worldgen;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
-@Disabled("Fails on upstream Tellus 0.8.4-pre1 (ba36c7e9) as well: its expectations predate upstream's river network rewrite.")
 class PreviewWaterFlowResolverTest {
    private static final InlandWaterFlowAnalyzer.Parameters FLOW_PARAMETERS = new InlandWaterFlowAnalyzer.Parameters(
       4,
@@ -22,43 +21,43 @@ class PreviewWaterFlowResolverTest {
    );
 
    @Test
-   void flowingPreviewWaterUsesHydroFlatReachAndRealBedDepth() {
+   void flowingPreviewWaterHasARealBedAndNeverRisesDownstream() {
       int size = 9;
       PreviewGrid grid = flowingRow(size, new int[]{18, 18, 17, 16, 14, 12, 10});
 
       PreviewWaterFlowResolver.Result result = resolve(grid, FLOW_PARAMETERS);
 
-      int upstream = index(size, 1, 4);
-      int downstream = index(size, 7, 4);
-      assertTrue(result.inlandWater()[upstream]);
-      assertTrue(result.inlandWater()[downstream]);
-      assertEquals(result.waterSurface()[upstream], result.waterSurface()[downstream]);
-      assertTrue(result.terrainSurface()[upstream] < result.waterSurface()[upstream]);
-      assertTrue(result.terrainSurface()[downstream] < result.waterSurface()[downstream]);
+      for (int x = 1; x <= 7; x++) {
+         int cell = index(size, x, 4);
+         assertTrue(result.inlandWater()[cell]);
+         assertTrue(result.terrainSurface()[cell] < result.waterSurface()[cell]);
+         if (x < 7) {
+            assertTrue(result.waterSurface()[cell] >= result.waterSurface()[index(size, x + 1, 4)]);
+         }
+      }
    }
 
    @Test
-   void previewTurnsMajorDemDropIntoVisibleWaterfallColumn() {
+   void majorDemDropStaysWetInsteadOfLeavingAFluidDrop() {
       int size = 9;
       PreviewGrid grid = flowingRow(size, new int[]{30, 30, 30, 10, 10, 10, 10});
 
       PreviewWaterFlowResolver.Result result = resolve(grid, FLOW_PARAMETERS);
 
-      boolean foundDrop = false;
       for (int x = 1; x <= 7; x++) {
          int cell = index(size, x, 4);
-         if (result.waterfallDrop()[cell]) {
-            foundDrop = true;
-            assertFalse(result.inlandWater()[cell]);
-            assertTrue(result.waterSurface()[cell] > result.terrainSurface()[cell]);
-            assertTrue(result.waterfallProtection()[cell]);
-         }
+         assertTrue(result.inlandWater()[cell]);
+         assertFalse(result.waterfallDrop()[cell]);
       }
-      assertTrue(foundDrop);
+      int top = index(size, 3, 4);
+      int bottom = index(size, 4, 4);
+      assertTrue(result.waterSurface()[top] > result.waterSurface()[bottom]);
+      // The upper bed reaches below the lower pool, so the step is a column of water.
+      assertTrue(result.terrainSurface()[top] < result.waterSurface()[bottom]);
    }
 
    @Test
-   void previewPreservesCliffWhenOnlyUpperPlateauTouchesGridBoundary() {
+   void previewKeepsUpperPlateauWhenOnlyItTouchesGridBoundary() {
       int size = 15;
       int area = size * size;
       int[] terrain = new int[area];
@@ -87,94 +86,27 @@ class PreviewWaterFlowResolverTest {
       int downstreamSurface = result.waterSurface()[index(size, 7, 9)];
       assertTrue(upstreamSurface > downstreamSurface);
       for (int x = 5; x <= 9; x++) {
-         int dropCell = index(size, x, 6);
-         assertTrue(result.waterfallDrop()[dropCell]);
-         assertFalse(result.inlandWater()[dropCell]);
-         assertEquals(upstreamSurface, result.waterSurface()[dropCell]);
-         assertTrue(result.waterSurface()[dropCell] > result.terrainSurface()[dropCell]);
+         int edge = index(size, x, 5);
+         int below = index(size, x, 6);
+         assertFalse(result.waterfallDrop()[edge]);
+         assertFalse(result.waterfallDrop()[below]);
+         assertTrue(result.terrainSurface()[edge] < result.waterSurface()[below]);
       }
    }
 
    @Test
-   void previewPreservesMapterhornSmoothedWaterfallRamp() {
-      int size = 41;
-      int area = size * size;
-      int[] terrain = new int[area];
-      Arrays.fill(terrain, 300);
-      boolean[] inland = new boolean[area];
-      boolean[] line = new boolean[area];
-      boolean[] polygon = new boolean[area];
-      boolean[] flowing = new boolean[area];
-      for (int z = 2; z <= 38; z++) {
-         int height;
-         if (z <= 9) {
-            height = 274;
-         } else if (z >= 30) {
-            height = 202;
-         } else {
-            height = 274 - (int)Math.round((z - 9) * 72.0 / 21.0);
-         }
-         for (int x = 18; x <= 22; x++) {
-            int cell = index(size, x, z);
-            terrain[cell] = height;
-            inland[cell] = true;
-            line[cell] = true;
-            polygon[cell] = true;
-            flowing[cell] = true;
-         }
-      }
-      PreviewGrid grid = new PreviewGrid(
-         size, terrain, inland, new boolean[area], line, polygon, flowing, new int[area]
-      );
-
-      PreviewWaterFlowResolver.Result result = resolve(grid, FLOW_PARAMETERS, 4);
-
-      assertEquals(274, result.waterSurface()[index(size, 20, 5)]);
-      assertEquals(202, result.waterSurface()[index(size, 20, 35)]);
-      int dropCells = 0;
-      for (int z = 2; z <= 38; z++) {
-         int cell = index(size, 20, z);
-         if (result.waterfallDrop()[cell]) {
-            dropCells++;
-            assertFalse(result.inlandWater()[cell]);
-            assertTrue(result.waterSurface()[cell] >= result.terrainSurface()[cell]);
-         }
-      }
-      assertTrue(dropCells >= 12);
-   }
-
-   @Test
-   void previewSeverelyFlattensOverBudgetPolygonRidge() {
+   void previewCarvesOverBudgetRidgeOnlyWithinTheCutBudget() {
       int size = 9;
       PreviewGrid grid = flowingRow(size, new int[]{16, 15, 30, 14, 13, 12, 10});
+      InlandWaterFlowAnalyzer.Parameters parameters = new InlandWaterFlowAnalyzer.Parameters(4, 12, 24, 30, 12, 6, 48, 4);
 
-      PreviewWaterFlowResolver.Result result = resolve(
-         grid,
-         new InlandWaterFlowAnalyzer.Parameters(4, 12, 24, 30, 12, 6, 48, 4)
-      );
+      PreviewWaterFlowResolver.Result result = resolve(grid, parameters);
 
       int ridge = index(size, 3, 4);
       assertTrue(result.inlandWater()[ridge]);
       assertFalse(result.waterfallDrop()[ridge]);
-      assertEquals(result.waterSurface()[index(size, 2, 4)], result.waterSurface()[ridge]);
-      assertTrue(result.terrainSurface()[ridge] < 30);
-   }
-
-   @Test
-   void previewHydroFlattensABracketedDemHump() {
-      int size = 9;
-      PreviewGrid grid = flowingRow(size, new int[]{20, 20, 28, 28, 20, 19, 19});
-
-      PreviewWaterFlowResolver.Result result = resolve(grid, FLOW_PARAMETERS);
-
-      int firstHumpCell = index(size, 3, 4);
-      int secondHumpCell = index(size, 4, 4);
-      int downstreamReturn = index(size, 5, 4);
-      assertTrue(result.inlandWater()[firstHumpCell]);
-      assertTrue(result.inlandWater()[secondHumpCell]);
-      assertEquals(result.waterSurface()[index(size, 2, 4)], result.waterSurface()[firstHumpCell]);
-      assertEquals(result.waterSurface()[firstHumpCell], result.waterSurface()[secondHumpCell]);
-      assertFalse(result.waterfallProtection()[downstreamReturn]);
+      assertTrue(30 - result.waterSurface()[ridge] <= parameters.maxHydroFlattenCut());
+      assertTrue(result.terrainSurface()[ridge] < result.waterSurface()[ridge]);
    }
 
    @Test
@@ -189,17 +121,16 @@ class PreviewWaterFlowResolverTest {
 
       for (int x = 1; x < 11; x++) {
          int cell = index(size, x, 4);
-         int neighbor = index(size, x + 1, 4);
+         int next = index(size, x + 1, 4);
          assertTrue(result.inlandWater()[cell]);
-         if (result.inlandWater()[cell] && result.inlandWater()[neighbor]) {
-            assertEquals(result.waterSurface()[cell], result.waterSurface()[neighbor]);
-         }
          assertFalse(result.waterfallDrop()[cell]);
+         int step = result.waterSurface()[cell] - result.waterSurface()[next];
+         assertTrue(step >= 0 && step <= 1, "Expected a small downhill step at x=" + x + ", got " + step);
       }
    }
 
    @Test
-   void correctedLakeIsFlatAndOnlyThenNaturalizesNearbyBank() {
+   void correctedLakeIsFlatAndNaturalizesNearbyBank() {
       int size = 9;
       int area = size * size;
       int[] terrain = new int[area];
@@ -224,68 +155,23 @@ class PreviewWaterFlowResolverTest {
          }
       }
       assertTrue(correctedResult.terrainSurface()[index(size, 2, 4)] < 22);
-
-      int[] flatTerrain = new int[area];
-      Arrays.fill(flatTerrain, 22);
-      for (int z = 3; z <= 5; z++) {
-         for (int x = 3; x <= 5; x++) {
-            flatTerrain[index(size, x, z)] = 20;
-         }
-      }
-      PreviewGrid supported = new PreviewGrid(size, flatTerrain, inland, empty, empty, inland, empty, new int[area]);
-      PreviewWaterFlowResolver.Result supportedResult = resolve(supported, FLOW_PARAMETERS);
-      assertEquals(22, supportedResult.terrainSurface()[index(size, 2, 4)]);
    }
 
    @Test
-   void lineOnlyRiverFollowsDemWithoutHydroFlattening() {
+   void lineOnlyRiverIsCarvedLikeAMappedRiver() {
       int size = 9;
-      PreviewGrid grid = flowingLineOnlyRow(size, new int[]{28, 24, 20, 16, 12, 8, 4});
+      int[] heights = {28, 24, 20, 16, 12, 8, 4};
 
-      PreviewWaterFlowResolver.Result result = resolve(grid, FLOW_PARAMETERS);
+      PreviewWaterFlowResolver.Result lineOnly = resolve(flowingLineOnlyRow(size, heights), FLOW_PARAMETERS);
+      PreviewWaterFlowResolver.Result mapped = resolve(flowingRow(size, heights), FLOW_PARAMETERS);
 
+      assertArrayEquals(mapped.waterSurface(), lineOnly.waterSurface());
+      assertArrayEquals(mapped.terrainSurface(), lineOnly.terrainSurface());
       for (int x = 1; x <= 7; x++) {
          int cell = index(size, x, 4);
-         assertTrue(result.inlandWater()[cell]);
-         assertEquals(grid.terrain()[cell], result.waterSurface()[cell]);
-         assertEquals(grid.terrain()[cell] - 1, result.terrainSurface()[cell]);
-         assertFalse(result.waterfallDrop()[cell]);
-      }
-   }
-
-   @Test
-   void lineStartsFlatteningOnlyWhereItOverlapsPolygon() {
-      int size = 11;
-      int area = size * size;
-      int[] terrain = new int[area];
-      Arrays.fill(terrain, 40);
-      boolean[] inland = new boolean[area];
-      boolean[] line = new boolean[area];
-      boolean[] polygon = new boolean[area];
-      boolean[] flowing = new boolean[area];
-      for (int x = 1; x <= 9; x++) {
-         int cell = index(size, x, 5);
-         terrain[cell] = 30 - x;
-         inland[cell] = true;
-         line[cell] = true;
-         flowing[cell] = true;
-         if (x >= 5) {
-            polygon[cell] = true;
-         }
-      }
-      PreviewGrid grid = new PreviewGrid(
-         size, terrain, inland, new boolean[area], line, polygon, flowing, new int[area]
-      );
-
-      PreviewWaterFlowResolver.Result result = resolve(grid, FLOW_PARAMETERS);
-
-      for (int x = 1; x < 5; x++) {
-         int cell = index(size, x, 5);
-         assertEquals(terrain[cell], result.waterSurface()[cell]);
-      }
-      int polygonSurface = result.waterSurface()[index(size, 5, 5)];
-      for (int x = 5; x <= 9; x++) {
-         assertEquals(polygonSurface, result.waterSurface()[index(size, x, 5)]);
+         assertTrue(lineOnly.inlandWater()[cell]);
+         assertFalse(lineOnly.waterfallDrop()[cell]);
+         assertTrue(lineOnly.terrainSurface()[cell] < lineOnly.waterSurface()[cell]);
       }
    }
 
@@ -327,7 +213,8 @@ class PreviewWaterFlowResolverTest {
       for (int x = 5; x <= 7; x++) {
          int cell = index(size, x, 6);
          assertEquals(terrain[cell], result.waterSurface()[cell]);
-         assertEquals(terrain[cell] - 1, result.terrainSurface()[cell]);
+         // Beds under the falls connect down to the lower water instead of leaving dry steps.
+         assertTrue(result.terrainSurface()[cell] < result.waterSurface()[cell]);
          assertFalse(result.waterfallDrop()[cell]);
          assertTrue(result.waterfallProtection()[cell]);
       }
@@ -337,12 +224,10 @@ class PreviewWaterFlowResolverTest {
 
       int upstreamHump = index(size, 2, 6);
       assertTrue(result.terrainSurface()[upstreamHump] < terrain[upstreamHump]);
-      assertEquals(result.waterSurface()[index(size, 1, 6)], result.waterSurface()[upstreamHump]);
       assertFalse(result.waterfallProtection()[upstreamHump]);
 
       int downstreamHump = index(size, 9, 6);
       assertTrue(result.terrainSurface()[downstreamHump] < terrain[downstreamHump]);
-      assertEquals(result.waterSurface()[index(size, 8, 6)], result.waterSurface()[downstreamHump]);
       assertFalse(result.waterfallProtection()[downstreamHump]);
    }
 

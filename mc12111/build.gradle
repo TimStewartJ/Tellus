@@ -24,6 +24,9 @@ ext.tellus = [
 	overriddenInheritedMainSources: [
 		'com/yucareux/tellus/platform/FabricNetworkingVersionCompat.java',
 	],
+	overriddenInheritedClientSources: [
+		'com/yucareux/tellus/platform/FabricClientVersionCompat.java',
+	],
 	overriddenSharedClientSources: [
 		'com/yucareux/tellus/client/compat/AbstractTellusEditBox.java',
 		'com/yucareux/tellus/client/compat/AbstractTellusScreen.java',

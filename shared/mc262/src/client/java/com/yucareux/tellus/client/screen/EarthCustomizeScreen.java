@@ -59,7 +59,6 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.server.packs.repository.KnownPack;
 import net.minecraft.util.Mth;
-import net.minecraft.util.Util;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;

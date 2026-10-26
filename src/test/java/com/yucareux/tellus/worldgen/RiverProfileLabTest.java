@@ -4,7 +4,6 @@ import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
 import com.yucareux.tellus.world.data.osm.OsmQueryMode;
 import com.yucareux.tellus.world.data.osm.OsmWaterFeature;
-import com.yucareux.tellus.world.data.osm.OsmWaterKind;
 import com.yucareux.tellus.world.data.osm.TellusOsmWaterSource;
 import java.awt.BasicStroke;
 import java.awt.Color;

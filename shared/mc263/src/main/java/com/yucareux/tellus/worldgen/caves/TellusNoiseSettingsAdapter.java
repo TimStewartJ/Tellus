@@ -11,7 +11,6 @@ public final class TellusNoiseSettingsAdapter {
 
    public static Holder<NoiseGeneratorSettings> adaptToTellusHeight(Holder<NoiseGeneratorSettings> baseHolder, int tellusMinY, int tellusHeight, int seaLevel) {
       NoiseGeneratorSettings base = (NoiseGeneratorSettings)baseHolder.value();
-      NoiseSettings baseNoise = base.noiseSettings();
       NoiseSettings adaptedNoise = NoiseSettings.create(tellusMinY, tellusHeight);
       int maxY = tellusMinY + tellusHeight - 1;
       int adaptedSeaLevel = Mth.clamp(seaLevel, tellusMinY, maxY);

@@ -25,10 +25,9 @@ public final class Tellus extends TellusCommon {
       return MinecraftRelease.resourceLocation("tellus", path);
    }
 
-   @SuppressWarnings("deprecation")
-   public Tellus() {
+   public Tellus(FMLJavaModLoadingContext context) {
       TellusCommon.validateRuntime();
-      IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+      IEventBus modEventBus = context.getModEventBus();
       modEventBus.addListener(Tellus::registerBuiltinRegistries);
       TellusForgeNetworking.registerMessages();
       if (FMLEnvironment.dist == Dist.CLIENT) {

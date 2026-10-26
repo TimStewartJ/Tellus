@@ -56,6 +56,7 @@ class LodBiomeSnowTest {
    private static Field tagsField;
 
    @BeforeAll
+   @SuppressWarnings("deprecation") // Binding tags under plain JUnit needs each block's built-in holder.
    static void bootstrapMinecraft() throws Exception {
       previousGameDir = System.getProperty("tellus.gameDir");
       previousConfigDir = System.getProperty("tellus.configDir");
@@ -208,7 +209,7 @@ class LodBiomeSnowTest {
 
    @Test
    void nearbySnowAndVisualBlendingCannotSnowOverBareOrMissingTerrain() {
-      try (ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+      try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.SNOWY_TAIGA);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
          generator.setLodShorelineOverrideSuppressed(true);
@@ -232,7 +233,7 @@ class LodBiomeSnowTest {
       selectPalette.setAccessible(true);
       var profilerConstructor = selectPalette.getParameterTypes()[9].getDeclaredConstructor();
       profilerConstructor.setAccessible(true);
-      try (ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+      try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          for (ResourceKey<Biome> biomeKey : List.of(Biomes.SNOWY_TAIGA, Biomes.GROVE, Biomes.SNOWY_PLAINS)) {
             Holder<Biome> biome = biomes.getOrThrow(biomeKey);
             EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
@@ -265,7 +266,7 @@ class LodBiomeSnowTest {
       var profilerConstructor = selectPalette.getParameterTypes()[9].getDeclaredConstructor();
       profilerConstructor.setAccessible(true);
       Set<Block> scree = Set.of(Blocks.GRAVEL, Blocks.ANDESITE, Blocks.DIORITE, Blocks.COBBLESTONE);
-      try (ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+      try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.MEADOW);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
          generator.setLodShorelineOverrideSuppressed(true);
@@ -311,7 +312,7 @@ class LodBiomeSnowTest {
    void deepSnowGateForFullChunksAndRefinementRequiresALocalSource() throws Exception {
       Method snowGate = EarthChunkGenerator.class.getDeclaredMethod("shouldRetainSurfaceSnow", int.class, int.class, int.class);
       snowGate.setAccessible(true);
-      try (ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+      try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.SNOWY_TAIGA);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
          generator.setLodShorelineOverrideSuppressed(true);
@@ -342,8 +343,8 @@ class LodBiomeSnowTest {
    @Test
    void steepFrozenPeaksKeepDeepslateExposedInBothLodPaths() throws Exception {
       try (
-         ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
-         TerrainSlopeFixture terrain = new TerrainSlopeFixture(TellusWorldgenSources.elevation(), 30.0, 70.0)
+         @SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
+         @SuppressWarnings("unused") TerrainSlopeFixture terrain = new TerrainSlopeFixture(TellusWorldgenSources.elevation(), 30.0, 70.0)
       ) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.FROZEN_PEAKS);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
@@ -360,8 +361,8 @@ class LodBiomeSnowTest {
    @Test
    void partialSnowCoverageInFrozenPeaksMatchesThePreviewSlopeMask() throws Exception {
       try (
-         ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
-         TerrainSlopeFixture terrain = new TerrainSlopeFixture(TellusWorldgenSources.elevation(), 30.0, 52.0)
+         @SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
+         @SuppressWarnings("unused") TerrainSlopeFixture terrain = new TerrainSlopeFixture(TellusWorldgenSources.elevation(), 30.0, 52.0)
       ) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.FROZEN_PEAKS);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
@@ -397,8 +398,8 @@ class LodBiomeSnowTest {
    @Test
    void gentleFrozenPeaksRemainSnowCovered() throws Exception {
       try (
-         ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
-         TerrainSlopeFixture terrain = new TerrainSlopeFixture(TellusWorldgenSources.elevation(), 30.0, 30.0)
+         @SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
+         @SuppressWarnings("unused") TerrainSlopeFixture terrain = new TerrainSlopeFixture(TellusWorldgenSources.elevation(), 30.0, 30.0)
       ) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.FROZEN_PEAKS);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
@@ -425,8 +426,8 @@ class LodBiomeSnowTest {
       int[] lodSnow = new int[faces.length];
       for (int face = 0; face < faces.length; face++) {
          try (
-            ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
-            TiltedTerrainFixture terrain = new TiltedTerrainFixture(
+            @SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly();
+            @SuppressWarnings("unused") TiltedTerrainFixture terrain = new TiltedTerrainFixture(
                TellusWorldgenSources.elevation(), scale, 46.0, 7.75, 52.0, faces[face], lodResolution
             )
          ) {
@@ -482,7 +483,7 @@ class LodBiomeSnowTest {
    }
 
    private static ResourceKey<Biome> classifyAt(double longitude, double latitude, String climate, int coverClass) {
-      try (ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+      try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          EarthGeneratorSettings settings = EarthGeneratorSettings.DEFAULT;
          int blockX = (int)Math.round(longitude * WorldProjection.global(settings.worldScale()).equatorialBlocksPerDegree());
          int blockZ = (int)Math.round(WorldProjection.global(settings.worldScale()).latToBlockZ(latitude));
@@ -527,7 +528,7 @@ class LodBiomeSnowTest {
    ) {
       // Exercise the actual surface resolvers with supplied terrain inputs. Cache-only
       // mode prevents DEM/OSM fallback reads from requesting live map data.
-      try (ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+      try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          Holder<Biome> biome = biomes.getOrThrow(biomeKey);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), settings);
          generator.setLodShorelineOverrideSuppressed(true);

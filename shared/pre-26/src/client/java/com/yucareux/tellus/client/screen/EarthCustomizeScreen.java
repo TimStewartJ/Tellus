@@ -1431,18 +1431,22 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
 
    private static Component experimentalHeightRuntimeDisabledTooltip() {
       return Objects.requireNonNull(
-         Component.translatable("tellus.experimental_increase_height.runtime_disabled.tooltip", ExperimentalHeightSupport.launchPropertyInstruction())
-            .withStyle(ChatFormatting.GRAY),
+         experimentalHeightUnavailable("tellus.experimental_increase_height.runtime_disabled.tooltip").withStyle(ChatFormatting.GRAY),
          "experimentalHeightRuntimeDisabledTooltip"
       );
    }
 
    private static Component experimentalHeightValidationFailedTooltip() {
       return Objects.requireNonNull(
-         Component.translatable("tellus.experimental_increase_height.validation_failed", ExperimentalHeightSupport.launchPropertyInstruction())
-            .withStyle(ChatFormatting.RED),
+         experimentalHeightUnavailable("tellus.experimental_increase_height.validation_failed").withStyle(ChatFormatting.RED),
          "experimentalHeightValidationFailedTooltip"
       );
+   }
+
+   private static MutableComponent experimentalHeightUnavailable(String launchPropertyKey) {
+      return ExperimentalHeightSupport.isBlockedBySable()
+         ? Component.translatable("tellus.experimental_increase_height.sable_disabled")
+         : Component.translatable(launchPropertyKey, ExperimentalHeightSupport.launchPropertyInstruction());
    }
 
    private static String describeDimensionType(DimensionType type) {

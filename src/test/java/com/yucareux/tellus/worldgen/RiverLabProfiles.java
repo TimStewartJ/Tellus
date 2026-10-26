@@ -122,7 +122,6 @@ final class RiverLabProfiles {
          distance[start] = 0.0;
          stamp[start] = epoch;
          push(start);
-         boolean[] done = null;
          while (heapSize > 0) {
             int c = pop();
             if (stamp[c] == -epoch) continue;
