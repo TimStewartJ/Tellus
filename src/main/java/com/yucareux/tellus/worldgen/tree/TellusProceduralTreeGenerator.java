@@ -6,6 +6,7 @@ import com.yucareux.tellus.world.data.resolve.ResolveBiome;
 import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.ResolveRealm;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -45,6 +46,8 @@ public final class TellusProceduralTreeGenerator {
    private static final int BUSH_HEIGHT = 3;
    private static final int BUSH_CROWN_RADIUS = 2;
    public static final int PLACEMENT_CELL_SIZE = 9;
+   /** The widest crown any profile plans, which bounds how far a tree's canopy reaches from its anchor. */
+   public static final int MAX_CROWN_RADIUS = Arrays.stream(Profile.values()).mapToInt(Profile::maximumCrownRadius).max().orElse(0);
    private static final int NORTHERN_CALIFORNIA_COASTAL_FORESTS_ID = 359;
    private static final int ICELAND_BOREAL_BIRCH_FORESTS_ID = 711;
    private static final int SCANDINAVIAN_MONTANE_BIRCH_FORESTS_ID = 780;

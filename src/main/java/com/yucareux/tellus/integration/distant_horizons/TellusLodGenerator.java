@@ -82,6 +82,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Holder;
 import net.minecraft.core.SectionPos;
@@ -4554,59 +4555,63 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          return null;
       } else {
          boolean useFullDetailAnchors = !profile.isMangrove();
-         int gridSize = useFullDetailAnchors
-            ? TellusProceduralTreeGenerator.PLACEMENT_CELL_SIZE
-            : canopyGridSize(cellSize);
-         int cellX = Math.floorDiv(worldX, gridSize);
-         int cellZ = Math.floorDiv(worldZ, gridSize);
          int bestDist = Integer.MAX_VALUE;
          int bestRadius = 0;
          int bestHash = 0;
          int bestCenterX = 0;
          int bestCenterZ = 0;
          long bestSeed = 0L;
-         long bestDistanceSquared = Long.MAX_VALUE;
          boolean bestCenter = false;
 
-         int scanRadius = useFullDetailAnchors ? 2 : 1;
-         for (int dz = -scanRadius; dz <= scanRadius; dz++) {
-            int testCellZ = cellZ + dz;
+         if (useFullDetailAnchors) {
+            TellusLodGenerator.AnchoredCrown crown = anchoredCrown(
+               worldX,
+               worldZ,
+               cellSize,
+               worldSeed,
+               anchor -> requestCache.growsTree(anchor, profile, treeAnchorResolutionMeters(cellSize, worldScale, previewResolutionMeters))
+                  ? requestCache.treePlan(
+                     anchor.worldX(),
+                     anchor.worldZ(),
+                     worldScale,
+                     anchor.seed(),
+                     biomeHolder,
+                     requestCache.canopy(anchor.worldX(), anchor.worldZ(), worldScale, previewResolutionMeters)
+                  )
+                  : null
+            );
+            if (crown != null) {
+               bestDist = crown.distance();
+               bestCenterX = crown.anchor().worldX();
+               bestCenterZ = crown.anchor().worldZ();
+               bestSeed = crown.anchor().seed();
+               bestCenter = crown.center();
+            }
+         } else {
+            int gridSize = canopyGridSize(cellSize);
+            int cellX = Math.floorDiv(worldX, gridSize);
+            int cellZ = Math.floorDiv(worldZ, gridSize);
+            for (int dz = -1; dz <= 1; dz++) {
+               int testCellZ = cellZ + dz;
 
-            for (int dx = -scanRadius; dx <= scanRadius; dx++) {
-               int testCellX = cellX + dx;
-               int centerHash = mixHash(testCellX, testCellZ, 1831565813);
-               if (useFullDetailAnchors) {
-                  TellusProceduralTreeGenerator.TreeAnchor anchor =
-                     TellusProceduralTreeGenerator.anchorForCell(testCellX, testCellZ, worldSeed);
-                  int offsetX = worldX - anchor.worldX();
-                  int offsetZ = worldZ - anchor.worldZ();
-                  long distanceSquared = (long)offsetX * offsetX + (long)offsetZ * offsetZ;
-                  if (distanceSquared < bestDistanceSquared) {
-                     double centerDistance = Math.sqrt(distanceSquared);
-                     int cellPadding = Math.max(0, cellSize - 1) / 2;
-                     bestDist = Math.max(0, (int)Math.round(centerDistance) - cellPadding);
-                     bestRadius = 12;
-                     bestHash = centerHash;
-                     bestCenterX = anchor.worldX();
-                     bestCenterZ = anchor.worldZ();
-                     bestSeed = anchor.seed();
-                     bestDistanceSquared = distanceSquared;
-                     bestCenter = Math.abs(offsetX) <= cellPadding && Math.abs(offsetZ) <= cellPadding;
-                  }
-               } else if (hasCanopyCenter(centerHash, chance)) {
-                  int offsetX = centerOffset(centerHash, gridSize);
-                  int offsetZ = centerOffset(centerHash >>> 8, gridSize);
-                  int centerX = testCellX * gridSize + offsetX;
-                  int centerZ = testCellZ * gridSize + offsetZ;
-                  int dist = Math.abs(worldX - centerX) + Math.abs(worldZ - centerZ);
-                  int radius = canopyRadius(profile, centerHash, gridSize);
-                  if (dist <= radius && dist < bestDist) {
-                     bestDist = dist;
-                     bestRadius = radius;
-                     bestHash = centerHash;
-                     bestCenterX = centerX;
-                     bestCenterZ = centerZ;
-                     bestCenter = dist == 0;
+               for (int dx = -1; dx <= 1; dx++) {
+                  int testCellX = cellX + dx;
+                  int centerHash = mixHash(testCellX, testCellZ, 1831565813);
+                  if (hasCanopyCenter(centerHash, chance)) {
+                     int offsetX = centerOffset(centerHash, gridSize);
+                     int offsetZ = centerOffset(centerHash >>> 8, gridSize);
+                     int centerX = testCellX * gridSize + offsetX;
+                     int centerZ = testCellZ * gridSize + offsetZ;
+                     int dist = Math.abs(worldX - centerX) + Math.abs(worldZ - centerZ);
+                     int radius = canopyRadius(profile, centerHash, gridSize);
+                     if (dist <= radius && dist < bestDist) {
+                        bestDist = dist;
+                        bestRadius = radius;
+                        bestHash = centerHash;
+                        bestCenterX = centerX;
+                        bestCenterZ = centerZ;
+                        bestCenter = dist == 0;
+                     }
                   }
                }
             }
@@ -4697,6 +4702,56 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             }
          }
       }
+   }
+
+   /**
+    * Picks the full-detail tree anchor whose crown a LOD column shows. Full-detail crowns overlap, so a column
+    * narrower than the tree spacing shows the tallest crown over it; handing each column to its nearest anchor cut
+    * tall crowns off where the next anchor began and left them as thin pillars. Wider columns span several trees
+    * and keep sampling the nearest one, which also keeps distant LODs from planning every tree around them.
+    * {@code plans} returns null for an anchor that grows no tree at full detail.
+    */
+   static TellusLodGenerator.AnchoredCrown anchoredCrown(
+      int worldX,
+      int worldZ,
+      int cellSize,
+      long worldSeed,
+      Function<TellusProceduralTreeGenerator.TreeAnchor, TellusProceduralTreeGenerator.TreePlan> plans
+   ) {
+      int cellX = Math.floorDiv(worldX, TellusProceduralTreeGenerator.PLACEMENT_CELL_SIZE);
+      int cellZ = Math.floorDiv(worldZ, TellusProceduralTreeGenerator.PLACEMENT_CELL_SIZE);
+      int cellPadding = Math.max(0, cellSize - 1) / 2;
+      boolean tallestCrown = cellSize < TellusProceduralTreeGenerator.PLACEMENT_CELL_SIZE;
+      TellusLodGenerator.AnchoredCrown best = null;
+      long bestRank = Long.MAX_VALUE;
+      for (int dz = -2; dz <= 2; dz++) {
+         for (int dx = -2; dx <= 2; dx++) {
+            TellusProceduralTreeGenerator.TreeAnchor anchor =
+               TellusProceduralTreeGenerator.anchorForCell(cellX + dx, cellZ + dz, worldSeed);
+            int offsetX = worldX - anchor.worldX();
+            int offsetZ = worldZ - anchor.worldZ();
+            long distanceSquared = (long)offsetX * offsetX + (long)offsetZ * offsetZ;
+            int distance = Math.max(0, (int)Math.round(Math.sqrt(distanceSquared)) - cellPadding);
+            boolean center = Math.abs(offsetX) <= cellPadding && Math.abs(offsetZ) <= cellPadding;
+            long rank = distanceSquared;
+            if (tallestCrown) {
+               TellusProceduralTreeGenerator.TreePlan plan = distance <= TellusProceduralTreeGenerator.MAX_CROWN_RADIUS
+                  ? plans.apply(anchor)
+                  : null;
+               if (plan == null || !plan.present() || distance > plan.crownRadius()) {
+                  continue;
+               }
+               // Ranked by the crown top this column draws: the trunk under the anchor, lifted leaves elsewhere.
+               TellusLodGenerator.DataCanopyDimensions dimensions = dataCanopyDimensions(plan, distance);
+               rank = -((center ? dimensions.trunkHeight() : dimensions.leafLift()) + dimensions.crownHeight());
+            }
+            if (rank < bestRank) {
+               bestRank = rank;
+               best = new TellusLodGenerator.AnchoredCrown(anchor, distance, center);
+            }
+         }
+      }
+      return best;
    }
 
    /**
@@ -5797,6 +5852,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       }
    }
 
+   record AnchoredCrown(TellusProceduralTreeGenerator.TreeAnchor anchor, int distance, boolean center) {
+   }
+
    private static final class CanopyRequestCache {
       private final EarthChunkGenerator generator;
       private final WorldProjection projection;
@@ -5808,6 +5866,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       private final Map<Long, Integer> treeFootprintSurfaces = new HashMap<>();
       private final Map<Long, Integer> vegetationCoverClasses = new HashMap<>();
       private final Map<Long, Holder<Biome>> vegetationBiomes = new HashMap<>();
+      private final Map<Long, Integer> treeAnchorCovers = new HashMap<>();
 
       private CanopyRequestCache(EarthChunkGenerator generator) {
          this.generator = Objects.requireNonNull(generator, "generator");
@@ -5844,6 +5903,25 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             );
             return TellusProceduralTreeGenerator.plan(biome, ecoregion, canopy, treeSeed);
          });
+      }
+
+      /**
+       * Whether full-detail generation grows a tree at this anchor, which it decides from the blended land cover
+       * there. Judging only by the column's own cover let open ground beside a forest float crowns over its edge.
+       */
+      private boolean growsTree(
+         TellusProceduralTreeGenerator.TreeAnchor anchor, TellusLodGenerator.CanopyProfile profile, double resolutionMeters
+      ) {
+         int coverClass = this.treeAnchorCovers.computeIfAbsent(packHorizontal(anchor.worldX(), anchor.worldZ()), ignored -> {
+            int rawCoverClass = this.generator.sampleCoverClass(anchor.worldX(), anchor.worldZ(), resolutionMeters);
+            return MountainSurfaceRules.resolveSurfaceCoverClass(
+               rawCoverClass,
+               this.generator.sampleVisualCoverClass(anchor.worldX(), anchor.worldZ(), rawCoverClass, resolutionMeters)
+            );
+         });
+         return shouldAllowCanopy(
+            this.generator.settings(), coverClass, profile, anchor.worldX(), anchor.worldZ(), false, false, this.generator.worldSeed()
+         );
       }
 
       private int treeAnchorSurface(int worldX, int worldZ, double resolutionMeters) {
