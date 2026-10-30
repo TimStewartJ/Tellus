@@ -421,7 +421,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          int cellOffset = cellSize >> 1;
          EarthGeneratorSettings settings = this.generator.settings();
          double previewResolutionMeters = lodPreviewResolutionMeters(settings, cellSize);
-         boolean baseDetailedWater = settings.distantHorizonsWaterResolver() && detailLevel <= 5;
+         boolean baseDetailedWater = detailLevel <= 5;
          TellusRealtimeState.PrecipitationMode precipitationMode = TellusRealtimeState.precipitationMode();
          boolean snowActive = TellusRealtimeState.isWeatherEnabled() && precipitationMode == TellusRealtimeState.PrecipitationMode.SNOW
             || TellusRealtimeState.isHistoricalSnowEnabled();
@@ -1318,8 +1318,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       double previewResolutionMeters = lodPreviewResolutionMeters(settings, cellSize);
       boolean roadsActive = this.shouldRenderDhRoads(detail);
       boolean buildingsActive = this.shouldRenderDhBuildings(detail);
-      boolean baseDetailedWater = settings.distantHorizonsWaterResolver()
-         && detailLevel <= 5
+      boolean baseDetailedWater = detailLevel <= 5
          && settings.distantHorizonsRenderMode() != EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST;
       boolean allowWaterVegetation = detail <= LOD_WATER_VEGETATION_MAX_DETAIL;
       IDhApiBlockStateWrapper[] vegetationBlocks = allowWaterVegetation && LodUnderwaterVegetation.enabled() ? underwaterVegetationBlocks(wrappers) : null;

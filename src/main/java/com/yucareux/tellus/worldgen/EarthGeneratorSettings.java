@@ -51,7 +51,6 @@ public record EarthGeneratorSettings(
    boolean addTrailRuins,
    boolean deepDark,
    boolean geodes,
-   boolean distantHorizonsWaterResolver,
    boolean distantHorizonsOsmFeatures,
    int distantHorizonsOsmRoadMaxDetail,
    int distantHorizonsOsmBuildingMaxDetail,
@@ -151,7 +150,6 @@ public record EarthGeneratorSettings(
       false,
       false,
       false,
-      true,
       FIXED_DH_OSM_FEATURES,
       FIXED_DH_OSM_ROAD_MAX_DETAIL,
       FIXED_DH_OSM_BUILDING_MAX_DETAIL,
@@ -308,9 +306,6 @@ public record EarthGeneratorSettings(
          }
       }
    );
-   private static final MapCodec<Boolean> DISTANT_HORIZONS_WATER_RESOLVER_CODEC = Codec.BOOL
-      .fieldOf("distant_horizons_water_resolver")
-      .orElse(DEFAULT.distantHorizonsWaterResolver());
    private static final MapCodec<Boolean> DISTANT_HORIZONS_OSM_FEATURES_CODEC = Codec.BOOL
       .fieldOf("distant_horizons_osm_features")
       .orElse(DEFAULT.distantHorizonsOsmFeatures());
@@ -423,7 +418,6 @@ public record EarthGeneratorSettings(
             RecordBuilder<T> builder = EarthGeneratorSettings.BASE_CODEC.encode(EarthGeneratorSettings.SettingsBase.fromSettings(input), ops, prefix);
             builder = EarthGeneratorSettings.DISTANT_HORIZONS_RENDER_MODE_CODEC.encode(input.distantHorizonsRenderMode(), ops, builder);
             builder = EarthGeneratorSettings.DEM_SELECTION_CODEC.encode(input.demSelection(), ops, builder);
-            builder = EarthGeneratorSettings.DISTANT_HORIZONS_WATER_RESOLVER_CODEC.encode(input.distantHorizonsWaterResolver(), ops, builder);
             builder = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_FEATURES_CODEC.encode(input.distantHorizonsOsmFeatures(), ops, builder);
             builder = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.encode(input.distantHorizonsOsmRoadMaxDetail(), ops, builder);
             builder = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.encode(input.distantHorizonsOsmBuildingMaxDetail(), ops, builder);
@@ -466,7 +460,6 @@ public record EarthGeneratorSettings(
             Stream<T> baseKeys = EarthGeneratorSettings.BASE_CODEC.keys(ops);
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_RENDER_MODE_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DEM_SELECTION_CODEC.keys(ops));
-            baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_WATER_RESOLVER_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_FEATURES_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.keys(ops));
@@ -509,7 +502,6 @@ public record EarthGeneratorSettings(
             DataResult<EarthGeneratorSettings.DistantHorizonsRenderMode> distantHorizonsRenderMode = EarthGeneratorSettings.DISTANT_HORIZONS_RENDER_MODE_CODEC
                .decode(ops, input);
             DataResult<EarthGeneratorSettings.DemSelection> demSelection = EarthGeneratorSettings.DEM_SELECTION_CODEC.decode(ops, input);
-            DataResult<Boolean> distantHorizonsWaterResolver = EarthGeneratorSettings.DISTANT_HORIZONS_WATER_RESOLVER_CODEC.decode(ops, input);
             DataResult<Boolean> distantHorizonsOsmFeatures = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_FEATURES_CODEC.decode(ops, input);
             DataResult<Integer> distantHorizonsOsmRoadMaxDetail = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.decode(ops, input);
             DataResult<Integer> distantHorizonsOsmBuildingMaxDetail = EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.decode(ops, input);
@@ -549,10 +541,7 @@ public record EarthGeneratorSettings(
                EarthGeneratorSettings::applyDistantHorizonsRenderMode, distantHorizonsRenderMode
             );
             DataResult<EarthGeneratorSettings.SettingsBase> withDemSelection = withRenderMode.apply2(EarthGeneratorSettings::applyDemSelection, demSelection);
-            DataResult<EarthGeneratorSettings.SettingsBase> withWaterResolver = withDemSelection.apply2(
-               EarthGeneratorSettings::applyDistantHorizonsWaterResolver, distantHorizonsWaterResolver
-            );
-            DataResult<EarthGeneratorSettings.SettingsBase> withOsmFeatures = withWaterResolver.apply2(
+            DataResult<EarthGeneratorSettings.SettingsBase> withOsmFeatures = withDemSelection.apply2(
                EarthGeneratorSettings::applyDistantHorizonsOsmFeatures, distantHorizonsOsmFeatures
             );
             DataResult<EarthGeneratorSettings.SettingsBase> withRealtimeTime = withOsmFeatures.apply2(EarthGeneratorSettings::applyRealtimeTime, realtimeTime);
@@ -623,7 +612,6 @@ public record EarthGeneratorSettings(
             Stream<T> baseKeys = EarthGeneratorSettings.BASE_CODEC.keys(ops);
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_RENDER_MODE_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DEM_SELECTION_CODEC.keys(ops));
-            baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_WATER_RESOLVER_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_FEATURES_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_ROAD_MAX_DETAIL_CODEC.keys(ops));
             baseKeys = Stream.concat(baseKeys, EarthGeneratorSettings.DISTANT_HORIZONS_OSM_BUILDING_MAX_DETAIL_CODEC.keys(ops));
@@ -698,7 +686,6 @@ public record EarthGeneratorSettings(
       boolean addTrailRuins,
       boolean deepDark,
       boolean geodes,
-      boolean distantHorizonsWaterResolver,
       boolean distantHorizonsOsmFeatures,
       int distantHorizonsOsmRoadMaxDetail,
       int distantHorizonsOsmBuildingMaxDetail,
@@ -784,7 +771,6 @@ public record EarthGeneratorSettings(
       this.addTrailRuins = addTrailRuins;
       this.deepDark = deepDark;
       this.geodes = geodes;
-      this.distantHorizonsWaterResolver = distantHorizonsWaterResolver;
       this.distantHorizonsOsmFeatures = distantHorizonsOsmFeatures;
       this.distantHorizonsOsmRoadMaxDetail = distantHorizonsOsmRoadMaxDetail;
       this.distantHorizonsOsmBuildingMaxDetail = distantHorizonsOsmBuildingMaxDetail;
@@ -928,7 +914,6 @@ public record EarthGeneratorSettings(
          Objects.requireNonNull(oreDistribution, "oreDistribution"),
          Objects.requireNonNull(geologicalStonePatches, "geologicalStonePatches"),
          Objects.requireNonNull(lavaPools, "lavaPools"),
-         DEFAULT.distantHorizonsWaterResolver(),
          DEFAULT.distantHorizonsOsmFeatures(),
          DEFAULT.realtimeTime(),
          DEFAULT.realtimeWeather(),
@@ -976,10 +961,6 @@ public record EarthGeneratorSettings(
    ) {
       Objects.requireNonNull(demSelection, "demSelection");
       return settings.withDemSelection(EarthGeneratorSettings.DemSelection.mapterhornSelection());
-   }
-
-   private static EarthGeneratorSettings.SettingsBase applyDistantHorizonsWaterResolver(EarthGeneratorSettings.SettingsBase settings, Boolean enabled) {
-      return settings.withDistantHorizonsWaterResolver(Objects.requireNonNull(enabled, "distantHorizonsWaterResolver"));
    }
 
    private static EarthGeneratorSettings.SettingsBase applyDistantHorizonsOsmFeatures(EarthGeneratorSettings.SettingsBase settings, Boolean enabled) {
@@ -1075,7 +1056,7 @@ public record EarthGeneratorSettings(
          this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
          this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
          this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
-         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes,
          this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
          this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
          this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
@@ -1097,7 +1078,7 @@ public record EarthGeneratorSettings(
          this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
          this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
          this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
-         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes,
          this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
          this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
          this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
@@ -1119,7 +1100,7 @@ public record EarthGeneratorSettings(
          this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
          this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
          this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
-         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes,
          this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
          this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
          this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
@@ -1138,7 +1119,7 @@ public record EarthGeneratorSettings(
          this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
          this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
          this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
-         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes,
          this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
          this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
          this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
@@ -1162,7 +1143,7 @@ public record EarthGeneratorSettings(
          this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
          this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
          this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
-         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes,
          this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
          this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
          this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
@@ -1227,7 +1208,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1277,7 +1257,7 @@ public record EarthGeneratorSettings(
          this.addStrongholds, this.addVillages, this.addMineshafts, this.addOceanMonuments, this.addWoodlandMansions,
          this.addDesertTemples, this.addJungleTemples, this.addPillagerOutposts, this.addRuinedPortals, this.addShipwrecks,
          this.addOceanRuins, this.addBuriedTreasure, this.addIgloos, this.addWitchHuts, this.addAncientCities,
-         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes, this.distantHorizonsWaterResolver,
+         this.addTrialChambers, this.addTrailRuins, this.deepDark, this.geodes,
          this.distantHorizonsOsmFeatures, this.distantHorizonsOsmRoadMaxDetail, this.distantHorizonsOsmBuildingMaxDetail,
          this.distantHorizonsOsmNonBlockingFetch, this.realtimeTime, this.realtimeWeather, this.historicalSnow,
          this.voxyChunkPregenEnabled, this.voxyChunkPregenMaxRadius, this.voxyChunkPregenChunksPerTick,
@@ -1333,7 +1313,6 @@ public record EarthGeneratorSettings(
          addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1403,7 +1382,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1473,7 +1451,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1543,7 +1520,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          maxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1613,7 +1589,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          maxDetail,
@@ -1683,7 +1658,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1753,7 +1727,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1823,7 +1796,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1893,7 +1865,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -1963,7 +1934,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -2033,7 +2003,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -2121,7 +2090,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -2226,7 +2194,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -2296,7 +2263,6 @@ public record EarthGeneratorSettings(
          this.addTrailRuins,
          this.deepDark,
          this.geodes,
-         this.distantHorizonsWaterResolver,
          this.distantHorizonsOsmFeatures,
          this.distantHorizonsOsmRoadMaxDetail,
          this.distantHorizonsOsmBuildingMaxDetail,
@@ -2624,7 +2590,6 @@ public record EarthGeneratorSettings(
       boolean oreDistribution,
       boolean geologicalStonePatches,
       boolean lavaPools,
-      boolean distantHorizonsWaterResolver,
       boolean distantHorizonsOsmFeatures,
       boolean realtimeTime,
       boolean realtimeWeather,
@@ -2652,7 +2617,6 @@ public record EarthGeneratorSettings(
             settings.oreDistribution(),
             settings.geologicalStonePatches(),
             settings.lavaPools(),
-            settings.distantHorizonsWaterResolver(),
             settings.distantHorizonsOsmFeatures(),
             settings.realtimeTime(),
             settings.realtimeWeather(),
@@ -2662,36 +2626,6 @@ public record EarthGeneratorSettings(
             settings.voxyChunkPregenChunksPerTick(),
             settings.distantHorizonsRenderMode(),
             settings.demSelection()
-         );
-      }
-
-      private EarthGeneratorSettings.SettingsBase withDistantHorizonsWaterResolver(boolean enabled) {
-         return new EarthGeneratorSettings.SettingsBase(
-            this.worldScale,
-            this.terrestrialHeightScale,
-            this.oceanicHeightScale,
-            this.heightOffset,
-            this.spawnLatitude,
-            this.spawnLongitude,
-            this.minAltitude,
-            this.maxAltitude,
-            this.riverLakeShorelineBlend,
-            this.oceanShorelineBlend,
-            this.shorelineBlendCliffLimit,
-            this.caveGeneration,
-            this.oreDistribution,
-            this.geologicalStonePatches,
-            this.lavaPools,
-            enabled,
-            this.distantHorizonsOsmFeatures,
-            this.realtimeTime,
-            this.realtimeWeather,
-            this.historicalSnow,
-            this.voxyChunkPregenEnabled,
-            this.voxyChunkPregenMaxRadius,
-            this.voxyChunkPregenChunksPerTick,
-            this.distantHorizonsRenderMode,
-            this.demSelection
          );
       }
 
@@ -2712,7 +2646,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             enabled,
             this.realtimeTime,
             this.realtimeWeather,
@@ -2742,7 +2675,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             enabled,
             this.realtimeWeather,
@@ -2772,7 +2704,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             this.realtimeTime,
             enabled,
@@ -2802,7 +2733,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             this.realtimeTime,
             this.realtimeWeather,
@@ -2832,7 +2762,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             this.realtimeTime,
             this.realtimeWeather,
@@ -2862,7 +2791,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             this.realtimeTime,
             this.realtimeWeather,
@@ -2892,7 +2820,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             this.realtimeTime,
             this.realtimeWeather,
@@ -2922,7 +2849,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             this.realtimeTime,
             this.realtimeWeather,
@@ -2952,7 +2878,6 @@ public record EarthGeneratorSettings(
             this.oreDistribution,
             this.geologicalStonePatches,
             this.lavaPools,
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             this.realtimeTime,
             this.realtimeWeather,
@@ -3001,7 +2926,6 @@ public record EarthGeneratorSettings(
             EarthGeneratorSettings.DEFAULT.addTrailRuins(),
             EarthGeneratorSettings.DEFAULT.deepDark(),
             EarthGeneratorSettings.DEFAULT.geodes(),
-            this.distantHorizonsWaterResolver,
             this.distantHorizonsOsmFeatures,
             EarthGeneratorSettings.DEFAULT.distantHorizonsOsmRoadMaxDetail(),
             EarthGeneratorSettings.DEFAULT.distantHorizonsOsmBuildingMaxDetail(),

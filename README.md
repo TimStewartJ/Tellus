@@ -124,7 +124,6 @@ This section lets you toggle vanilla structures and world features on or off, su
 
 ### Compatibility Settings
 - **Distant Horizons Render Mode**: Fast uses Tellus's LOD generator to build simplified distant terrain quickly with lower cost. Detailed asks Distant Horizons to use full chunk generation for far terrain, which is more accurate but significantly slower and heavier. For most setups, keeping Fast LOD generation is recommended.
-- **LOD Water Resolver**: Adds coherent lake beds and smoother water surfaces to Distant Horizons fast LODs directly on the sampled LOD grid, avoiding block-resolution water-region generation.
 - **Coming Soon**: Additional compatibility options are work in progress and currently unavailable.
 
 ### Cache

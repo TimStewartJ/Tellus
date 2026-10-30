@@ -215,8 +215,6 @@
   "property.tellus.distant_horizons_render_mode.value.fast": "Fast LODs (Approximate)",
   "property.tellus.distant_horizons_render_mode.value.ultra_fast": "Ultra Fast LODs (Low Accuracy)",
   "property.tellus.distant_horizons_render_mode.value.detailed": "Full Chunks (Slow)",
-  "property.tellus.distant_horizons_water_resolver.name": "LOD Water Resolver",
-  "property.tellus.distant_horizons_water_resolver.tooltip": "Use coherent lake beds for DH fast LODs with a lightweight sampled-area resolver",
   "property.tellus.distant_horizons_city_lights_distance.name": "LOD City Lights Distance",
   "property.tellus.distant_horizons_city_lights_distance.tooltip": "How far from you DH fast LODs light up towns at night (street glow, lit windows, town lights). Shorter distances generate distant LODs faster; Unlimited lights them out to the DH render distance",
   "property.tellus.distant_horizons_city_lights_distance.no_towns.tooltip": "No LOD city lights: they come from roads and buildings, which are off or not available at this World Scale (1:15 or finer only)",

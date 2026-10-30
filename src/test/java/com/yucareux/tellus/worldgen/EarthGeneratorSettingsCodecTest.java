@@ -53,7 +53,6 @@ class EarthGeneratorSettingsCodecTest {
       assertFalse(EarthGeneratorSettings.DEFAULT.addTrailRuins());
       assertFalse(EarthGeneratorSettings.DEFAULT.deepDark());
       assertFalse(EarthGeneratorSettings.DEFAULT.geodes());
-      assertTrue(EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver());
    }
 
    @Test

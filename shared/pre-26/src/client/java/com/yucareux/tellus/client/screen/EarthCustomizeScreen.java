@@ -493,9 +493,6 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       boolean addAncientCities = this.findToggleValue("add_ancient_cities", EarthGeneratorSettings.DEFAULT.addAncientCities());
       boolean addTrialChambers = this.findToggleValue("add_trial_chambers", EarthGeneratorSettings.DEFAULT.addTrialChambers());
       boolean addTrailRuins = this.findToggleValue("add_trail_ruins", EarthGeneratorSettings.DEFAULT.addTrailRuins());
-      boolean distantHorizonsWaterResolver = this.findToggleValue(
-         "distant_horizons_water_resolver", EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver()
-      );
       boolean distantHorizonsOsmFeatures = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmFeatures();
       int distantHorizonsOsmRoadMaxDetail = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmRoadMaxDetail();
       int distantHorizonsOsmBuildingMaxDetail = EarthGeneratorSettings.DEFAULT.distantHorizonsOsmBuildingMaxDetail();
@@ -525,10 +522,6 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       if (!roadsAndBuildingsSupportedForWorldScale(worldScale)) {
          enableRoads = false;
          enableBuildings = false;
-      }
-
-      if (renderMode == EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST) {
-         distantHorizonsWaterResolver = false;
       }
 
       return new EarthGeneratorSettings(
@@ -566,7 +559,6 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          addTrailRuins,
          deepDark,
          geodes,
-         distantHorizonsWaterResolver,
          distantHorizonsOsmFeatures,
          distantHorizonsOsmRoadMaxDetail,
          distantHorizonsOsmBuildingMaxDetail,
@@ -672,7 +664,6 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
       this.setToggleValue("add_ancient_cities", initialSettings.addAncientCities());
       this.setToggleValue("add_trial_chambers", initialSettings.addTrialChambers());
       this.setToggleValue("add_trail_ruins", initialSettings.addTrailRuins());
-      this.setToggleValue("distant_horizons_water_resolver", initialSettings.distantHorizonsWaterResolver());
       this.setToggleValue("tellus_managed_terrain_downloads", initialSettings.tellusManagedTerrainDownloads());
       this.setToggleValue("show_terrain_download_overlay", initialSettings.showTerrainDownloadOverlay());
       this.setToggleValue("realtime_time", initialSettings.realtimeTime());
@@ -902,7 +893,6 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
                "distant_horizons",
                List.of(
                   mode("distant_horizons_render_mode", EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()),
-                  toggle("distant_horizons_water_resolver", EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver()),
                   slider(
                      "distant_horizons_city_lights_distance",
                      cityLightsDistanceStep(EarthGeneratorSettings.DEFAULT_DH_CITY_LIGHTS_DISTANCE),
@@ -1690,16 +1680,11 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          }
       } else if ("distant_horizons".equals(category.getId())) {
          EarthCustomizeScreen.ModeDefinition renderMode = null;
-         EarthCustomizeScreen.ToggleDefinition waterResolver = null;
          EarthCustomizeScreen.SliderDefinition cityLightsDistance = null;
 
          for (EarthCustomizeScreen.SettingDefinition setting : category.getSettings()) {
             if (setting instanceof EarthCustomizeScreen.ModeDefinition mode && mode.key.equals("distant_horizons_render_mode")) {
                renderMode = mode;
-            }
-
-            if (setting instanceof EarthCustomizeScreen.ToggleDefinition toggle && toggle.key.equals("distant_horizons_water_resolver")) {
-               waterResolver = toggle;
             }
 
             if (setting instanceof EarthCustomizeScreen.SliderDefinition slider && slider.key.equals("distant_horizons_city_lights_distance")) {
@@ -1708,13 +1693,8 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          }
 
          boolean blockedByVoxy = bothCompatibilityModsInstalled && voxyEnabled;
-         if (renderMode != null && waterResolver != null) {
-            boolean ultraFast = renderMode.value == EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST;
+         if (renderMode != null) {
             renderMode.forceDisabled(blockedByVoxy);
-            waterResolver.forceDisabled(ultraFast || blockedByVoxy);
-            if (ultraFast) {
-               waterResolver.value = false;
-            }
          }
 
          if (cityLightsDistance != null) {
