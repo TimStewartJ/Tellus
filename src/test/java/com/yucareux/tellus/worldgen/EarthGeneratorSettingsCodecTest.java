@@ -85,6 +85,23 @@ class EarthGeneratorSettingsCodecTest {
    }
 
    @Test
+   void abandonedCampsDefaultOffAndRoundTrip() {
+      assertFalse(EarthGeneratorSettings.DEFAULT.addAbandonedCamps());
+      // Worlds saved before the setting existed keep camps off.
+      EarthGeneratorSettings legacy = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString("{\"add_trail_ruins\":true}")));
+      assertFalse(legacy.addAbandonedCamps());
+
+      EarthGeneratorSettings enabled = requireSuccess(
+         EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString("{\"add_abandoned_camps\":true,\"add_villages\":true}"))
+      );
+      JsonObject encoded = requireSuccess(EarthGeneratorSettings.CODEC.encodeStart(JsonOps.INSTANCE, enabled)).getAsJsonObject();
+      assertTrue(enabled.addAbandonedCamps());
+      assertTrue(enabled.addVillages());
+      assertTrue(encoded.get("add_abandoned_camps").getAsBoolean());
+      assertEquals(enabled, requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, encoded)));
+   }
+
+   @Test
    void legacySeaLevelSettingIsIgnored() {
       JsonElement input = JsonParser.parseString("{\"height_offset\":48,\"sea_level\":73}");
 

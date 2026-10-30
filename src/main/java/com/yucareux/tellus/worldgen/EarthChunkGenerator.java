@@ -303,6 +303,7 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
    private static final int CHUNK_AREA = 256;
    private static final int TREE_MAX_SURFACE_DROP = 2;
    private static final int TREE_MAX_SURFACE_RISE = 3;
+   private static final int ABANDONED_CAMP_TREE_CLEARANCE = 2;
    private static final int SHORELINE_BANK_RAMP_MAX_SLOPE = 1;
    private static final int SHORELINE_BANK_RAMP_MIN_CLIFF = 3;
    private static final int OCEAN_SHORE_MAX_DISTANCE = 8;
@@ -874,9 +875,10 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
          if (delayTellusDecoration) {
             EarthChunkGenerator.TerrainStreamingPerf.recordDetailDelayedByRefinement();
          }
+         List<BoundingBox> campPieces = this.abandonedCampPieces(level.registryAccess(), structures, chunk.getPos());
          phaseStartNs = beginFullChunkProfiling();
          if (!delayTellusDecoration && !this.shouldDeferTrees()) {
-            this.placeTrees(level, chunk);
+            this.placeTrees(level, chunk, campPieces);
          }
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_TREES, phaseStartNs);
          if (!delayTellusDecoration && !this.shouldDeferBuildingDetails()) {
@@ -898,7 +900,7 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
 
          if (!delayTellusDecoration && this.hasDeferredApplyWork()) {
             phaseStartNs = beginFullChunkProfiling();
-            this.applyReadyDeferredChunkDetail(level, chunk);
+            this.applyReadyDeferredChunkDetail(level, chunk, campPieces);
             endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_DEFERRED_APPLY, phaseStartNs);
          }
 
@@ -951,6 +953,12 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
          phaseStartNs = beginFullChunkProfiling();
          this.filterVillageStarts(registryAccess, chunk);
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.STRUCTURES_VILLAGES, phaseStartNs);
+         if (this.settings.addAbandonedCamps()) {
+            phaseStartNs = beginFullChunkProfiling();
+            this.filterAbandonedCampStarts(registryAccess, chunk);
+            endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.STRUCTURES_ABANDONED_CAMPS, phaseStartNs);
+         }
+
          if (this.settings.addWoodlandMansions()) {
             phaseStartNs = beginFullChunkProfiling();
             this.filterWoodlandMansionStarts(registryAccess, chunk);
@@ -4363,6 +4371,80 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       return this.isStructureStartTooSteep(start, 8, 6, 8);
    }
 
+   private void filterAbandonedCampStarts(RegistryAccess registryAccess, ChunkAccess chunk) {
+      Map<Structure, StructureStart> starts = chunk.getAllStarts();
+      if (!starts.isEmpty()) {
+         Registry<Structure> registry = MinecraftVersionCompat.registry(registryAccess, Registries.STRUCTURE);
+
+         for (Entry<Structure, StructureStart> entry : starts.entrySet()) {
+            StructureStart start = entry.getValue();
+            if (start != null && start.isValid()) {
+               Structure structure = Objects.requireNonNull(entry.getKey(), "structure");
+               if (this.isAbandonedCampStructure(registry, structure) && !this.isAbandonedCampSiteUsable(start, chunk)) {
+                  chunk.setStartForStructure(structure, StructureStart.INVALID_START);
+               }
+            }
+         }
+      }
+   }
+
+   // Tellus terrain ignores terrain_adaptation, so the rigid camp only sits right on dry ground within a block of its floor.
+   private boolean isAbandonedCampSiteUsable(StructureStart start, LevelHeightAccessor heights) {
+      BoundingBox bounds = start.getBoundingBox();
+      if (!this.landmarks.intersecting(bounds.minX(), bounds.minZ(), bounds.maxX(), bounds.maxZ()).isEmpty()) {
+         return false;
+      }
+
+      // Every piece joins the tent at its floor; campsite templates may reach below it for buried chests.
+      int floorY = start.getPieces().get(0).getBoundingBox().minY();
+      int minY = MinecraftVersionCompat.minY(heights);
+      int maxY = MinecraftVersionCompat.maxY(heights);
+      for (StructurePiece piece : start.getPieces()) {
+         BoundingBox box = piece.getBoundingBox();
+         for (int z = box.minZ(); z <= box.maxZ(); z++) {
+            for (int x = box.minX(); x <= box.maxX(); x++) {
+               EarthChunkGenerator.ColumnHeights column = this.resolveFastColumnHeights(x, z, minY, maxY, this.sampleCoverClass(x, z));
+               if (column.hasWater() || !VanillaStructurePlacement.supportsRigidFloor(column.terrainSurface(), floorY)) {
+                  return false;
+               }
+            }
+         }
+      }
+
+      return true;
+   }
+
+   private List<BoundingBox> abandonedCampPieces(RegistryAccess registryAccess, StructureManager structures, ChunkPos pos) {
+      if (!this.settings.addAbandonedCamps()) {
+         return List.of();
+      }
+
+      Registry<Structure> registry = MinecraftVersionCompat.registry(registryAccess, Registries.STRUCTURE);
+      List<BoundingBox> pieces = new ArrayList<>();
+      for (StructureStart start : WorldgenApi.structureStarts(structures, pos, structure -> this.isAbandonedCampStructure(registry, structure))) {
+         if (start.isValid()) {
+            for (StructurePiece piece : start.getPieces()) {
+               pieces.add(piece.getBoundingBox());
+            }
+         }
+      }
+
+      return pieces;
+   }
+
+   private static boolean abandonedCampSuppressesTree(List<BoundingBox> campPieces, int worldX, int worldZ) {
+      for (BoundingBox box : campPieces) {
+         if (worldX >= box.minX() - ABANDONED_CAMP_TREE_CLEARANCE
+            && worldX <= box.maxX() + ABANDONED_CAMP_TREE_CLEARANCE
+            && worldZ >= box.minZ() - ABANDONED_CAMP_TREE_CLEARANCE
+            && worldZ <= box.maxZ() + ABANDONED_CAMP_TREE_CLEARANCE) {
+            return true;
+         }
+      }
+
+      return false;
+   }
+
    private void filterStartsCollidingWithOsm(RegistryAccess registryAccess, ChunkAccess chunk) {
       double worldScale = this.settings.worldScale();
       boolean roadsActive = this.settings.enableRoads() && OSM_ROAD_SOURCE.available() && worldScale > 0.0 && worldScale <= OSM_ROAD_MAX_SCALE;
@@ -4534,7 +4616,8 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
             || path.equals("swamp_hut")
             || path.equals("witch_hut")
             || path.startsWith("ruined_portal")
-            || path.startsWith("trail_ruins");
+            || path.startsWith("trail_ruins")
+            || VanillaStructurePlacement.isAbandonedCampPath(path);
       }
    }
 
@@ -4681,6 +4764,11 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       return path != null && VanillaStructurePlacement.isWoodlandMansionPath(path);
    }
 
+   private boolean isAbandonedCampStructure(Registry<Structure> registry, Structure structure) {
+      String path = MinecraftVersionCompat.registryKeyPath(registry, structure);
+      return path != null && VanillaStructurePlacement.isAbandonedCampPath(path);
+   }
+
    public int getGenDepth() {
       return this.height;
    }
@@ -4773,7 +4861,7 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       }
    }
 
-   private void placeTrees(WorldGenLevel level, ChunkAccess chunk) {
+   private void placeTrees(WorldGenLevel level, ChunkAccess chunk, List<BoundingBox> campPieces) {
       ChunkPos pos = chunk.getPos();
       long chunkKey = MinecraftVersionCompat.packChunkPos(MinecraftVersionCompat.chunkX(pos), MinecraftVersionCompat.chunkZ(pos));
       EarthChunkGenerator.ChunkDecorationContext decorationContext = this.chunkDecorationContexts.get(chunkKey);
@@ -4801,7 +4889,9 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
             if (worldX >= chunkMinX && worldX <= chunkMaxX && worldZ >= chunkMinZ && worldZ <= chunkMaxZ) {
                int localX = worldX - chunkMinX;
                int localZ = worldZ - chunkMinZ;
-               if (preparedBuildings != null && preparedBuildings.suppressesTrees(localX, localZ) || this.landmarkSuppressesTree(worldX, worldZ)) {
+               if (preparedBuildings != null && preparedBuildings.suppressesTrees(localX, localZ)
+                  || this.landmarkSuppressesTree(worldX, worldZ)
+                  || abandonedCampSuppressesTree(campPieces, worldX, worldZ)) {
                   continue;
                }
 
@@ -4932,9 +5022,13 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       return placements.isEmpty() ? List.of() : List.copyOf(placements);
    }
 
-   private void applyPreparedTreePlacements(WorldGenLevel level, ChunkAccess chunk, List<EarthChunkGenerator.PreparedTreePlacement> placements) {
+   private void applyPreparedTreePlacements(
+      WorldGenLevel level, ChunkAccess chunk, List<EarthChunkGenerator.PreparedTreePlacement> placements, List<BoundingBox> campPieces
+   ) {
       for (EarthChunkGenerator.PreparedTreePlacement placement : placements) {
-         this.applyPreparedTreePlacement(level, placement);
+         if (!abandonedCampSuppressesTree(campPieces, placement.worldX(), placement.worldZ())) {
+            this.applyPreparedTreePlacement(level, placement);
+         }
       }
    }
 
@@ -6842,11 +6936,11 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       }
    }
 
-   private void applyReadyDeferredChunkDetail(WorldGenLevel level, ChunkAccess chunk) {
+   private void applyReadyDeferredChunkDetail(WorldGenLevel level, ChunkAccess chunk, List<BoundingBox> campPieces) {
       if (this.hasDeferredApplyWork()) {
          EarthChunkGenerator.PreparedChunkDetail detail = this.chunkDetailManager.claimReady(chunk.getPos());
          if (detail != null) {
-            this.applyPreparedChunkDetail(level, chunk, detail);
+            this.applyPreparedChunkDetail(level, chunk, detail, campPieces);
          }
       }
    }
@@ -7270,7 +7364,9 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       this.applyTerrainRefinementPatch(chunk, refinement);
       this.applyUndergroundStructureProtection(level.structureManager(), chunk, refinement.terrainSurfaces(), true);
       this.carveStructureClearanceVolumes(level.structureManager(), chunk);
-      this.applyPreparedChunkDetail(level, chunk, refinement.delayedDetail());
+      this.applyPreparedChunkDetail(
+         level, chunk, refinement.delayedDetail(), this.abandonedCampPieces(level.registryAccess(), level.structureManager(), chunk.getPos())
+      );
       this.applyRealtimeSnowCover(level, chunk);
       // Last, as in applyBiomeDecoration, so the landmark wins over trees and lamps.
       this.placeLandmarks(level, chunk);
@@ -7478,7 +7574,9 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       }
    }
 
-   private void applyPreparedChunkDetail(WorldGenLevel level, ChunkAccess chunk, EarthChunkGenerator.PreparedChunkDetail detail) {
+   private void applyPreparedChunkDetail(
+      WorldGenLevel level, ChunkAccess chunk, EarthChunkGenerator.PreparedChunkDetail detail, List<BoundingBox> campPieces
+   ) {
       long applyStartNs = EarthChunkGenerator.ChunkDetailPerf.now();
       EarthChunkGenerator.ChunkGenerationContext context = detail.context();
       EarthChunkGenerator.PreparedChunkBuildings preparedBuildings = detail.preparedBuildings();
@@ -7515,7 +7613,7 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       List<EarthChunkGenerator.PreparedTreePlacement> treePlacements = detail.treePlacements();
       if (!treePlacements.isEmpty()) {
          long treeApplyStartNs = beginFullChunkProfiling();
-         this.applyPreparedTreePlacements(level, chunk, treePlacements);
+         this.applyPreparedTreePlacements(level, chunk, treePlacements, campPieces);
          endFullChunkProfiling(EarthChunkGenerator.FullChunkPhase.DECORATION_TREES_DEFER_APPLY, treeApplyStartNs);
       }
 
@@ -11560,6 +11658,8 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
          return this.settings.addAncientCities();
       } else if (path.equals("trial_chambers")) {
          return this.settings.addTrialChambers();
+      } else if (VanillaStructurePlacement.isAbandonedCampPath(path)) {
+         return this.settings.addAbandonedCamps();
       } else {
          return path.startsWith("trail_ruins") ? this.settings.addTrailRuins() : true;
       }
@@ -13603,7 +13703,9 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
             }
 
             try {
-               generator.applyPreparedChunkDetail(level, chunk, detail);
+               generator.applyPreparedChunkDetail(
+                  level, chunk, detail, generator.abandonedCampPieces(level.registryAccess(), level.structureManager(), chunk.getPos())
+               );
                applied++;
             } catch (RuntimeException error) {
                EarthChunkGenerator.ChunkDetailPerf.recordFailure();
@@ -13893,6 +13995,7 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
       STRUCTURES_TOTAL("total"),
       STRUCTURES_SUPER("super"),
       STRUCTURES_VILLAGES("villages"),
+      STRUCTURES_ABANDONED_CAMPS("abandonedCamps"),
       STRUCTURES_WOODLAND_MANSIONS("woodland"),
       STRUCTURES_STRONGHOLDS("strongholds"),
       STRUCTURES_MINESHAFTS("mineshafts"),
@@ -14073,6 +14176,7 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
             EarthChunkGenerator.FullChunkPhase.STRUCTURES_TOTAL,
             EarthChunkGenerator.FullChunkPhase.STRUCTURES_SUPER,
             EarthChunkGenerator.FullChunkPhase.STRUCTURES_VILLAGES,
+            EarthChunkGenerator.FullChunkPhase.STRUCTURES_ABANDONED_CAMPS,
             EarthChunkGenerator.FullChunkPhase.STRUCTURES_WOODLAND_MANSIONS,
             EarthChunkGenerator.FullChunkPhase.STRUCTURES_STRONGHOLDS,
             EarthChunkGenerator.FullChunkPhase.STRUCTURES_MINESHAFTS,

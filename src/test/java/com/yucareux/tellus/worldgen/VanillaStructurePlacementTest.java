@@ -15,6 +15,23 @@ class VanillaStructurePlacementTest {
    }
 
    @Test
+   void recognizesEveryAbandonedCampVariant() {
+      assertTrue(VanillaStructurePlacement.isAbandonedCampPath("abandoned_camp_forest"));
+      assertTrue(VanillaStructurePlacement.isAbandonedCampPath("abandoned_camp_old_growth_spruce_taiga"));
+      assertFalse(VanillaStructurePlacement.isAbandonedCampPath("abandoned_mineshaft"));
+      assertFalse(VanillaStructurePlacement.isAbandonedCampPath("trail_ruins"));
+   }
+
+   @Test
+   void rigidCampFloorNeedsGroundWithinOneBlock() {
+      assertTrue(VanillaStructurePlacement.supportsRigidFloor(63, 64));
+      assertTrue(VanillaStructurePlacement.supportsRigidFloor(64, 64));
+      assertTrue(VanillaStructurePlacement.supportsRigidFloor(65, 64));
+      assertFalse(VanillaStructurePlacement.supportsRigidFloor(62, 64));
+      assertFalse(VanillaStructurePlacement.supportsRigidFloor(66, 64));
+   }
+
+   @Test
    void increasedHeightAlwaysRetargetsAbsoluteUndergroundPlacements() {
       assertTrue(VanillaStructurePlacement.shouldRetargetStronghold(true, false, false));
       assertTrue(VanillaStructurePlacement.shouldRetargetBuriedStructure(true, -20, 900));

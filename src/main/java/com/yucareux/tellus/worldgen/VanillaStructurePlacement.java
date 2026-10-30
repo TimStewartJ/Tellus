@@ -8,6 +8,15 @@ final class VanillaStructurePlacement {
       return "mansion".equals(path) || "woodland_mansion".equals(path);
    }
 
+   static boolean isAbandonedCampPath(String path) {
+      return path.startsWith("abandoned_camp");
+   }
+
+   // One block lower still carries the floor; one higher leaves headroom above chests. Two would float or bury them.
+   static boolean supportsRigidFloor(int terrainSurfaceY, int floorY) {
+      return Math.abs(terrainSurfaceY - floorY) <= 1;
+   }
+
    static boolean shouldRetargetStronghold(boolean increasedHeight, boolean inOceanColumn, boolean tooShallow) {
       return increasedHeight || inOceanColumn || tooShallow;
    }

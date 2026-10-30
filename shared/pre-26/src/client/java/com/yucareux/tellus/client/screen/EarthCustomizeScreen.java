@@ -596,7 +596,8 @@ public class EarthCustomizeScreen extends EarthCustomizeScreenVersionCompat {
          customTrees,
          automaticHeightScaling,
          hugeRedMushrooms,
-         distantHorizonsCityLightsDistance
+         distantHorizonsCityLightsDistance,
+         EarthGeneratorSettings.DEFAULT.addAbandonedCamps()
       );
    }
 
