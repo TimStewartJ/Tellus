@@ -66,7 +66,9 @@ public final class RandomBiomeCatalog {
    private static final List<String> MINECRAFT_1_21_11_ADDITIONS = List.of("pale_garden");
    private static final List<String> MINECRAFT_1_21_11_OVERWORLD_BIOMES = append(LEGACY_OVERWORLD_BIOMES, MINECRAFT_1_21_11_ADDITIONS);
    private static final List<String> MINECRAFT_26_2_ADDITIONS = List.of("sulfur_caves");
-   private static final List<String> ALL_KNOWN_OVERWORLD_BIOMES = append(MINECRAFT_1_21_11_OVERWORLD_BIOMES, MINECRAFT_26_2_ADDITIONS);
+   private static final List<String> MINECRAFT_26_2_OVERWORLD_BIOMES = append(MINECRAFT_1_21_11_OVERWORLD_BIOMES, MINECRAFT_26_2_ADDITIONS);
+   private static final List<String> MINECRAFT_26_3_ADDITIONS = List.of("dappled_forest");
+   private static final List<String> ALL_KNOWN_OVERWORLD_BIOMES = append(MINECRAFT_26_2_OVERWORLD_BIOMES, MINECRAFT_26_3_ADDITIONS);
    private static final Set<String> NON_LAND_BIOMES = Set.of(
       "ocean",
       "warm_ocean",
@@ -93,6 +95,10 @@ public final class RandomBiomeCatalog {
    }
 
    public static List<String> minecraft26_2OverworldBiomeIds() {
+      return MINECRAFT_26_2_OVERWORLD_BIOMES;
+   }
+
+   public static List<String> minecraft26_3OverworldBiomeIds() {
       return ALL_KNOWN_OVERWORLD_BIOMES;
    }
 
@@ -109,6 +115,10 @@ public final class RandomBiomeCatalog {
    }
 
    public static List<String> normalizeMinecraft26_2Selection(List<String> biomeIds) {
+      return normalizeSelection(biomeIds, MINECRAFT_26_2_OVERWORLD_BIOMES);
+   }
+
+   public static List<String> normalizeMinecraft26_3Selection(List<String> biomeIds) {
       return normalizeSelection(biomeIds, ALL_KNOWN_OVERWORLD_BIOMES);
    }
 

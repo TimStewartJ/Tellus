@@ -1,5 +1,6 @@
 package com.yucareux.tellus.integration.distant_horizons;
 
+import com.yucareux.tellus.compat.MinecraftRelease;
 import com.yucareux.tellus.compat.MinecraftVersionCompat;
 import com.mojang.logging.LogUtils;
 import com.seibel.distanthorizons.api.DhApi.Delayed;
@@ -3978,6 +3979,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private static TellusLodGenerator.CanopyProfile buildCanopyProfile(Holder<Biome> biome) {
       boolean isMangrove = biome.is(Biomes.MANGROVE_SWAMP);
       boolean isPaleGarden = isBiomePath(biome, "pale_garden");
+      boolean isDappledForest = isBiomePath(biome, "dappled_forest");
       boolean isMushroomFields = biome.is(Biomes.MUSHROOM_FIELDS);
       boolean isDarkForest = biome.is(Biomes.DARK_FOREST);
       boolean isBirchForest = biome.is(Biomes.BIRCH_FOREST);
@@ -4010,6 +4012,8 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          treeFamily = TellusLodGenerator.TreeLodFamily.MUSHROOM;
       } else if (isCherryGrove) {
          treeFamily = TellusLodGenerator.TreeLodFamily.CHERRY;
+      } else if (isDappledForest) {
+         treeFamily = TellusLodGenerator.TreeLodFamily.POPLAR;
       } else if (isDarkForest) {
          treeFamily = TellusLodGenerator.TreeLodFamily.DARK_OAK;
       } else if (isOldGrowthBirchForest) {
@@ -5227,6 +5231,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       MANGROVE(Blocks.MANGROVE_LOG.defaultBlockState(), Blocks.MANGROVE_LEAVES.defaultBlockState(), Blocks.MANGROVE_ROOTS.defaultBlockState()),
       CHERRY(Blocks.CHERRY_LOG.defaultBlockState(), Blocks.CHERRY_LEAVES.defaultBlockState()),
       PALE_OAK(blockStateByField("PALE_OAK_LOG", Blocks.DARK_OAK_LOG), blockStateByField("PALE_OAK_LEAVES", Blocks.DARK_OAK_LEAVES)),
+      RED_POPLAR(MinecraftRelease.blockOr("poplar_log", Blocks.OAK_LOG).defaultBlockState(), MinecraftRelease.blockOr("red_poplar_leaves", Blocks.OAK_LEAVES).defaultBlockState()),
+      ORANGE_POPLAR(MinecraftRelease.blockOr("poplar_log", Blocks.OAK_LOG).defaultBlockState(), MinecraftRelease.blockOr("orange_poplar_leaves", Blocks.OAK_LEAVES).defaultBlockState()),
+      YELLOW_POPLAR(MinecraftRelease.blockOr("poplar_log", Blocks.OAK_LOG).defaultBlockState(), MinecraftRelease.blockOr("yellow_poplar_leaves", Blocks.OAK_LEAVES).defaultBlockState()),
       HUGE_BROWN_MUSHROOM(Blocks.MUSHROOM_STEM.defaultBlockState(), Blocks.BROWN_MUSHROOM_BLOCK.defaultBlockState()),
       HUGE_RED_MUSHROOM(Blocks.MUSHROOM_STEM.defaultBlockState(), Blocks.RED_MUSHROOM_BLOCK.defaultBlockState());
 
@@ -5271,6 +5278,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       MANGROVE(82, 5, 4, 5),
       CHERRY(60, 3, 2, 4),
       PALE_OAK(76, 4, 3, 4),
+      POPLAR(62, 3, 3, 4),
       SWAMP_OAK(50, 3, 2, 3),
       WOODED_BADLANDS(38, 2, 2, 3),
       MUSHROOM(45, 3, 1, 2);
@@ -5316,6 +5324,11 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             case MANGROVE -> TellusLodGenerator.TreeSpecies.MANGROVE;
             case CHERRY -> TellusLodGenerator.TreeSpecies.CHERRY;
             case PALE_OAK -> TellusLodGenerator.TreeSpecies.PALE_OAK;
+            // Vanilla's Dappled Forest mix: 200 red, 240 orange and 90 yellow poplars to 27 spruces.
+            case POPLAR -> roll < 92 ? TellusLodGenerator.TreeSpecies.RED_POPLAR
+               : roll < 202 ? TellusLodGenerator.TreeSpecies.ORANGE_POPLAR
+               : roll < 243 ? TellusLodGenerator.TreeSpecies.YELLOW_POPLAR
+               : TellusLodGenerator.TreeSpecies.SPRUCE;
             case SWAMP_OAK, WOODED_BADLANDS -> TellusLodGenerator.TreeSpecies.OAK;
             case MUSHROOM -> !hugeRedMushrooms || roll < 128
                ? TellusLodGenerator.TreeSpecies.HUGE_BROWN_MUSHROOM

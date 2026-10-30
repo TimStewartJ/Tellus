@@ -64,9 +64,12 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
    private static final int SUNFLOWER_PLAINS_GRID_BLOCKS = 384;
    private static final int FLOWER_FOREST_GRID_BLOCKS = 320;
    private static final int CHERRY_GROVE_GRID_BLOCKS = 448;
+   private static final int DAPPLED_FOREST_GRID_BLOCKS = 32;
+   private static final int DAPPLED_FOREST_DETAIL_GRID_BLOCKS = 11;
    private static final double SUNFLOWER_PLAINS_NOISE_THRESHOLD = 0.72;
    private static final double FLOWER_FOREST_NOISE_THRESHOLD = 0.72;
    private static final double CHERRY_GROVE_NOISE_THRESHOLD = 0.78;
+   private static final double DAPPLED_FOREST_NOISE_THRESHOLD = 0.45;
    private static final double CHERRY_GROVE_MIN_ELEVATION_METERS = 180.0;
    private static final double CHERRY_GROVE_MAX_ELEVATION_METERS = 1800.0;
    private static final double CHERRY_GROVE_MIN_RELIEF_METERS = 35.0;
@@ -75,6 +78,10 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
    private static final long SUNFLOWER_PLAINS_NOISE_SALT = 5012456494189417561L;
    private static final long FLOWER_FOREST_NOISE_SALT = -3588256909144307243L;
    private static final long CHERRY_GROVE_NOISE_SALT = 7999243172794174439L;
+   private static final long DAPPLED_FOREST_NOISE_SALT = 843186567711051837L;
+   private static final long DAPPLED_FOREST_DETAIL_NOISE_SALT = -6070240617245934207L;
+   // Looked up by id because only 26.3 registers it.
+   private static final ResourceKey<Biome> DAPPLED_FOREST = BiomeClassification.toBiomeKey("dappled_forest");
    private static final TellusLandCoverSource LAND_COVER_SOURCE = TellusWorldgenSources.landCover();
    private static final TellusElevationSource ELEVATION_SOURCE = TellusWorldgenSources.elevation();
    private static final TellusKoppenSource KOPPEN_SOURCE = TellusWorldgenSources.koppen();
@@ -93,6 +100,8 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
    private final Holder<Biome> flowerForest;
 
    private final Holder<Biome> cherryGrove;
+
+   private final Holder<Biome> dappledForest;
    
    private final Holder<Biome> ocean;
 
@@ -148,6 +157,7 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
       this.sunflowerPlains = this.resolveBiome(Biomes.SUNFLOWER_PLAINS, this.plains);
       this.flowerForest = this.resolveBiome(Biomes.FLOWER_FOREST, this.plains);
       this.cherryGrove = this.resolveBiome(Biomes.CHERRY_GROVE, this.flowerForest);
+      this.dappledForest = this.resolveOptionalBiome(DAPPLED_FOREST);
       this.ocean = this.resolveBiome(Biomes.OCEAN, this.plains);
       this.warmOcean = this.resolveBiome(Biomes.WARM_OCEAN, this.ocean);
       this.lukewarmOcean = this.resolveBiome(Biomes.LUKEWARM_OCEAN, this.ocean);
@@ -617,6 +627,9 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
       if (visualCoverClass == ESA_TREE_COVER && isTemperateForestBiome(biome)) {
          if (this.isCherryGroveCandidate(blockX, blockZ, normalizedKoppen)) {
             return this.cherryGrove;
+         } else if (this.dappledForest != null && isDappledForestClimate(normalizedKoppen) && isDappledForestClump(blockX, blockZ)) {
+            // Before Flower Forest, whose wide patches would otherwise stay plain green inside the mix.
+            return this.dappledForest;
          } else if (isFlowerForestClimate(normalizedKoppen)
             && sampleValueNoise(blockX, blockZ, FLOWER_FOREST_GRID_BLOCKS, FLOWER_FOREST_NOISE_SALT) >= FLOWER_FOREST_NOISE_THRESHOLD) {
             return this.flowerForest;
@@ -847,6 +860,7 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
       holders.add(this.snowySlopes);
       holders.add(this.jaggedPeaks);
       holders.add(this.mangrove);
+      addIfPresent(holders, this.dappledForest);
       if (this.settings.randomBiomes()) {
          holders.add(this.cherryGrove);
          holders.addAll(this.randomBiomeMixer.possibleBiomes());
@@ -924,6 +938,7 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
          || surfaceBiome.is(Biomes.FOREST)
          || surfaceBiome.is(Biomes.FLOWER_FOREST)
          || surfaceBiome.is(Biomes.CHERRY_GROVE)
+         || surfaceBiome.is(DAPPLED_FOREST)
          || surfaceBiome.is(Biomes.BIRCH_FOREST)
          || surfaceBiome.is(Biomes.OLD_GROWTH_BIRCH_FOREST)
          || surfaceBiome.is(Biomes.OLD_GROWTH_PINE_TAIGA)
@@ -977,6 +992,21 @@ public final class EarthBiomeSource extends TellusBiomeSourceBridge {
          case "CFA", "CFB", "CWA", "CWB", "DFA", "DFB" -> true;
          default -> false;
       };
+   }
+
+   /** Cool continental climates of the aspen and poplar stands in mixed forest and forest-steppe. */
+   private static boolean isDappledForestClimate(String koppen) {
+      return switch (koppen) {
+         case "DFB", "DWB", "DSB" -> true;
+         default -> false;
+      };
+   }
+
+   /** Ragged clumps of a few trees, so autumn crowns mix through the green forest instead of forming patches. */
+   private static boolean isDappledForestClump(int blockX, int blockZ) {
+      double clumps = sampleValueNoise(blockX, blockZ, DAPPLED_FOREST_GRID_BLOCKS, DAPPLED_FOREST_NOISE_SALT);
+      double detail = sampleValueNoise(blockX, blockZ, DAPPLED_FOREST_DETAIL_GRID_BLOCKS, DAPPLED_FOREST_DETAIL_NOISE_SALT);
+      return clumps * 0.65 + detail * 0.35 >= DAPPLED_FOREST_NOISE_THRESHOLD;
    }
 
    private static double sampleValueNoise(int blockX, int blockZ, int grid, long salt) {

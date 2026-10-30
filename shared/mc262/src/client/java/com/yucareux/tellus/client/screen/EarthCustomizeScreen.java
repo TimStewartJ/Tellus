@@ -13,7 +13,6 @@ import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import com.yucareux.tellus.worldgen.ExperimentalHeightSupport;
-import com.yucareux.tellus.worldgen.RandomBiomeCatalog;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
@@ -846,7 +845,7 @@ public class EarthCustomizeScreen extends Screen {
          )
       );
       EarthCustomizeScreen.CategoryDefinition biomesCategory = new EarthCustomizeScreen.CategoryDefinition(
-         "biomes", biomeSettings(RandomBiomeCatalog.minecraft26_2OverworldBiomeIds())
+         "biomes", biomeSettings(MinecraftVersionCompat.defaultRandomBiomeIds())
       ).hideFromRoot().parent("ecological");
       categories.add(
          new EarthCustomizeScreen.CategoryDefinition(

@@ -51,7 +51,7 @@ Local build/test reports, runtime logs, and artifact checksums are retained unde
 
 These are opportunities for a separate feature update, not additions to Tellus's geographic mapping in this compatibility release:
 
-1. Map poplar foliage and the Dappled Forest biome to suitable real-world climate and ecoregion profiles.
+1. ~~Map poplar foliage and the Dappled Forest biome to suitable real-world climate and ecoregion profiles.~~ Done in 0.8.4: see the 26.3 notes in the README.
 2. Use concrete stairs/slabs for generated roofs, steps, curbs, and building details; wool variants and cushions could improve interiors.
 3. ~~Add an explicit Abandoned Camps setting with Tellus terrain placement rules.~~ Done in 0.8.4: see Structure Settings in the README.
 4. Benchmark the new density/material-rule pipeline and terrain rendering on representative Tellus worlds before selecting further performance work.

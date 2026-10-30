@@ -23,6 +23,12 @@ class RandomBiomeCatalogTest {
       assertTrue(current.contains("pale_garden"));
       assertTrue(current.contains("sulfur_caves"));
       assertTrue(current.containsAll(legacy));
+      assertFalse(current.contains("dappled_forest"));
+
+      List<String> minecraft26_3 = RandomBiomeCatalog.minecraft26_3OverworldBiomeIds();
+      assertEquals(56, minecraft26_3.size());
+      assertTrue(minecraft26_3.containsAll(current));
+      assertTrue(minecraft26_3.contains("dappled_forest"));
    }
 
    @Test
@@ -45,7 +51,11 @@ class RandomBiomeCatalogTest {
       );
       assertEquals(
          List.of("desert", "pale_garden", "sulfur_caves", "warm_ocean"),
-         RandomBiomeCatalog.normalizeMinecraft26_2Selection(List.of("desert", "pale_garden", "sulfur_caves", "warm_ocean"))
+         RandomBiomeCatalog.normalizeMinecraft26_2Selection(List.of("desert", "pale_garden", "sulfur_caves", "dappled_forest", "warm_ocean"))
+      );
+      assertEquals(
+         List.of("desert", "dappled_forest", "warm_ocean"),
+         RandomBiomeCatalog.normalizeMinecraft26_3Selection(List.of("desert", "dappled_forest", "warm_ocean"))
       );
    }
 }

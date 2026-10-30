@@ -26,6 +26,8 @@ Server support note: Tellus must be installed on the server, but is not required
 
 For 26.3, use Fabric Loader 0.19.5 or later with Fabric API 0.160.5+26.3 or later, or NeoForge 26.3.0.3-beta or later for Minecraft 26.3. Distant Horizons 3.3.1 is supported, including the Tellus fork for extended-height worlds and managed terrain downloads.
 
+On 26.3, the Dappled Forest mixes through the forest of cool continental climates (Köppen Dfb, Dwb, and Dsb) in clumps of a few trees, about 60% of it, so autumn and green crowns blend like a real mixed forest. This covers New England, the Great Lakes, the Canadian aspen parkland, and the forest-steppe from Poland to Siberia. Forests that Tellus maps as taiga or conifer forest keep their taiga. Custom Trees grows red, orange, and yellow poplars there, Random Biomes can select the biome, and Abandoned Camps can place its Dappled Forest camp. Newly generated chunks use this mix, so biome edges may be visible at old chunk borders in existing 26.3 worlds.
+
 Build all targets with `./gradlew build`, or only the new targets with `./gradlew -PtellusTargets=mc263,mc263-neoforge build`. See [26.3 compatibility notes](docs/minecraft-26.3.md) for the shared-source layout, validation, and possible follow-up features.
 
 ## Features
@@ -113,7 +115,7 @@ Worlds created with earlier 0.8.1 builds keep their already-generated chunks unc
 ### Structure Settings
 This section lets you toggle vanilla structures and world features on or off, such as villages, temples, monuments, ruins, and underground features like Deep Dark and amethyst geodes. Some structures (notably Deep Dark and certain ocean structures) may not generate properly yet and are still work in progress.
 
-- **Add Abandoned Camps** (26.3 only, off by default): Generates the 26.3 abandoned camps in their vanilla biomes. Tellus terrain is not reshaped around structures, so a camp is only kept where every piece sits on dry ground within one block of its floor, away from mapped roads, buildings, and landmarks. Tellus trees are kept off the camp so its chests, barrels, and beds stay intact. Dappled Forest camps do not appear because Tellus does not map that biome yet.
+- **Add Abandoned Camps** (26.3 only, off by default): Generates the 26.3 abandoned camps in their vanilla biomes. Tellus terrain is not reshaped around structures, so a camp is only kept where every piece sits on dry ground within one block of its floor, away from mapped roads, buildings, and landmarks. Tellus trees are kept off the camp so its chests, barrels, and beds stay intact.
 
 ### Real-Time Settings
 - **Real-Time Time**: Syncs the in-game day/night cycle to real-world time based on your in-game location, so sunrise and sunset match that location's local clock.

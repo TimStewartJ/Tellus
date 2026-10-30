@@ -187,6 +187,7 @@ final class RandomBiomeMixer {
       addLand(biomeLookup, Biomes.DARK_FOREST, allLand, temperate, special);
       addLand(biomeLookup, Biomes.CHERRY_GROVE, allLand, temperate, tropical, special);
       addLandByIdIfSelected(biomeLookup, "pale_garden", selectedKeys, allLand, temperate, special);
+      addLandByIdIfSelected(biomeLookup, "dappled_forest", selectedKeys, allLand, temperate, cold, special);
       addLand(biomeLookup, Biomes.SWAMP, allLand, temperate, tropical, special);
       addLand(biomeLookup, Biomes.MANGROVE_SWAMP, allLand, tropical, special);
       addLand(biomeLookup, Biomes.JUNGLE, allLand, tropical, special);
