@@ -1,0 +1,25 @@
+diff --git a/buildSrc/src/main/groovy/dh-loader.gradle b/buildSrc/src/main/groovy/dh-loader.gradle
+index 9a45fefc0..05406505d 100644
+--- a/buildSrc/src/main/groovy/dh-loader.gradle
++++ b/buildSrc/src/main/groovy/dh-loader.gradle
+@@ -804,6 +804,20 @@ if (isNotCommonProject) {
+     jvmdg.downgradeTo = JavaVersion.toVersion(rootProject.java_version)
+     downgradeJar.archiveClassifier.set(null)
+     shadeDowngradedApi.archiveClassifier.set(null)
++    shadeDowngradedApi.doLast {
++        // JVMDowngrader can flatten versioned classes but retain the flag that crashes Forge 1.20.1.
++        java.nio.file.FileSystems.newFileSystem(archiveFile.get().asFile.toPath(), [:]).withCloseable { zip ->
++            if (!java.nio.file.Files.exists(zip.getPath('/META-INF/versions'))) {
++                def manifestPath = zip.getPath('/META-INF/MANIFEST.MF')
++                def jarManifest = java.nio.file.Files.newInputStream(manifestPath).withCloseable {
++                    new java.util.jar.Manifest(it)
++                }
++                if (jarManifest.mainAttributes.remove(java.util.jar.Attributes.Name.MULTI_RELEASE) != null) {
++                    java.nio.file.Files.newOutputStream(manifestPath).withCloseable { jarManifest.write(it) }
++                }
++            }
++        }
++    }
+ 
+     if (project.ext.needsDowngrade) {
+         gradle.taskGraph.whenReady { graph ->
