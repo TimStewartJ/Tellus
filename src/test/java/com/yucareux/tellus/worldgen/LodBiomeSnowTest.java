@@ -208,19 +208,22 @@ class LodBiomeSnowTest {
    }
 
    @Test
-   void nearbySnowAndVisualBlendingCannotSnowOverBareOrMissingTerrain() {
+   void nearbySnowCannotSnowOverOtherTerrainButTheBlendedSnowBorderCan() {
       try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.SNOWY_TAIGA);
          EarthChunkGenerator generator = new EarthChunkGenerator(new FixedBiomeSource(biome), EarthGeneratorSettings.DEFAULT);
          generator.setLodShorelineOverrideSuppressed(true);
          generator.setLodMountainTransitionCache(new SnowSourceCache(true));
          for (int coverClass : new int[]{0, 10, 20, 30, 40, 50, 60, 90, 100}) {
-            for (int visualCover : new int[]{coverClass, MountainSurfaceRules.ESA_SNOW_ICE}) {
-               for (boolean ultraFast : List.of(false, true)) {
-                  for (int x = -16; x <= 16; x++) {
-                     assertSnowFree(resolveAt(generator, biome, x, 0, 320, false, coverClass, visualCover, 8, false, ultraFast).top());
-                  }
+            for (boolean ultraFast : List.of(false, true)) {
+               for (int x = -16; x <= 16; x++) {
+                  assertSnowFree(resolveAt(generator, biome, x, 0, 320, false, coverClass, coverClass, 8, false, ultraFast).top());
                }
+               // Chunks bend the snow edge with the land-cover border; LODs must too, except over missing data.
+               BlockState bordered = resolveAt(
+                  generator, biome, 0, 0, 320, false, coverClass, MountainSurfaceRules.ESA_SNOW_ICE, 0, false, ultraFast
+               ).top();
+               assertEquals(coverClass != MountainSurfaceRules.ESA_NO_DATA, bordered.is(Blocks.SNOW_BLOCK), "cover " + coverClass);
             }
          }
       }

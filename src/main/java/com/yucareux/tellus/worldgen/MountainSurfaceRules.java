@@ -36,18 +36,13 @@ public final class MountainSurfaceRules {
    }
 
    /**
-    * The land cover a column's ground, trees and biome follow. Forests and towns
-    * take the blended border too: keeping their raw 10 m pixels made every forest
-    * edge and town edge a staircase at fine scales.
+    * The land cover a column's ground, trees and biome follow. Every class but
+    * water and missing data takes the blended border: keeping the raw 10 m pixels
+    * made forest, town and snow edges staircases at fine scales, and left rock
+    * pixels inside glaciers as perfect squares.
     */
    public static int resolveSurfaceCoverClass(int terrainCoverClass, int visualCoverClass) {
-      if (terrainCoverClass == ESA_SNOW_ICE || visualCoverClass == ESA_SNOW_ICE) {
-         // Visual blending must neither invent snow outside the data nor erase
-         // a mapped snow source. SnowTransitionPolicy softens its inner edge.
-         return terrainCoverClass;
-      } else {
-         return !isWaterLikeCoverClass(terrainCoverClass) && !isWaterLikeCoverClass(visualCoverClass) ? visualCoverClass : terrainCoverClass;
-      }
+      return !isWaterLikeCoverClass(terrainCoverClass) && !isWaterLikeCoverClass(visualCoverClass) ? visualCoverClass : terrainCoverClass;
    }
 
    public static MountainSurfaceRules.ShorelineMaterial classifyShorelineMaterial(

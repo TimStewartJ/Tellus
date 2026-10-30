@@ -9,15 +9,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MountainSurfaceRulesTest {
    @Test
-   void snowBoundariesFollowTerrainDataInsteadOfVisualBlending() {
-      for (int coverClass : new int[]{0, 10, 20, 30, 40, 50, 60, 80, 90, 95, 100}) {
+   void snowEdgesFollowTheBlendedBorderButNeverCoverWaterOrMissingData() {
+      // Raw 10 m pixels left square rock holes in glaciers, so snow bends both ways like any other cover.
+      for (int coverClass : new int[]{10, 20, 30, 40, 50, 60, 90, 100}) {
          assertEquals(
-            coverClass,
+            MountainSurfaceRules.ESA_SNOW_ICE,
             MountainSurfaceRules.resolveSurfaceCoverClass(coverClass, MountainSurfaceRules.ESA_SNOW_ICE)
          );
          assertEquals(
-            MountainSurfaceRules.ESA_SNOW_ICE,
+            coverClass,
             MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_SNOW_ICE, coverClass)
+         );
+      }
+      for (int coverClass : new int[]{0, 80, 95}) {
+         assertEquals(
+            coverClass,
+            MountainSurfaceRules.resolveSurfaceCoverClass(coverClass, MountainSurfaceRules.ESA_SNOW_ICE)
          );
       }
    }
@@ -28,10 +35,6 @@ class MountainSurfaceRulesTest {
       assertEquals(
          MountainSurfaceRules.ESA_BARE,
          MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_TREE_COVER, MountainSurfaceRules.ESA_BARE)
-      );
-      assertEquals(
-         MountainSurfaceRules.ESA_TREE_COVER,
-         MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_TREE_COVER, MountainSurfaceRules.ESA_SNOW_ICE)
       );
       assertEquals(
          MountainSurfaceRules.ESA_TREE_COVER,
