@@ -113,7 +113,7 @@ Tellus reads the live `minecraft:overworld` noise settings, so compatible data p
 Worlds created with earlier 0.8.1 builds keep their already-generated chunks unchanged. Newly generated chunks use the corrected full-depth underground rules, so underground seams may be visible at old chunk borders.
 
 ### Structure Settings
-This section lets you toggle vanilla structures and world features on or off, such as villages, temples, monuments, ruins, and underground features like Deep Dark and amethyst geodes. Some structures (notably Deep Dark and certain ocean structures) may not generate properly yet and are still work in progress.
+This section lets you toggle vanilla structures and world features on or off, such as villages, temples, monuments, ruins, and underground features like Deep Dark and amethyst geodes. Some structures (notably Deep Dark and certain ocean structures) may not generate properly yet and are still work in progress. Explorer maps from chests and cartographers are left out, because finding their targets would load real-world terrain for tens of kilometres on the server thread and freeze the game; shipwreck and ocean ruin treasure maps are unchanged.
 
 - **Add Abandoned Camps** (26.3 only, off by default): Generates the 26.3 abandoned camps in their vanilla biomes. Tellus terrain is not reshaped around structures, so a camp is only kept where every piece sits on dry ground within one block of its floor, away from mapped roads, buildings, and landmarks. Tellus trees are kept off the camp so its chests, barrels, and beds stay intact.
 

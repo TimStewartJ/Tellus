@@ -519,6 +519,12 @@ public final class EarthChunkGenerator extends TellusChunkGeneratorBridge {
    public Pair<BlockPos, Holder<Structure>> findNearestMapStructure(
       ServerLevel level, HolderSet<Structure> structures, BlockPos position, int searchRadius, boolean skipKnownStructures
    ) {
+      // Only explorer maps (camp chests, cartographers) claim what they find. Vanilla predicts their targets across 50 to 100
+      // rings of unexplored terrain on the server thread, and each Tellus prediction loads real-world data, freezing the game.
+      if (skipKnownStructures) {
+         return null;
+      }
+
       boolean structureBiomeQueries = this.settings.caveGeneration()
          && this.settings.deepDark()
          && this.settings.addAncientCities()
