@@ -649,9 +649,9 @@ final class InlandHydrologyPlanner {
             int depth = LakeBedProfile.depth(Math.min(LakeBedProfile.maximumShoreInfluenceBlocks(), depthDistance), x, z, scale);
             return new Column(true, true, false, level - Math.max(1, depth), level, 0);
          }
-         if (distance <= RiverChannels.MAX_BLEND && !island) {
-            // The shore keeps the natural terrain's shape, moved by the excess of the ground at the
-            // water's edge over a lip level with the water's surface and fading out with distance.
+         if (distance <= RiverChannels.MAX_BLEND) {
+            // The shore, a mapped island's too, keeps the natural terrain's shape, moved by the excess of the ground
+            // at the water's edge over a lip level with the water's surface and fading out with distance.
             double edge = Math.ceil(RiverChannels.edgeHeight(terrain, shoreX, shoreZ));
             // An outline the water does not reach (up a slope above it) is no shore: shaping it cut a ring into the slope.
             if (edge - level > steepest) return Column.dry(raw);
