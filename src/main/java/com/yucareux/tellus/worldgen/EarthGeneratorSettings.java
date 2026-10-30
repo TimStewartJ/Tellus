@@ -2538,7 +2538,6 @@ public record EarthGeneratorSettings(
 
    public static enum DistantHorizonsRenderMode {
       FAST("fast"),
-      ULTRA_FAST("ultra_fast"),
       DETAILED("detailed");
 
       public static final Codec<EarthGeneratorSettings.DistantHorizonsRenderMode> CODEC = Codec.STRING

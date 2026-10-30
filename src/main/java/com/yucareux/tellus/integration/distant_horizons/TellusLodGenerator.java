@@ -1318,8 +1318,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       double previewResolutionMeters = lodPreviewResolutionMeters(settings, cellSize);
       boolean roadsActive = this.shouldRenderDhRoads(detail);
       boolean buildingsActive = this.shouldRenderDhBuildings(detail);
-      boolean baseDetailedWater = detailLevel <= 5
-         && settings.distantHorizonsRenderMode() != EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST;
+      boolean baseDetailedWater = detailLevel <= 5;
       boolean allowWaterVegetation = detail <= LOD_WATER_VEGETATION_MAX_DETAIL;
       IDhApiBlockStateWrapper[] vegetationBlocks = allowWaterVegetation && LodUnderwaterVegetation.enabled() ? underwaterVegetationBlocks(wrappers) : null;
       double waterMetersPerBlock = waterMetersPerBlock(settings);
@@ -1885,8 +1884,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
    private boolean useUltraFastLodMode(int detailLevel) {
       EarthGeneratorSettings.DistantHorizonsRenderMode renderMode = this.generator.settings().distantHorizonsRenderMode();
-      return renderMode == EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST
-         || renderMode == EarthGeneratorSettings.DistantHorizonsRenderMode.FAST && detailLevel >= FAST_RENDER_ULTRA_FAST_MIN_DETAIL;
+      return renderMode == EarthGeneratorSettings.DistantHorizonsRenderMode.FAST && detailLevel >= FAST_RENDER_ULTRA_FAST_MIN_DETAIL;
    }
 
    private boolean shouldSuppressCoarseShoreline(int detailLevel) {

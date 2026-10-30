@@ -67,6 +67,15 @@ class EarthGeneratorSettingsCodecTest {
    }
 
    @Test
+   void legacyUltraFastRenderModeLoadsAsFast() {
+      JsonElement input = JsonParser.parseString("{\"distant_horizons_render_mode\":\"ultra_fast\"}");
+
+      EarthGeneratorSettings decoded = requireSuccess(EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, input));
+
+      assertEquals(EarthGeneratorSettings.DistantHorizonsRenderMode.FAST, decoded.distantHorizonsRenderMode());
+   }
+
+   @Test
    void cityLightsDistanceDefaultsTo1024ChunksAndRoundTrips() {
       assertEquals(1024, EarthGeneratorSettings.DEFAULT.distantHorizonsCityLightsDistance());
       // Worlds saved before the setting existed load with the default.
