@@ -5724,12 +5724,13 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    public void close() {
       this.lodPreparationQueue.close();
       this.lodPrefetchBatcher.close();
+      List<CompletableFuture<Void>> recoveries;
       synchronized (this.pendingLodInputRecoveries) {
-         this.pendingLodInputRecoveries.values().forEach(
-            future -> future.cancel(true)
-         );
+         recoveries = List.copyOf(this.pendingLodInputRecoveries.values());
          this.pendingLodInputRecoveries.clear();
       }
+      // Cancelling completes each future at once, and its callback removes it from the map.
+      recoveries.forEach(future -> future.cancel(true));
       this.pendingLodExclusions.clear();
       this.lodLookahead.close();
    }
