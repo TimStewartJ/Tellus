@@ -644,6 +644,18 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
    }
 
    public WaterSurfaceResolver.WaterColumnData resolveFastColumnData(int blockX, int blockZ, int coverClass, double previewResolutionMeters) {
+      try {
+         return this.resolveMappedFastColumnData(blockX, blockZ, coverClass, previewResolutionMeters);
+      } catch (RuntimeException error) {
+         // A cache-only LOD draws the land-cover estimate instead of failing while its map tiles are not cached.
+         if (!ManagedTerrainNetworkPolicy.isCacheOnly() || findOceanCoverageError(error) == null) throw error;
+         return this.landCoverWaterColumnData(blockX, blockZ, coverClass, previewResolutionMeters);
+      }
+   }
+
+   private WaterSurfaceResolver.WaterColumnData resolveMappedFastColumnData(
+      int blockX, int blockZ, int coverClass, double previewResolutionMeters
+   ) {
       if (this.osmWaterEnabled && this.inlandHydrology.mayAffect(blockX, blockZ)) {
          int index = Math.floorMod(blockZ, REGION_SIZE) * REGION_SIZE + Math.floorMod(blockX, REGION_SIZE);
          if (!this.inlandCoastProtection(regionCoord(blockX), regionCoord(blockZ)).band()[index])
@@ -926,9 +938,14 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          return new WaterSurfaceResolver.WaterColumnData(true, ocean, terrainSurface, waterSurface);
       }
 
-      TellusLandMaskSource.LandMaskSample landMaskSample = this.osmWaterEnabled
-         ? TellusLandMaskSource.LandMaskSample.unknown()
-         : this.sampleLandMask(blockX, blockZ, previewResolutionMeters);
+      return this.landCoverWaterColumnData(blockX, blockZ, coverClass, previewResolutionMeters);
+   }
+
+   /** Water from land cover and the land mask alone, for worlds without Overture water and cache-only LODs. */
+   private WaterSurfaceResolver.WaterColumnData landCoverWaterColumnData(
+      int blockX, int blockZ, int coverClass, double previewResolutionMeters
+   ) {
+      TellusLandMaskSource.LandMaskSample landMaskSample = this.sampleLandMask(blockX, blockZ, previewResolutionMeters);
       WaterSurfaceResolver.SurfaceSample surfaceSample = this.sampleSurface(
          blockX, blockZ, coverClass, landMaskSample, previewResolutionMeters
       );
@@ -940,14 +957,19 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
          return new WaterSurfaceResolver.WaterColumnData(false, false, surface, surface);
       }
       boolean isOcean = this.classifyWaterAsOcean(false, landMaskSample, surface, coverClass);
-      if (!shouldEmitCoarseFallbackWater(this.osmWaterEnabled, coverClass, isOcean)) {
+      if (!shouldEmitCoarseFallbackWater(false, coverClass, isOcean)) {
          return new WaterSurfaceResolver.WaterColumnData(false, false, surface, surface);
       } else {
          int waterSurface = isOcean ? this.resolveOceanWaterSurface(blockX, blockZ) : surface;
          int terrainSurface = surface;
          int minDepth = Math.max(1, OCEAN_MIN_DEPTH);
          if (isOcean) {
-            terrainSurface = this.sampleOceanTerrainHeight(blockX, blockZ, waterSurface, previewResolutionMeters);
+            try {
+               terrainSurface = this.sampleOceanTerrainHeight(blockX, blockZ, waterSurface, previewResolutionMeters);
+            } catch (OceanCoverageUnavailableException missingCoast) {
+               if (!ManagedTerrainNetworkPolicy.isCacheOnly()) throw missingCoast;
+               terrainSurface = waterSurface - minDepth;
+            }
          } else if (terrainSurface > waterSurface - minDepth) {
             terrainSurface = waterSurface - minDepth;
          }

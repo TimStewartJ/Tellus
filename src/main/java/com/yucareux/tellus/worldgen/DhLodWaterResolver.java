@@ -136,7 +136,13 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
             this.cacheGeneration.get(), this.fullWaterResolver.currentCacheGeneration());
          planned = regular ? this.inlandAreas.get(key, () -> this.buildInlandArea(lodSizePoints, cellSize, worldXs, worldZs))
             : this.buildInlandArea(lodSizePoints, cellSize, worldXs, worldZs);
-      } catch (ExecutionException | UncheckedExecutionException error) {
+      } catch (ExecutionException | UncheckedExecutionException | OceanCoverageUnavailableException error) {
+         // Without the map tiles a cache-only LOD falls back to the grid resolver, which draws what is cached.
+         if (ManagedTerrainNetworkPolicy.isCacheOnly() && coverageMissing(error)) {
+            return this.resolveAreaGrid(baseX, baseZ, lodSizePoints, cellSize, worldXs, worldZs,
+               baseTerrainSurface, coverClasses, useDetailedWaterResolver);
+         }
+         if (error instanceof OceanCoverageUnavailableException missing) throw missing;
          if (error.getCause() instanceof RuntimeException cause) throw cause;
          throw new IllegalStateException("Unable to resolve inland LOD water", error.getCause());
       }
@@ -190,9 +196,9 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                result.falling()[index] = false;
             }
          }
-      } catch (OceanCoverageUnavailableException missing) {
+      } catch (RuntimeException missing) {
          // The network's map tiles are not cached yet: a cache-only LOD keeps the rivers it has instead of failing.
-         if (!ManagedTerrainNetworkPolicy.isCacheOnly()) throw missing;
+         if (!ManagedTerrainNetworkPolicy.isCacheOnly() || !coverageMissing(missing)) throw missing;
       }
    }
 
@@ -1798,6 +1804,13 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
    /** Incomplete map water fails an exact LOD; a cache-only one draws what is cached and marks itself incomplete. */
    static boolean shouldRejectIncompleteCoverage(boolean complete, boolean cacheOnly) {
       return !complete && !cacheOnly;
+   }
+
+   private static boolean coverageMissing(Throwable error) {
+      for (Throwable current = error; current != null; current = current.getCause()) {
+         if (current instanceof OceanCoverageUnavailableException) return true;
+      }
+      return false;
    }
 
    static boolean shouldRetryPendingCoverage(

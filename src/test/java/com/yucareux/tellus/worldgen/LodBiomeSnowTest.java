@@ -208,6 +208,36 @@ class LodBiomeSnowTest {
    }
 
    @Test
+   void cacheOnlyLodWaterWithoutOvertureTilesDrawsLandCoverWater() {
+      // The temporary game directory holds no Overture tiles, as on a fresh install before downloads finish.
+      try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
+         EarthChunkGenerator generator = new EarthChunkGenerator(
+            new FixedBiomeSource(biomes.getOrThrow(Biomes.PLAINS)), EarthGeneratorSettings.DEFAULT
+         );
+         int x = 10_000;
+         int z = -20_000;
+         assertTrue(generator.resolveLodWaterColumn(x, z, MountainSurfaceRules.ESA_WATER).hasWater());
+         generator.resolveLodWaterColumn(x, z, MountainSurfaceRules.ESA_GRASSLAND);
+
+         int points = 4;
+         int cell = 1;
+         int[] xs = new int[points];
+         int[] zs = new int[points];
+         for (int i = 0; i < points; i++) {
+            xs[i] = x + i * cell;
+            zs[i] = z + i * cell;
+         }
+         int[] cover = new int[points * points];
+         Arrays.fill(cover, MountainSurfaceRules.ESA_WATER);
+         int[] terrain = new int[points * points];
+         Arrays.fill(terrain, 64);
+         DhLodWaterResolver.AreaResult area = new DhLodWaterResolver(generator)
+            .resolveArea(x, z, points, cell, xs, zs, terrain, cover, true);
+         assertEquals(points * points, area.hasWater().length);
+      }
+   }
+
+   @Test
    void nearbySnowCannotSnowOverOtherTerrainButTheBlendedSnowBorderCan() {
       try (@SuppressWarnings("unused") ManagedTerrainNetworkPolicy.Scope ignored = ManagedTerrainNetworkPolicy.cacheOnly()) {
          Holder<Biome> biome = biomes.getOrThrow(Biomes.SNOWY_TAIGA);
