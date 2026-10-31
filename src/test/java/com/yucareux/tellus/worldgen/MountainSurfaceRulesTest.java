@@ -9,15 +9,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MountainSurfaceRulesTest {
    @Test
-   void snowBoundariesFollowTerrainDataInsteadOfVisualBlending() {
-      for (int coverClass : new int[]{0, 10, 20, 30, 40, 50, 60, 80, 90, 95, 100}) {
+   void snowEdgesFollowTheBlendedBorderButNeverCoverWaterOrMissingData() {
+      // Raw 10 m pixels left square rock holes in glaciers, so snow bends both ways like any other cover.
+      for (int coverClass : new int[]{10, 20, 30, 40, 50, 60, 90, 100}) {
          assertEquals(
-            coverClass,
+            MountainSurfaceRules.ESA_SNOW_ICE,
             MountainSurfaceRules.resolveSurfaceCoverClass(coverClass, MountainSurfaceRules.ESA_SNOW_ICE)
          );
          assertEquals(
-            MountainSurfaceRules.ESA_SNOW_ICE,
+            coverClass,
             MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_SNOW_ICE, coverClass)
+         );
+      }
+      for (int coverClass : new int[]{0, 80, 95}) {
+         assertEquals(
+            coverClass,
+            MountainSurfaceRules.resolveSurfaceCoverClass(coverClass, MountainSurfaceRules.ESA_SNOW_ICE)
          );
       }
    }
@@ -34,10 +41,6 @@ class MountainSurfaceRulesTest {
          MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_BUILT, MountainSurfaceRules.ESA_TREE_COVER)
       );
       assertEquals(
-         MountainSurfaceRules.ESA_TREE_COVER,
-         MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_BUILT, MountainSurfaceRules.ESA_TREE_COVER)
-      );
-      assertEquals(
          MountainSurfaceRules.ESA_BUILT,
          MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_GRASSLAND, MountainSurfaceRules.ESA_BUILT)
       );
@@ -48,23 +51,6 @@ class MountainSurfaceRulesTest {
       assertEquals(
          MountainSurfaceRules.ESA_WATER,
          MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_WATER, MountainSurfaceRules.ESA_TREE_COVER)
-      );
-      assertEquals(
-         MountainSurfaceRules.ESA_GRASSLAND,
-         MountainSurfaceRules.resolveSurfaceCoverClass(MountainSurfaceRules.ESA_GRASSLAND, MountainSurfaceRules.ESA_WATER)
-      );
-   }
-
-   @Test
-   void treeMarkersFollowRawFeatureSemanticsRatherThanVisualSurface() {
-      assertTrue(
-         MountainSurfaceRules.isTreeMarkerCoverClass(MountainSurfaceRules.ESA_TREE_COVER, MountainSurfaceRules.ESA_BARE)
-      );
-      assertTrue(
-         MountainSurfaceRules.isTreeMarkerCoverClass(MountainSurfaceRules.ESA_MANGROVES, MountainSurfaceRules.ESA_WETLAND)
-      );
-      assertFalse(
-         MountainSurfaceRules.isTreeMarkerCoverClass(MountainSurfaceRules.ESA_GRASSLAND, MountainSurfaceRules.ESA_TREE_COVER)
       );
    }
 

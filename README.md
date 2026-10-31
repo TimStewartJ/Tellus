@@ -26,6 +26,8 @@ Server support note: Tellus must be installed on the server, but is not required
 
 For 26.3, use Fabric Loader 0.19.5 or later with Fabric API 0.160.5+26.3 or later, or NeoForge 26.3.0.3-beta or later for Minecraft 26.3. Distant Horizons 3.3.1 is supported, including the Tellus fork for extended-height worlds and managed terrain downloads.
 
+On 26.3, the Dappled Forest mixes through the forest of cool continental climates (Köppen Dfb, Dwb, and Dsb) in clumps of a few trees, about 60% of it, so autumn and green crowns blend like a real mixed forest. This covers New England, the Great Lakes, the Canadian aspen parkland, and the forest-steppe from Poland to Siberia. Forests that Tellus maps as taiga or conifer forest keep their taiga. Custom Trees grows red, orange, and yellow poplars there, Random Biomes can select the biome, and Abandoned Camps can place its Dappled Forest camp. Newly generated chunks use this mix, so biome edges may be visible at old chunk borders in existing 26.3 worlds.
+
 Build all targets with `./gradlew build`, or only the new targets with `./gradlew -PtellusTargets=mc263,mc263-neoforge build`. See [26.3 compatibility notes](docs/minecraft-26.3.md) for the shared-source layout, validation, and possible follow-up features.
 
 ## Features
@@ -185,7 +187,9 @@ Tellus reads the live `minecraft:overworld` noise settings, so compatible data p
 Worlds created with earlier 0.8.1 builds keep their already-generated chunks unchanged. Newly generated chunks use the corrected full-depth underground rules, so underground seams may be visible at old chunk borders.
 
 ### Structure Settings
-This section lets you toggle vanilla structures and world features on or off, such as villages, temples, monuments, ruins, and underground features like Deep Dark and amethyst geodes. Some structures (notably Deep Dark and certain ocean structures) may not generate properly yet and are still work in progress.
+This section lets you toggle vanilla structures and world features on or off, such as villages, temples, monuments, ruins, and underground features like Deep Dark and amethyst geodes. Some structures (notably Deep Dark and certain ocean structures) may not generate properly yet and are still work in progress. Explorer maps from chests and cartographers are left out, because finding their targets would load real-world terrain for tens of kilometres on the server thread and freeze the game; shipwreck and ocean ruin treasure maps are unchanged.
+
+- **Add Abandoned Camps** (26.3 only, off by default): Generates the 26.3 abandoned camps in their vanilla biomes. Tellus terrain is not reshaped around structures, so a camp is only kept where every piece sits on dry ground within one block of its floor, away from mapped roads, buildings, and landmarks. Tellus trees are kept off the camp so its chests, barrels, and beds stay intact.
 
 ### Real-Time Settings
 - **Real-Time Time**: Syncs the in-game day/night cycle to real-world time based on your in-game location. The vanilla sun is anchored to the real sun: real sunrise, solar noon, sunset and solar midnight map onto ticks 0, 6000, 12000 and 18000, so day length follows season and latitude (including polar day and polar night) and the moon shows the real lunar phase. Launch with `-Dtellus.realtime.astronomical=false` to restore the legacy mapping where 06:00 local time is always tick 0.
@@ -194,7 +198,6 @@ This section lets you toggle vanilla structures and world features on or off, su
 
 ### Compatibility Settings
 - **Distant Horizons Render Mode**: Fast uses Tellus's LOD generator to build simplified distant terrain quickly with lower cost. Detailed asks Distant Horizons to use full chunk generation for far terrain, which is more accurate but significantly slower and heavier. For most setups, keeping Fast LOD generation is recommended.
-- **LOD Water Resolver**: Adds coherent lake beds and smoother water surfaces to Distant Horizons fast LODs directly on the sampled LOD grid, avoiding block-resolution water-region generation.
 - **Coming Soon**: Additional compatibility options are work in progress and currently unavailable.
 
 ### Cache

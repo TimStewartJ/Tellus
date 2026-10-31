@@ -150,6 +150,33 @@ class InlandHydrologyArtifactTest {
       assertFalse(new HydrologyWaterMap.Shape(feature(51, false, OsmWaterKind.UNKNOWN, lake), WorldProjection.global(1.0)).river);
    }
 
+   @Test void lakeIslandShoreMeetsTheWater() {
+      // A mapped island (a hole in the lake, wound the other way) rising gently from the lake's flat surface. Its
+      // shore was left unshaped, two blocks above the water, while the lake's own shores meet it.
+      double[][] rings = {{300, 300, 700, 300, 700, 700, 300, 700, 300, 300},
+         {460.5, 460.5, 460.5, 539.5, 539.5, 539.5, 539.5, 460.5, 460.5, 460.5}};
+      double[][] lon = new double[2][], lat = new double[2][];
+      for (int r = 0; r < 2; r++) {
+         lon[r] = new double[rings[r].length / 2]; lat[r] = new double[lon[r].length];
+         for (int i = 0; i < lon[r].length; i++) {
+            lon[r][i] = WorldProjection.global(1.0).blockXToLon(rings[r][i * 2]);
+            lat[r][i] = WorldProjection.global(1.0).blockZToLat(rings[r][i * 2 + 1]);
+         }
+      }
+      DoubleBinaryOperator dem = (x, z) -> 100 + 0.3 * Math.max(0, Math.min(Math.min(x - 460.5, 539.5 - x), Math.min(z - 460.5, 539.5 - z)));
+      var planner = planner(dem, 30, new OsmWaterFeature(54, false, false, OsmWaterKind.LAKE, lon, lat));
+      int[][] shoreAndWater = {{500, 461, 500, 460}, {500, 539, 500, 540}, {461, 500, 460, 500}, {539, 500, 540, 500}};
+      for (int[] s : shoreAndWater) {
+         var water = planner.sample(s[2], s[3], (int)Math.ceil(dem.applyAsDouble(s[2], s[3])));
+         var shore = planner.sample(s[0], s[1], (int)Math.ceil(dem.applyAsDouble(s[0], s[1])));
+         assertTrue(water.wet() && !shore.wet(), "Island shore at " + s[0] + "," + s[1] + ": " + shore + " beside " + water);
+         assertEquals(water.water(), shore.terrain(), "Island shore at " + s[0] + "," + s[1] + " does not meet the water");
+      }
+      var top = planner.sample(500, 500, 112);
+      assertFalse(top.wet(), "The island stays land");
+      assertEquals(112, top.terrain(), "The island's top keeps its terrain");
+   }
+
    @Test void riverBesideAHigherLakeKeepsItsOwnLevel() {
       // A lake on a terrace a few blocks from a river is not that river's inlet or outlet.
       DoubleBinaryOperator dem = (x, z) -> z < 494 ? 130 : 100 + x * 0.01 + Math.abs(z - 500) * 0.8;

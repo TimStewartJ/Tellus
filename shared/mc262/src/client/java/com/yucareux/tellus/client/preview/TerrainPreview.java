@@ -2067,6 +2067,7 @@ public final class TerrainPreview implements AutoCloseable {
          case BIRCH -> 0x67A64D;
          case SUBARCTIC_BIRCH -> 0x788E57;
          case CHERRY -> 0xE6A0C2;
+         case POPLAR -> 0xB34E20;
          case CONIFER -> 0x326C3E;
          case TALL_CONIFER -> 0x285B35;
          case PINE -> 0x3D7341;
@@ -2085,6 +2086,7 @@ public final class TerrainPreview implements AutoCloseable {
       return switch (profile) {
          case BIRCH, SUBARCTIC_BIRCH -> 0xD1C8AA;
          case CHERRY -> 0x81555B;
+         case POPLAR -> 0x4F3C2A;
          case PALE_BROADLEAF -> 0xA69D87;
          case DARK_BROADLEAF -> 0x4C3428;
          case CONIFER, TALL_CONIFER, PINE -> 0x674329;
@@ -5636,7 +5638,7 @@ public final class TerrainPreview implements AutoCloseable {
                   0.55F, 1.0F, upperLeaves
                );
             }
-            case CHERRY -> {
+            case CHERRY, POPLAR -> {
                addPreviewCrownBox(
                   builder, tree, centerX, centerZ, base, height, canopyHalfWidth * 1.08F, 0.0F, 0.0F,
                   Math.max(crownBase, 0.44F), 0.74F, shadedLeaves

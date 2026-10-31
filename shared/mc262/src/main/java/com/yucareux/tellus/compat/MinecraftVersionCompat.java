@@ -23,6 +23,10 @@ public final class MinecraftVersionCompat extends Minecraft26Compat {
       return Beardifier.EMPTY;
    }
 
+   public static boolean hasAbandonedCamps() {
+      return false;
+   }
+
    @SuppressWarnings("unchecked")
    public static ConfiguredFeature<?, ?> unwrapConfiguredFeature(Object configuredFeature) {
       return ((Holder<ConfiguredFeature<?, ?>>)configuredFeature).value();

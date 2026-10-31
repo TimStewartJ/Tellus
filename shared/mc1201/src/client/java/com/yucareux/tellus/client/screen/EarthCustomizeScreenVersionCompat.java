@@ -65,7 +65,6 @@ abstract class EarthCustomizeScreenVersionCompat extends Screen {
       List<EarthGeneratorSettings.DistantHorizonsRenderMode> modes = new ArrayList<>(3);
       modes.add(EarthGeneratorSettings.DistantHorizonsRenderMode.DETAILED);
       modes.add(EarthGeneratorSettings.DistantHorizonsRenderMode.FAST);
-      modes.add(EarthGeneratorSettings.DistantHorizonsRenderMode.ULTRA_FAST);
       return modes;
    }
 

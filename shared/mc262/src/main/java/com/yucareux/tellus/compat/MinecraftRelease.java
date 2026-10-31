@@ -29,4 +29,9 @@ public final class MinecraftRelease {
       Identifier id = resourceLocation("minecraft", path);
       return BuiltInRegistries.BLOCK.getOptional(id).orElseThrow(() -> new IllegalStateException("Missing Minecraft block " + id));
    }
+
+   /** The block with this vanilla id, or the fallback where this version has none. */
+   public static Block blockOr(String path, Block fallback) {
+      return BuiltInRegistries.BLOCK.getOptional(resourceLocation("minecraft", path)).orElse(fallback);
+   }
 }

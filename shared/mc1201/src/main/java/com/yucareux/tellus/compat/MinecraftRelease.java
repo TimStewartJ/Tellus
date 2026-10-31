@@ -42,6 +42,14 @@ public final class MinecraftRelease {
          .orElseThrow(() -> new IllegalStateException("Missing Minecraft block " + id));
    }
 
+   /** The block with this vanilla id, or the fallback where this version has none. */
+   public static Block blockOr(String path, Block fallback) {
+      return BuiltInRegistries.REGISTRY.getOptional(Registries.BLOCK.location())
+         .flatMap(blocks -> blocks.getOptional(resourceLocation("minecraft", path)))
+         .map(Block.class::cast)
+         .orElse(fallback);
+   }
+
    public static Axolotl createAxolotl(ServerLevel level, BlockPos position) {
       return (Axolotl)EntityType.AXOLOTL.create(level);
    }

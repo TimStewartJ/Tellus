@@ -39,3 +39,12 @@ availability extension, and compiled Iris references.
 See [the integration notes](../../docs/distant-horizons-3.3.1.md) for behavior,
 compatibility, and runtime validation. Runtime probe sources and logs from this
 local build are retained under `output/dh-3.3/`.
+
+## Forge 1.20.1 packaging fix for the 3.3.4 fork
+
+`patches/multi-release.patch` applies to the 3.3.4 loader checkout and is already
+applied to the local fork. It normalizes the final `shadeDowngradedApi` jar:
+when JVMDowngrader has flattened `META-INF/versions`, the stale `Multi-Release`
+manifest flag is removed. Real multi-release jars keep their flag and entries.
+This prevents Forge 1.20.1's SecureJarHandler from failing before mod startup.
+The release verifier also rejects this metadata mismatch.

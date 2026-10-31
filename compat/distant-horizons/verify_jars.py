@@ -28,7 +28,12 @@ with ZipFile(args.api) as official:
             path = args.release/'jars'/name
             with ZipFile(path) as jar:
                 assert jar.testzip() is None, name
-                assert f'Implementation-Version: {version}' in jar.read('META-INF/MANIFEST.MF').decode(), name
+                manifest = jar.read('META-INF/MANIFEST.MF').decode()
+                assert f'Implementation-Version: {version}' in manifest, name
+                # Forge 1.20.1 scans this directory whenever the manifest enables multi-release loading.
+                assert 'multi-release: true' not in manifest.lower() or any(
+                    n.startswith('META-INF/versions/') for n in jar.namelist()
+                ), f'{name}: Multi-Release is enabled but META-INF/versions is missing'
                 gl = 'com/seibel/distanthorizons/common/render/openGl/terrain/GlBlockTextureAtlas.class'
                 assert struct.unpack('>H', jar.read(gl)[6:8])[0] == java + 44, name
                 preserved = 0

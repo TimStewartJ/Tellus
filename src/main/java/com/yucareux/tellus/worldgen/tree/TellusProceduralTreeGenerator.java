@@ -1,5 +1,6 @@
 package com.yucareux.tellus.worldgen.tree;
 
+import com.yucareux.tellus.compat.MinecraftRelease;
 import com.yucareux.tellus.compat.MinecraftVersionCompat;
 import com.yucareux.tellus.world.data.canopy.TellusCanopyHeightSource;
 import com.yucareux.tellus.world.data.resolve.ResolveBiome;
@@ -362,6 +363,7 @@ public final class TellusProceduralTreeGenerator {
          case MALLEE -> growMallee(tree, ground, plan, log, leaves, seed);
          case MEDITERRANEAN -> growMediterranean(tree, ground, plan, log, leaves, seed);
          case CHERRY -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.84);
+         case POPLAR -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.72);
          case DARK_BROADLEAF, PALE_BROADLEAF -> growBroadleaf(tree, ground, plan, log, leaves, seed, 1.0);
          case SWAMP, TEMPERATE_BROADLEAF -> growBroadleaf(tree, ground, plan, log, leaves, seed, 0.90);
       }
@@ -1807,6 +1809,9 @@ public final class TellusProceduralTreeGenerator {
       if (MinecraftVersionCompat.isPaleGarden(biome)) {
          return Profile.PALE_BROADLEAF;
       }
+      if (biome.unwrapKey().map(TellusProceduralTreeGenerator::isDappledForest).orElse(false)) {
+         return Profile.POPLAR;
+      }
       if (biome.is(BiomeTags.IS_JUNGLE)) {
          return Profile.TROPICAL;
       }
@@ -1837,6 +1842,9 @@ public final class TellusProceduralTreeGenerator {
       }
       if (MinecraftVersionCompat.isPaleGarden(biomeKey)) {
          return Profile.PALE_BROADLEAF;
+      }
+      if (isDappledForest(biomeKey)) {
+         return Profile.POPLAR;
       }
       if (Biomes.JUNGLE.equals(biomeKey)
          || Biomes.BAMBOO_JUNGLE.equals(biomeKey)
@@ -1870,6 +1878,11 @@ public final class TellusProceduralTreeGenerator {
       return Profile.TEMPERATE_BROADLEAF;
    }
 
+   // Compared by id: only 26.3 registers it, and a static key would load the registries with this class.
+   private static boolean isDappledForest(ResourceKey<Biome> biomeKey) {
+      return biomeKey != null && "minecraft:dappled_forest".equals(MinecraftVersionCompat.keyId(biomeKey));
+   }
+
    /** Material state shared with coarse LOD columns for a planned tree. */
    public static BlockState logState(Profile profile, long seed) {
       return palette(profile, seed).log().defaultBlockState();
@@ -1898,6 +1911,10 @@ public final class TellusProceduralTreeGenerator {
             : new Palette(Blocks.OAK_LOG, Blocks.OAK_LEAVES);
          case DARK_BROADLEAF -> new Palette(Blocks.DARK_OAK_LOG, Blocks.DARK_OAK_LEAVES);
          case CHERRY -> new Palette(Blocks.CHERRY_LOG, Blocks.CHERRY_LEAVES);
+         case POPLAR -> new Palette(
+            MinecraftRelease.blockOr("poplar_log", Blocks.BIRCH_LOG),
+            MinecraftRelease.blockOr(poplarLeavesPath(seed), Blocks.BIRCH_LEAVES)
+         );
          case PALE_BROADLEAF -> new Palette(
             MinecraftVersionCompat.paleOakLogOr(Blocks.DARK_OAK_LOG),
             MinecraftVersionCompat.paleOakLeavesOr(Blocks.DARK_OAK_LEAVES)
@@ -1907,6 +1924,12 @@ public final class TellusProceduralTreeGenerator {
             ? new Palette(Blocks.BIRCH_LOG, Blocks.BIRCH_LEAVES)
             : new Palette(Blocks.OAK_LOG, Blocks.OAK_LEAVES);
       };
+   }
+
+   /** Red, orange and yellow crowns in the 200:240:90 mix of vanilla's Dappled Forest. */
+   private static String poplarLeavesPath(long seed) {
+      long roll = (mix(seed) >>> 1) % 53L;
+      return roll < 20L ? "red_poplar_leaves" : roll < 44L ? "orange_poplar_leaves" : "yellow_poplar_leaves";
    }
 
    private static long seedFromCoords(int x, int y, int z) {
@@ -1946,6 +1969,7 @@ public final class TellusProceduralTreeGenerator {
       BIRCH(10, 27, 42, 0.16, 2, 7, 0.43, 0.03, false),
       SUBARCTIC_BIRCH(5, 14, 22, 0.22, 2, 6, 0.28, 0.10, false),
       CHERRY(8, 22, 36, 0.25, 3, 9, 0.44, 0.05, false),
+      POPLAR(12, 30, 52, 0.21, 3, 9, 0.48, 0.03, false),
       CONIFER(14, 38, 68, 0.17, 3, 10, 0.28, 0.025, true),
       TALL_CONIFER(24, 58, 96, 0.15, 4, 11, 0.30, 0.02, true),
       PINE(14, 38, 62, 0.18, 3, 9, 0.48, 0.035, true),

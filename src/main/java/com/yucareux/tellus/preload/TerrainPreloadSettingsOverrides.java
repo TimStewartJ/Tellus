@@ -83,6 +83,7 @@ public record TerrainPreloadSettingsOverrides(
       object.addProperty("add_ancient_cities", this.addStructures);
       object.addProperty("add_trial_chambers", this.addStructures);
       object.addProperty("add_trail_ruins", this.addStructures);
+      object.addProperty("add_abandoned_camps", this.addStructures);
       AtomicReference<String> parseError = new AtomicReference<>();
       EarthGeneratorSettings applied = EarthGeneratorSettings.CODEC.parse(JsonOps.INSTANCE, object)
          .resultOrPartial(parseError::set)
@@ -296,6 +297,7 @@ public record TerrainPreloadSettingsOverrides(
          || settings.addWitchHuts()
          || settings.addAncientCities()
          || settings.addTrialChambers()
-         || settings.addTrailRuins();
+         || settings.addTrailRuins()
+         || settings.addAbandonedCamps();
    }
 }

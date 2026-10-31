@@ -61,7 +61,7 @@ public enum VegetationCommunity {
             ? TEMPERATE_SCRUB
             : grassland ? GRASSLAND : BOREAL_FOREST;
          case SUBARCTIC_BIRCH -> SUBARCTIC_SCRUB;
-         case BIRCH, CHERRY, DARK_BROADLEAF, PALE_BROADLEAF, TEMPERATE_BROADLEAF -> shrubland
+         case BIRCH, CHERRY, DARK_BROADLEAF, PALE_BROADLEAF, POPLAR, TEMPERATE_BROADLEAF -> shrubland
             ? TEMPERATE_SCRUB
             : grassland ? GRASSLAND : TEMPERATE_FOREST;
          case SWAMP -> WETLAND;
