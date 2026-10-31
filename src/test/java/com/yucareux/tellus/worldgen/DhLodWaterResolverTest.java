@@ -30,6 +30,13 @@ class DhLodWaterResolverTest {
    }
 
    @Test
+   void cacheOnlyLodsDrawIncompleteCoverageInsteadOfFailing() {
+      assertTrue(DhLodWaterResolver.shouldRejectIncompleteCoverage(false, false));
+      assertFalse(DhLodWaterResolver.shouldRejectIncompleteCoverage(false, true));
+      assertFalse(DhLodWaterResolver.shouldRejectIncompleteCoverage(true, false));
+   }
+
+   @Test
    void retriesOnlyPendingNonBlockingCoverageSynchronously() {
       assertTrue(
          DhLodWaterResolver.shouldRetryPendingCoverage(

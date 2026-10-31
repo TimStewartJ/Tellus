@@ -6,6 +6,7 @@ import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
+import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
 import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.world.data.osm.OsmPerf;
 import com.yucareux.tellus.world.data.osm.OsmQueryMode;
@@ -175,18 +176,23 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
 
    /** Adds the rivers of the coarse river network to the dry, non-ocean cells of a distant LOD area. */
    private void overlayCoarseRivers(AreaResult result, int lodSizePoints, int cellSize, int[] worldXs, int[] worldZs) {
-      for (int z = 0; z < lodSizePoints; z++) {
-         throwIfCancelled();
-         for (int x = 0; x < lodSizePoints; x++) {
-            int index = z * lodSizePoints + x;
-            if (result.ocean()[index] || result.hasWater()[index]) continue;
-            InlandHydrologyPlanner.Column river = this.fullWaterResolver.plannedCoarseRiver(worldXs[x], worldZs[z], cellSize);
-            if (river == null) continue;
-            result.hasWater()[index] = true;
-            result.waterSurface()[index] = river.water();
-            result.terrainSurface()[index] = Math.min(result.terrainSurface()[index], river.terrain());
-            result.falling()[index] = false;
+      try {
+         for (int z = 0; z < lodSizePoints; z++) {
+            throwIfCancelled();
+            for (int x = 0; x < lodSizePoints; x++) {
+               int index = z * lodSizePoints + x;
+               if (result.ocean()[index] || result.hasWater()[index]) continue;
+               InlandHydrologyPlanner.Column river = this.fullWaterResolver.plannedCoarseRiver(worldXs[x], worldZs[z], cellSize);
+               if (river == null) continue;
+               result.hasWater()[index] = true;
+               result.waterSurface()[index] = river.water();
+               result.terrainSurface()[index] = Math.min(result.terrainSurface()[index], river.terrain());
+               result.falling()[index] = false;
+            }
          }
+      } catch (OceanCoverageUnavailableException missing) {
+         // The network's map tiles are not cached yet: a cache-only LOD keeps the rivers it has instead of failing.
+         if (!ManagedTerrainNetworkPolicy.isCacheOnly()) throw missing;
       }
    }
 
@@ -255,6 +261,8 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          long[] waterBodyKeys = rasterized.waterBodyKeys();
          int[] waterBodySurfaceHints = rasterized.waterBodySurfaceHints();
          boolean rasterIncomplete = rasterized.incomplete();
+         boolean cacheOnly = ManagedTerrainNetworkPolicy.isCacheOnly();
+         boolean sampleCoast = true;
          int seaLevel = this.generator.getSeaLevel();
          TellusLandMaskSource.LandMaskSampler landMaskSampler = this.landMaskSource.newSampler();
          double previewResolutionMeters = Math.max(worldScale, cellSize * worldScale);
@@ -276,19 +284,24 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
                int worldX = worldXs[localX];
                int coverClass = coverClasses[index];
                int surface = terrainSurface[index];
-               OceanCoastSample coastSample = !osmWaterEnabled ? null
+               OceanCoastSample coastSample = !osmWaterEnabled || !sampleCoast ? null
                   : inlandCoast != null ? inlandCoast
                   : this.fullWaterResolver.oceanCoastSample(worldX, worldZ, cellSize);
                if (coastSample != null && !coastSample.complete()) {
-                  throw new OceanCoverageUnavailableException(coastSample.coverageStatus(), worldX, worldZ);
+                  if (shouldRejectIncompleteCoverage(false, cacheOnly)) {
+                     throw new OceanCoverageUnavailableException(coastSample.coverageStatus(), worldX, worldZ);
+                  }
+                  coastSample = null;
+                  rasterIncomplete = true;
+                  sampleCoast = false;
                }
                boolean overtureOcean = coastSample != null && coastSample.ocean();
                boolean overtureWater = osmWaterEnabled && renderWater[index] && !rasterizedOcean[index];
-               boolean esaWater = !osmWaterEnabled && coverClass == ESA_WATER;
+               boolean esaWater = (!osmWaterEnabled || rasterIncomplete) && coverClass == ESA_WATER;
                if (coastSample != null) {
                   oceanCoastDistance[index] = coastSample.coastDistance();
                }
-               if (osmWaterEnabled) {
+               if (osmWaterEnabled && (!rasterIncomplete || overtureOcean || overtureWater)) {
                   boolean cellHasWater = overtureOcean || overtureWater;
                   hasWater[index] = cellHasWater;
                   ocean[index] = overtureOcean;
@@ -1087,11 +1100,13 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
          );
       }
       OsmPerf.recordWaterQuery(OsmPerf.elapsedSince(queryStartNs), result.features().size());
-      if (!result.complete()) {
+      // A cache-only (coarse-first) LOD draws from what is cached and falls back to land cover where map water is
+      // missing, instead of failing the whole section while its background prefetch is still downloading.
+      if (shouldRejectIncompleteCoverage(result.complete(), ManagedTerrainNetworkPolicy.isCacheOnly())) {
          throw new OceanCoverageUnavailableException(result.coverageStatus(), minBlockX, minBlockZ);
       }
       List<OsmWaterFeature> features = result.features();
-      boolean incomplete = false;
+      boolean incomplete = !result.complete();
       boolean oceanNearby = false;
       for (OsmWaterFeature feature : features) {
          oceanNearby |= feature.oceanHint();
@@ -1778,6 +1793,11 @@ public final class DhLodWaterResolver implements TellusCacheHandle {
       int reduction = Math.max(0, detail - WATER_QUERY_FULL_DETAIL);
       int scaledBudget = WATER_QUERY_MAX_TILES >> Math.min(30, reduction);
       return Math.max(WATER_QUERY_MIN_TILES, scaledBudget);
+   }
+
+   /** Incomplete map water fails an exact LOD; a cache-only one draws what is cached and marks itself incomplete. */
+   static boolean shouldRejectIncompleteCoverage(boolean complete, boolean cacheOnly) {
+      return !complete && !cacheOnly;
    }
 
    static boolean shouldRetryPendingCoverage(
