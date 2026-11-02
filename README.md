@@ -105,6 +105,7 @@ The `3.3.1-tellus.1` fork preserves extended-height LODs and Iris compatibility,
 - `/tellus config weather enable_realtime_weather <true|false>`: Overrides the real-time weather setting on the server (requires gamemaster permissions).
 - `/tellus water nearest [x z] [radius]`: Operator diagnostics. Reports the nearest mapped watercourse centreline (kind, Overture id, nearest point, channel width, mapped-order heading and following vertices) within `radius` blocks (default 512) of the source or the given column. Source vertex order is not presented as a flow claim. Reads Overture tiles blocking; meant for debugging and automated playtests.
 - `/tellus water column <x> <z>`: Operator diagnostics. Reports the water column Tellus resolves for a block exactly as generation places it (land surface, or inland/ocean water surface, bed and depth).
+- `/tellus config teleport_progress <true|false>`: Overrides the Teleport Progress setting on the server until it restarts (requires gamemaster permissions).
 
 More commands will be added over time.
 
@@ -167,6 +168,7 @@ These options are available in the "Customize World Generation" screen when crea
 - **Height Offset**: Shifts all terrain up or down by a fixed number of blocks. Use this to raise or lower the entire world.
 - **Max Altitude**: Upper world limit in blocks. Set to Automatic to let Tellus compute a safe cap based on your scale settings.
 - **Min Altitude**: Lower world limit in blocks. Set to Automatic to let Tellus compute a safe floor based on your scale settings.
+- **Teleport Progress**: On by default, also in worlds created before the setting existed. When you teleport with the GeoTP map, a chat message says the destination is being prepared and a progress bar shows at the top of the screen until you arrive. The bar is an estimate, because Tellus cannot tell in advance how much terrain data a destination needs.
 - **Water**: Uses Overture Maps `subtype=ocean` surface polygons as the sole ocean and coastline authority. Physical sea and ocean labels do not generate water. Rivers and lakes retain their own Overture feature kinds, and ocean floors use OpenWaters bathymetry with a corrective coastal safety ramp.
 
 ### Ecological Settings (work in progress)

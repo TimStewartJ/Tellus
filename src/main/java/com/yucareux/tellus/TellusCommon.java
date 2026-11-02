@@ -232,6 +232,17 @@ public class TellusCommon {
                                  )
                            ))
                         .then(
+                           Commands.literal("teleport_progress")
+                              .then(
+                                 Commands.argument("enabled", Objects.requireNonNull(BoolArgumentType.bool(), "enabledArgument"))
+                                    .executes(
+                                       context -> setTeleportProgressOverride(
+                                          (CommandSourceStack)context.getSource(), BoolArgumentType.getBool(context, "enabled")
+                                       )
+                                    )
+                              )
+                        )
+                        .then(
                            ((((Commands.literal("voxy")
                                           .then(Commands.literal("status").executes(context -> showVoxyPregenStatus((CommandSourceStack)context.getSource()))))
                                        .then(
@@ -298,6 +309,7 @@ public class TellusCommon {
       });
       runtime.onServerTick(REALTIME_MANAGER::onServerTick);
       runtime.onServerTick(VOXY_PREGEN_MANAGER::onServerTick);
+      runtime.onServerTick(server -> GEO_TELEPORT_MANAGER.onServerTick());
       runtime.onServerTick(MANAGED_TERRAIN_DOWNLOAD_MANAGER::onServerTick);
       runtime.onServerTick(server -> {
          if (MANAGED_TERRAIN_DOWNLOAD_MANAGER.shouldBroadcastStatus()) {
@@ -563,6 +575,20 @@ public class TellusCommon {
          REALTIME_MANAGER.setRealtimeWeatherOverride(enabled);
          source.sendSuccess(
             () -> Component.translatable("tellus.command.config.weather_set", booleanLabel(enabled)), false
+         );
+         return 1;
+      }
+   }
+
+   private static int setTeleportProgressOverride(CommandSourceStack source, boolean enabled) {
+      EarthChunkGenerator earthGenerator = resolveEarthGenerator(source);
+      if (earthGenerator == null) {
+         source.sendFailure(Component.translatable("tellus.command.geotp.tellus_world_only"));
+         return 0;
+      } else {
+         GEO_TELEPORT_MANAGER.setProgressOverride(enabled);
+         source.sendSuccess(
+            () -> Component.translatable("tellus.command.config.teleport_progress_set", booleanLabel(enabled)), false
          );
          return 1;
       }

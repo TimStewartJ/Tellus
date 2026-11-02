@@ -20,11 +20,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.core.BlockPos;
+import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerBossEvent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.BossEvent;
 import net.minecraft.world.level.Level;
 
 public final class GeoTeleportManager {
@@ -36,6 +39,18 @@ public final class GeoTeleportManager {
    private final ConcurrentMap<UUID, Request> requests = new ConcurrentHashMap<>();
    private volatile ThreadPoolExecutor executor;
    private volatile ScheduledExecutorService timeoutExecutor;
+   private volatile Boolean progressOverride;
+
+   /** Overrides every world's Teleport Progress setting until the server stops; null follows the setting. */
+   public void setProgressOverride(Boolean enabled) {
+      this.progressOverride = enabled;
+   }
+
+   public void onServerTick() {
+      for (Request request : this.requests.values()) {
+         request.updateProgress();
+      }
+   }
 
    public void request(
       MinecraftServer server,
@@ -69,8 +84,15 @@ public final class GeoTeleportManager {
       Request previous = this.requests.put(playerId, request);
       if (previous != null) {
          this.cancelRequest(previous);
+         previous.hideProgress();
       }
-      player.sendSystemMessage(Component.translatable("tellus.command.geotp.resolving"));
+      Boolean override = this.progressOverride;
+      if (override != null ? override : generator.settings().teleportProgress()) {
+         player.sendSystemMessage(Component.translatable("tellus.command.geotp.preparing").withStyle(ChatFormatting.GRAY));
+         request.showProgress(player);
+      } else {
+         player.sendSystemMessage(Component.translatable("tellus.command.geotp.resolving"));
+      }
 
       try {
          this.ensureExecutor().execute(task);
@@ -80,14 +102,19 @@ public final class GeoTeleportManager {
       } catch (RejectedExecutionException error) {
          this.requests.remove(playerId, request);
          this.cancelRequest(request);
+         request.hideProgress();
          Tellus.LOGGER.warn("GeoTP executor rejected request {} for player {}", id, playerId, error);
          player.sendSystemMessage(Component.translatable("tellus.command.geotp.busy"));
       }
    }
 
    public void onServerStopping() {
-      this.requests.values().forEach(this::cancelRequest);
+      this.requests.values().forEach(request -> {
+         this.cancelRequest(request);
+         request.hideProgress();
+      });
       this.requests.clear();
+      this.progressOverride = null;
       synchronized (this.executorLock) {
          if (this.executor != null) {
             this.executor.shutdownNow();
@@ -104,6 +131,7 @@ public final class GeoTeleportManager {
       Request request = this.requests.remove(player.getUUID());
       if (request != null) {
          this.cancelRequest(request);
+         request.hideProgress();
       }
    }
 
@@ -172,6 +200,7 @@ public final class GeoTeleportManager {
          return;
       }
       request.cancelTimeout();
+      request.hideProgress();
       ServerPlayer player = server.getPlayerList().getPlayer(playerId);
       if (player == null || player != request.player) {
          return;
@@ -211,6 +240,7 @@ public final class GeoTeleportManager {
    private void finishRequest(UUID playerId, Request request) {
       if (this.requests.remove(playerId, request)) {
          request.cancelTimeout();
+         request.hideProgress();
       }
    }
 
@@ -220,6 +250,7 @@ public final class GeoTeleportManager {
       }
       this.cancelRequest(request);
       server.execute(() -> {
+         request.hideProgress();
          ServerPlayer player = server.getPlayerList().getPlayer(playerId);
          if (player != null) {
             player.sendSystemMessage(Component.translatable("tellus.command.geotp.timeout"));
@@ -297,10 +328,36 @@ public final class GeoTeleportManager {
       private final ServerPlayer player;
       private volatile FutureTask<Void> task;
       private volatile ScheduledFuture<?> timeout;
+      private ServerBossEvent progress;
+      private long progressStartNanos;
 
       private Request(long id, ServerPlayer player) {
          this.id = id;
          this.player = player;
+      }
+
+      private void showProgress(ServerPlayer target) {
+         this.progress = MinecraftVersionCompat.bossEvent(
+            Component.translatable("tellus.command.geotp.progress"), BossEvent.BossBarColor.GREEN, BossEvent.BossBarOverlay.NOTCHED_10
+         );
+         this.progress.setProgress(0.0F);
+         this.progress.addPlayer(target);
+         this.progressStartNanos = System.nanoTime();
+      }
+
+      // The lookup reports no progress, so the bar eases toward full over time (half at 4 s).
+      private void updateProgress() {
+         if (this.progress != null) {
+            double seconds = (System.nanoTime() - this.progressStartNanos) / 1.0E9;
+            this.progress.setProgress((float)(seconds / (seconds + 4.0)));
+         }
+      }
+
+      private void hideProgress() {
+         if (this.progress != null) {
+            this.progress.removeAllPlayers();
+            this.progress = null;
+         }
       }
 
       private void cancel() {
